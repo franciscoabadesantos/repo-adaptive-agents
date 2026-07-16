@@ -7,7 +7,7 @@ absolute paths, and no promises of enforcement the file cannot make.
 from __future__ import annotations
 
 from ..models import CanonicalRole, RenderedTarget
-from .common import bullet_list, frontmatter, numbered_list
+from .common import ENFORCEMENT_NOTE, bullet_list, frontmatter, numbered_list
 
 VERSION = "1.0"
 TARGET = "skill"
@@ -41,8 +41,7 @@ def render(role: CanonicalRole) -> RenderedTarget:
             "",
             "## Constraints",
             "",
-            "These constraints are guidance for the agent, not enforcement. Enforce them",
-            "with sandboxing, permissions, and CI policy.",
+            *ENFORCEMENT_NOTE,
             "",
             bullet_list(role.critical_constraints()),
             "",

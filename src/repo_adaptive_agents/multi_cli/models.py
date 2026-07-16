@@ -105,3 +105,6 @@ class RenderedTarget:
     semantic_mapping: dict[str, str] = field(default_factory=dict)
     unsupported_fields: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    # Declares whether the wrapper generates real runtime controls or only advisory prose.
+    # ``mode`` is ``advisory`` or ``sandboxed``; ``controls`` lists generated control fields.
+    enforcement: dict = field(default_factory=lambda: {"mode": "advisory", "runtime_controls_generated": False})

@@ -232,6 +232,71 @@ class MultiCliWordBoundaryRegressionTests(unittest.TestCase):
             self.assertEqual(first_files, second_files)
 
 
+class MultiCliEnforcementMetadataTests(unittest.TestCase):
+    """Guidance-vs-enforcement must be explicit in prose and in the manifest."""
+
+    GUIDANCE_LINE = "These constraints are behavioral guidance, not technical enforcement."
+    ENFORCE_LINE = "Enforce them through the host tool's permissions, approvals, sandbox, and repository policy."
+
+    def _render(self, root: Path) -> Path:
+        output = root / "proposal"
+        write_proposal(ROLE, None, output)
+        return output
+
+    def test_markdown_wrappers_declare_guidance_not_enforcement(self):
+        markdown_files = (
+            "portable/.agents/skills/independent-review/SKILL.md",
+            "claude/.claude/agents/independent-review.md",
+            "copilot/.github/agents/independent-review.agent.md",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            for relative in markdown_files:
+                text = (output / relative).read_text()
+                self.assertIn(self.GUIDANCE_LINE, text, relative)
+                self.assertIn(self.ENFORCE_LINE, text, relative)
+                # The note appears immediately before the constraints list.
+                constraints = text.index("## Constraints")
+                first_bullet = text.index("- Do not edit", constraints)
+                self.assertIn(self.GUIDANCE_LINE, text[constraints:first_bullet], relative)
+
+    def test_codex_keeps_readonly_sandbox_and_no_prose_only_disclaimer_needed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            data = tomllib.loads((output / "codex/.codex/agents/independent_reviewer.toml").read_text())
+            self.assertEqual(data["sandbox_mode"], "read-only")
+
+    def test_manifest_enforcement_metadata_is_correct(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            manifest = json.loads((output / "manifest.json").read_text())
+            targets = manifest["targets"]
+            for advisory in ("skill", "claude", "copilot"):
+                self.assertEqual(
+                    targets[advisory]["enforcement"],
+                    {"mode": "advisory", "runtime_controls_generated": False},
+                    advisory,
+                )
+            self.assertEqual(
+                targets["codex"]["enforcement"],
+                {"mode": "sandboxed", "runtime_controls_generated": True, "controls": ["sandbox_mode"]},
+            )
+
+    def test_formats_and_hashes_remain_valid(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            self.assertEqual(validate_proposal(output), [])
+
+    def test_output_stays_byte_deterministic(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            first, second = Path(temporary) / "a", Path(temporary) / "b"
+            write_proposal(ROLE, None, first)
+            write_proposal(ROLE, None, second)
+            first_files = {p.relative_to(first).as_posix(): p.read_bytes() for p in first.rglob("*") if p.is_file()}
+            second_files = {p.relative_to(second).as_posix(): p.read_bytes() for p in second.rglob("*") if p.is_file()}
+            self.assertEqual(first_files, second_files)
+
+
 class MultiCliSafetyTests(unittest.TestCase):
     def test_unknown_role_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
