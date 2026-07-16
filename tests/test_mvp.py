@@ -21,6 +21,15 @@ ROOT = Path(__file__).parent / "fixtures"
 
 
 class MvpTests(unittest.TestCase):
+    @staticmethod
+    def _write(root: Path, relative: str, content: str, executable: bool = False) -> Path:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        if executable:
+            path.chmod(0o755)
+        return path
+
     def test_profiles_cover_materially_different_repositories(self):
         frontend = profile_repository(ROOT / "frontend-next")
         worker = profile_repository(ROOT / "cloudflare-worker")
@@ -308,6 +317,172 @@ class MvpTests(unittest.TestCase):
             self.assertIn("team-plan.json", diff)
             self.assertIn("config.toml", diff)
             self.assertIn("change/conflict: config.toml", diff)
+
+    def test_custom_virtualenv_and_installed_package_content_are_ignored(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write(root, "app.py", "def run():\n    return 1\n")
+            self._write(root, "tests/test_app.py", "def test_app():\n    assert True\n")
+            self._write(root, ".venv-certbot/pyvenv.cfg", "home = /usr/bin\n")
+            self._write(
+                root,
+                ".venv-certbot/lib/python3.12/site-packages/fake/tests/test_worker.py",
+                "import torch\nfrom fastmcp import FastMCP\nassert True\n",
+            )
+            self._write(root, ".venv-certbot/lib/python3.12/site-packages/fake/secrets.pem", "PRIVATE")
+            profile = profile_repository(root)
+            payload = json.dumps(to_jsonable(profile))
+            self.assertNotIn(".venv-certbot", payload)
+            self.assertTrue(profile.tests.present)
+            self.assertEqual(profile.project_types, ["unknown"])
+
+    def test_evidence_paths_are_deterministically_limited_with_counts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index in range(6):
+                self._write(root, f"tests/test_{index}.py", "def test_value():\n    assert True\n")
+            profile = profile_repository(root, evidence_path_limit=2)
+            evidence = next(item for item in profile.tests.evidence if item.signal == "test_files")
+            self.assertEqual(evidence.paths, ("tests/test_0.py", "tests/test_1.py"))
+            self.assertEqual(evidence.total_count, 6)
+            self.assertEqual(evidence.omitted_count, 4)
+
+    def test_opencv_dnn_application_is_inference_not_library(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write(
+                root,
+                "pyproject.toml",
+                "[build-system]\nrequires=['setuptools']\n"
+                "[project]\nname='vision-app'\ndescription='YOLO vision application'\n"
+                "dependencies=['opencv-python','pyopencl']\n"
+                "[project.scripts]\nvision-app='vision_app.cli:main'\n",
+            )
+            self._write(
+                root,
+                "src/vision_app/app.py",
+                "import cv2\n"
+                "net=cv2.dnn.readNet('model.cfg','model.weights')\n"
+                "blob=cv2.dnn.blobFromImage(frame)\nnet.setInput(blob)\n"
+                "outputs=net.forward()\nboxes=cv2.dnn.NMSBoxes([],[],0.5,0.4)\n"
+                "cv2.imshow('vision', frame)\n",
+            )
+            self._write(root, "src/vision_app/model.cfg", "[net]\n")
+            profile = profile_repository(root)
+            plan = recommend_team(profile)
+            self.assertEqual(profile.primary_project_types, ["application", "computer_vision", "ml_inference"])
+            self.assertNotIn("library", profile.project_types)
+            self.assertTrue(any(item.signal == "external_model_artifact_missing" for item in profile.evidence))
+            capability_ids = {item.capability_id for item in plan.capabilities}
+            self.assertTrue({"computer_vision_review", "image_processing_review", "ml_inference_review", "model_evaluation"}.issubset(capability_ids))
+            self.assertNotIn("api_contract_review", capability_ids)
+
+    def test_packaged_console_application_is_not_a_library(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write(
+                root,
+                "pyproject.toml",
+                "[build-system]\nrequires=['setuptools']\n"
+                "[project]\nname='runner'\n"
+                "[project.scripts]\nrunner='runner.cli:main'\n",
+            )
+            self._write(root, "src/runner/__init__.py", "")
+            profile = profile_repository(root)
+            self.assertIn("application", profile.primary_project_types)
+            self.assertNotIn("library", profile.primary_project_types)
+            self.assertIn("packaged_python", profile.secondary_project_types)
+
+    def test_shell_acme_client_detects_lifecycle_bats_and_shellcheck(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write(
+                root,
+                "certctl",
+                "#!/usr/bin/env bash\n"
+                "CA=https://acme-staging-v02.api.letsencrypt.org/directory\n"
+                "openssl req -new -key account.key -out request.csr\n"
+                "curl \"$CA\"\nrevoke_certificate(){ :; }\nreload_service(){ ssh host reload; }\n",
+                executable=True,
+            )
+            self._write(root, "dns_scripts/dns_add_cloudflare", "#!/bin/bash\ncurl api.cloudflare.com\n", executable=True)
+            self._write(root, "dns_scripts/dns_del_cloudflare", "#!/bin/bash\n:\n", executable=True)
+            self._write(root, "test/certificate.bats", "@test 'renew' { run ./certctl; }\n")
+            self._write(root, ".github/workflows/test.yml", "jobs:\n  lint:\n    steps:\n      - run: shellcheck certctl\n")
+            profile = profile_repository(root)
+            plan = recommend_team(profile)
+            self.assertEqual(profile.primary_project_types, ["cli_tool", "certificate_automation", "security_tooling"])
+            self.assertTrue({"Bats", "ShellCheck"}.issubset(set(profile.tests.frameworks)))
+            self.assertNotIn("cloudflare_worker", profile.project_types)
+            capability_ids = {item.capability_id for item in plan.capabilities}
+            self.assertTrue({"shell_review", "acme_protocol_review", "certificate_lifecycle_review", "integration_review"}.issubset(capability_ids))
+
+    def test_fastmcp_stdio_server_has_secondary_container_and_tool_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write(
+                root,
+                "pyproject.toml",
+                "[project]\nname='photo-mcp'\ndescription='RawTherapee photographic MCP tool'\n"
+                "dependencies=['fastmcp','Pillow','exifread']\n"
+                "[project.scripts]\nphoto-mcp='photo_mcp.server:main'\n",
+            )
+            self._write(
+                root,
+                "src/photo_mcp/server.py",
+                "from typing import Any\nfrom fastmcp import FastMCP\n"
+                "mcp=FastMCP('photo')\n"
+                "@mcp.tool()\ndef edit_photo(parameters: dict[str, Any]) -> dict[str, Any]:\n"
+                "    return {'pp3': parameters, 'histogram': 'RawTherapee EXIF LUT'}\n"
+                "def main():\n    mcp.run(transport='stdio')\n",
+            )
+            self._write(root, "Dockerfile", "FROM python:3.12\n")
+            self._write(root, "tests/test_server.py", "def test_server():\n    assert True\n")
+            profile = profile_repository(root)
+            plan = recommend_team(profile)
+            self.assertEqual(profile.primary_project_types, ["mcp_server", "image_processing", "photographic_tool"])
+            self.assertNotIn("infrastructure", profile.project_types)
+            self.assertIn("containerized", profile.secondary_project_types)
+            capability_ids = {item.capability_id for item in plan.capabilities}
+            self.assertTrue({"mcp_protocol_review", "tool_contract_review", "photographic_domain_review", "image_processing_review", "container_review"}.issubset(capability_ids))
+
+    def test_dns_iac_ignores_integration_words_in_zone_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write(
+                root,
+                "config/dns.yaml",
+                "providers:\n  cf:\n    class: octodns_cloudflare.CloudflareProvider\n"
+                "  bind:\n    class: octodns_bind.Rfc2136Provider\n"
+                "zones:\n  '*':\n    targets: [cf, bind]\n",
+            )
+            self._write(root, "config/zones/example.yaml", "jira: confluence-data-only\n")
+            self._write(root, "scripts/dify_sync.py", "import os\nurl=os.environ.get('DIFY_BASE_URL')\n")
+            self._write(root, ".github/workflows/apply.yml", "on: workflow_dispatch\njobs:\n  apply:\n    steps:\n      - run: python scripts/dify_sync.py\n")
+            profile = profile_repository(root)
+            integrations = {item.name: item.detected for item in profile.integrations}
+            self.assertEqual(profile.primary_project_types, ["pipeline", "dns_iac"])
+            self.assertEqual(set(profile.deployment.targets), {"Cloudflare DNS", "RFC2136/BIND DNS"})
+            self.assertFalse(integrations["jira"])
+            self.assertFalse(integrations["confluence"])
+            self.assertTrue(integrations["dify"])
+
+    def test_fixture_manifests_and_runtime_do_not_contaminate_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write(
+                root,
+                "pyproject.toml",
+                "[project]\nname='profiler-cli'\n[project.scripts]\nprofiler='profiler.cli:main'\n",
+            )
+            self._write(root, "src/profiler/cli.py", "def main():\n    return 0\n")
+            self._write(root, "tests/fixtures/worker/package.json", '{"dependencies":{"next":"1","express":"1"}}')
+            self._write(root, "tests/fixtures/worker/wrangler.toml", "main='src/index.ts'\n")
+            self._write(root, "tests/fixtures/ml/train.py", "import torch\n")
+            profile = profile_repository(root)
+            self.assertEqual(profile.primary_project_types, ["application", "cli_tool"])
+            self.assertFalse({"frontend", "api", "cloudflare_worker", "data_ml"}.intersection(profile.project_types))
+            self.assertEqual([component.name for component in profile.components], ["root"])
 
 
 if __name__ == "__main__":

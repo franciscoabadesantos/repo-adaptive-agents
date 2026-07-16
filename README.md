@@ -75,14 +75,22 @@ contains:
 
 ## Domain model
 
-`RepoProfile` contains project types (`frontend`, `api`, `cloudflare_worker`, `pipeline`,
-`automation`, `ci_cd`, `operations`, `hybrid_service`, `data_ml`, `infrastructure`,
-`library`/`unknown`), languages, frameworks, manifests, components, architecture, tests,
-deployment, integration hints, risks, warnings, and evidence. Each component records its
+`RepoProfile` separates `primary_project_types` from secondary characteristics and keeps
+`project_types` as their stable combined view. The taxonomy covers web/API/Worker repos,
+pipelines and DNS-as-code, executable/desktop applications, local ML inference and
+computer vision, shell certificate automation, MCP servers, image-processing tools,
+libraries, and unknown repositories. It also records languages, frameworks, manifests,
+components, architecture, tests, deployment, integration hints, risks, warnings, and
+evidence. Each component records its
 path, all manifests declared in that component, project types, frameworks, runtime,
 entrypoints, deployment targets, and
 evidence. Nested manifests such as `server/proxy/package.json` therefore do not leak
 their Express dependency into the root Worker component.
+
+Evidence paths are sorted and capped deterministically. Every evidence item includes
+`total_count` and `omitted_count`, and `profile_repository(..., evidence_path_limit=N)`
+or the CLI option `--evidence-path-limit N` can select a different reporting limit
+without changing the underlying detection.
 
 `TeamPlan` contains capability recommendations first. Each recommendation has a
 selection status (`recommended`, `optional`, `unavailable`, or
@@ -110,6 +118,11 @@ private keys, or private certificates. It reports their paths as risks only. Sym
 ignored by default and links escaping the repository are reported as incomplete-scan
 warnings. Invalid JSON/TOML manifests are also reported explicitly instead of being
 treated as empty manifests.
+
+Virtual environments and installed dependencies are excluded, including custom names
+such as `.venv-certbot`, directories with `pyvenv.cfg`, and `site-packages` or
+`dist-packages` trees. Test fixtures and test data remain visible to test detection but
+cannot create runtime components or project identities.
 
 Proposal output must be outside the analyzed repository and must not already exist. The
 generator validates all generated TOML/JSON in a temporary sibling directory and then

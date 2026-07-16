@@ -27,6 +27,8 @@ class Evidence:
     signal: str
     paths: tuple[str, ...]
     detail: str
+    total_count: int = 0
+    omitted_count: int = 0
 
 
 @dataclass
@@ -85,6 +87,8 @@ class RepoProfile:
     path: str
     name: str
     project_types: list[str]
+    primary_project_types: list[str]
+    secondary_project_types: list[str]
     languages: list[str]
     frameworks: list[str]
     manifests: list[str]

@@ -8,10 +8,12 @@ REPO_PROFILE_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "RepoProfile",
     "type": "object",
-    "required": ["path", "name", "project_types", "languages", "frameworks", "manifests", "components", "architecture", "tests", "deployment", "risks", "warnings"],
+    "required": ["path", "name", "project_types", "primary_project_types", "secondary_project_types", "languages", "frameworks", "manifests", "components", "architecture", "tests", "deployment", "risks", "warnings"],
     "properties": {
         "path": {"type": "string"}, "name": {"type": "string"},
         "project_types": {"type": "array", "items": {"type": "string"}},
+        "primary_project_types": {"type": "array", "items": {"type": "string"}},
+        "secondary_project_types": {"type": "array", "items": {"type": "string"}},
         "languages": {"type": "array", "items": {"type": "string"}},
         "frameworks": {"type": "array", "items": {"type": "string"}},
         "manifests": {"type": "array", "items": {"type": "string"}},

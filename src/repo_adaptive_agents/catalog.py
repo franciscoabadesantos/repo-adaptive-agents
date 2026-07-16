@@ -46,6 +46,51 @@ CAPABILITIES: dict[str, CapabilityDefinition] = {
     "security_review": CapabilityDefinition(
         "security_review", "Security review", "Inspect secrets handling, trust boundaries, and exposed services.", ("api", "worker", "infrastructure")
     ),
+    "application_review": CapabilityDefinition(
+        "application_review", "Application review", "Review executable entrypoints, lifecycle, interaction loops, and failure handling.", ("application",)
+    ),
+    "computer_vision_review": CapabilityDefinition(
+        "computer_vision_review", "Computer vision review", "Review detection pipelines, geometry, thresholds, and frame processing.", ("computer_vision",)
+    ),
+    "image_processing_review": CapabilityDefinition(
+        "image_processing_review", "Image processing review", "Review image transformations, numerical behavior, and visual artifacts.", ("image_processing",)
+    ),
+    "ml_inference_review": CapabilityDefinition(
+        "ml_inference_review", "ML inference review", "Review model loading, preprocessing, inference, and post-processing.", ("ml_inference",)
+    ),
+    "model_evaluation": CapabilityDefinition(
+        "model_evaluation", "Model evaluation", "Review representative data, metrics, thresholds, and failure modes.", ("ml_inference", "ml")
+    ),
+    "shell_review": CapabilityDefinition(
+        "shell_review", "Shell review", "Review shell safety, portability, quoting, and error handling.", ("shell",)
+    ),
+    "acme_protocol_review": CapabilityDefinition(
+        "acme_protocol_review", "ACME protocol review", "Review ACME account, challenge, order, finalize, and revoke flows.", ("certificate",)
+    ),
+    "certificate_lifecycle_review": CapabilityDefinition(
+        "certificate_lifecycle_review", "Certificate lifecycle review", "Review key, CSR, issuance, renewal, install, revoke, and reload handling.", ("certificate",)
+    ),
+    "integration_review": CapabilityDefinition(
+        "integration_review", "Integration review", "Review external-system contracts, side effects, retries, and authorization boundaries.", ("integration",)
+    ),
+    "mcp_protocol_review": CapabilityDefinition(
+        "mcp_protocol_review", "MCP protocol review", "Review MCP transport, server lifecycle, errors, and protocol behavior.", ("mcp",)
+    ),
+    "tool_contract_review": CapabilityDefinition(
+        "tool_contract_review", "Tool contract review", "Review tool inputs, outputs, schemas, and compatibility.", ("mcp", "developer_tool")
+    ),
+    "photographic_domain_review": CapabilityDefinition(
+        "photographic_domain_review", "Photographic domain review", "Review photographic controls, metadata, profiles, and processing semantics.", ("photography",)
+    ),
+    "visual_evaluation": CapabilityDefinition(
+        "visual_evaluation", "Visual evaluation", "Review before/after evaluation and image-quality evidence.", ("image_processing", "photography")
+    ),
+    "container_review": CapabilityDefinition(
+        "container_review", "Container review", "Review container packaging and runtime support without treating it as repository identity.", ("container",)
+    ),
+    "dns_configuration_review": CapabilityDefinition(
+        "dns_configuration_review", "DNS configuration review", "Review declarative DNS providers, zones, plans, and apply safety.", ("dns",)
+    ),
     "jira_issue_context": CapabilityDefinition(
         "jira_issue_context", "Jira issue context", "Load issue context from Jira for planning and traceability.", ("all",), Availability.UNAVAILABLE, True
     ),

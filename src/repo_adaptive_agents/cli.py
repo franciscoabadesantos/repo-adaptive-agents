@@ -19,18 +19,20 @@ def _parser() -> argparse.ArgumentParser:
         sub = subparsers.add_parser(command)
         sub.add_argument("repo", help="Local repository path")
         sub.add_argument("--request", default="", help="Optional user request to shape recommendations")
+        sub.add_argument("--evidence-path-limit", type=int, default=25, help="Maximum paths shown per evidence item")
     propose = subparsers.add_parser("propose")
     propose.add_argument("repo", help="Local repository path")
     propose.add_argument("--output", default=".codex-proposal", help="Proposal directory; defaults away from existing .codex")
     propose.add_argument("--request", default="", help="Optional user request to shape recommendations")
     propose.add_argument("--existing", default=None, help="Existing .codex directory to diff against")
+    propose.add_argument("--evidence-path-limit", type=int, default=25, help="Maximum paths shown per evidence item")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        profile = profile_repository(args.repo)
+        profile = profile_repository(args.repo, evidence_path_limit=args.evidence_path_limit)
         if args.command == "profile":
             print(json.dumps(to_jsonable(profile), indent=2, sort_keys=True))
             return 0

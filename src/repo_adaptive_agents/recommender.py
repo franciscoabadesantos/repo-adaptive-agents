@@ -83,12 +83,41 @@ def recommend_team(profile: RepoProfile, request: str = "") -> TeamPlan:
         _add(capabilities, "worker_runtime_review", "Wrangler configuration identifies an edge-worker runtime.", _relevant_evidence(profile, {"cloudflare_deployment", "worker_manifest"}))
     if "data_ml" in profile.project_types:
         _add(capabilities, "ml_reproducibility", "Strong ML dependencies or repository artifacts/layout were detected.", _relevant_evidence(profile, {"ml_signal"}))
+    if "application" in profile.project_types:
+        _add(capabilities, "application_review", "An executable application entrypoint or interactive lifecycle was detected.", _relevant_evidence(profile, {"application_entrypoint", "interactive_ui", "cli_entrypoint"}))
+    if "computer_vision" in profile.project_types:
+        _add(capabilities, "computer_vision_review", "Computer-vision inference or classical vision processing was detected.", _relevant_evidence(profile, {"ml_inference_signal", "image_processing_signal"}))
+    if "image_processing" in profile.project_types:
+        _add(capabilities, "image_processing_review", "Image-processing operations are part of the repository's runtime behavior.", _relevant_evidence(profile, {"image_processing_signal", "photographic_domain_signal"}))
+    if "ml_inference" in profile.project_types:
+        inference_evidence = _relevant_evidence(profile, {"ml_inference_signal", "external_model_artifact_missing"})
+        _add(capabilities, "ml_inference_review", "A local model inference pipeline was detected.", inference_evidence)
+        _add(capabilities, "ml_reproducibility", "Inference depends on reproducible model/configuration artifacts and preprocessing.", inference_evidence)
+        _add(capabilities, "model_evaluation", "Inference thresholds and post-processing require representative evaluation.", inference_evidence)
+    if "shell_tool" in profile.project_types:
+        _add(capabilities, "shell_review", "Executable shell tooling was detected.", _relevant_evidence(profile, {"shell_tool_signal", "shellcheck_config"}))
+    if "certificate_automation" in profile.project_types:
+        _add(capabilities, "acme_protocol_review", "ACME protocol operations were detected.", _relevant_evidence(profile, {"acme_protocol_signal"}))
+        _add(capabilities, "certificate_lifecycle_review", "Certificate and key lifecycle operations were detected.", _relevant_evidence(profile, {"certificate_lifecycle_signal", "sensitive_operations"}))
+    if {"integration_tool", "integration_service", "dns_iac"}.intersection(profile.project_types):
+        _add(capabilities, "integration_review", "The repository coordinates external tools, providers, or services.", _relevant_evidence(profile, {"dns_provider_hooks", "mcp_server_signal", "dns_configuration", "sensitive_operations", "cloudflare_api", "oracle_operation"}))
+    if "mcp_server" in profile.project_types:
+        _add(capabilities, "mcp_protocol_review", "A FastMCP server and transport lifecycle were detected.", _relevant_evidence(profile, {"mcp_server_signal"}))
+        _add(capabilities, "tool_contract_review", "Registered MCP tools require stable and reviewable contracts.", _relevant_evidence(profile, {"mcp_server_signal", "opaque_tool_contract"}))
+    if "photographic_tool" in profile.project_types:
+        photo_evidence = _relevant_evidence(profile, {"photographic_domain_signal", "image_processing_signal"})
+        _add(capabilities, "photographic_domain_review", "Photographic processing and metadata semantics were detected.", photo_evidence)
+        _add(capabilities, "visual_evaluation", "The tool produces or evaluates visual image-processing results.", photo_evidence)
+    if "dns_iac" in profile.project_types:
+        _add(capabilities, "dns_configuration_review", "Declarative DNS providers and deployment targets were detected.", _relevant_evidence(profile, {"dns_configuration", "cloudflare_dns_target", "rfc2136_dns_target"}))
+    if "containerized" in profile.secondary_project_types:
+        _add(capabilities, "container_review", "Container support is present as a secondary packaging/deployment concern.", _relevant_evidence(profile, {"container_support"}))
     if "infrastructure" in profile.project_types:
         _add(capabilities, "infrastructure_safety", "Declarative infrastructure or container deployment files were detected.", _component_evidence(profile, {"infrastructure"}))
     if profile.deployment.targets:
         _add(capabilities, "deployment_review", "One or more concrete deployment targets were detected.", profile.deployment.evidence)
-    if {"api", "cloudflare_worker", "proxy_service", "infrastructure", "operations", "pipeline"}.intersection(profile.project_types):
-        _add(capabilities, "security_review", "The repository exposes service, edge, infrastructure, or operational trust boundaries.", _relevant_evidence(profile, {"api_signal", "cloudflare_deployment", "cloudflare_api", "oracle_operation", "self_hosted_runner", "infrastructure_signal"}))
+    if {"api", "cloudflare_worker", "proxy_service", "infrastructure", "operations", "pipeline", "security_tooling", "certificate_automation", "dns_iac"}.intersection(profile.project_types):
+        _add(capabilities, "security_review", "The repository exposes service, edge, infrastructure, certificate, DNS, or operational trust boundaries.", _relevant_evidence(profile, {"api_signal", "cloudflare_deployment", "cloudflare_api", "oracle_operation", "self_hosted_runner", "infrastructure_signal", "acme_protocol_signal", "certificate_lifecycle_signal", "sensitive_operations", "dns_configuration"}))
 
     agents: list[AgentPlan] = [AgentPlan("repo_mapper", "Repository mapper", "Maintain the evidence-backed repository profile.", ["repo_analysis"], "Always needed to ground the proposed team in local facts.")]
     agents.append(AgentPlan("test_engineer", "Test engineer", "Assess and run the safest available test strategy.", ["test_strategy"], "Testing is relevant even when the repository currently lacks a real suite."))
@@ -107,8 +136,22 @@ def recommend_team(profile: RepoProfile, request: str = "") -> TeamPlan:
         "infrastructure_safety": AgentPlan("infrastructure_reviewer", "Infrastructure reviewer", "Review infrastructure change safety.", ["infrastructure_safety"], "Only selected when infrastructure is detected."),
         "deployment_review": AgentPlan("deployment_reviewer", "Deployment reviewer", "Review concrete deployment targets and release paths.", ["deployment_review"], "Selected when the profiler identifies a deployment target."),
         "security_review": AgentPlan("security_reviewer", "Security reviewer", "Review trust boundaries and secret handling.", ["security_review"], "Selected for service, edge, infrastructure, or operational boundaries."),
+        "application_review": AgentPlan("application_reviewer", "Application reviewer", "Review executable lifecycle and interaction behavior.", ["application_review"], "Selected for executable application repositories."),
+        "computer_vision_review": AgentPlan("computer_vision_reviewer", "Computer vision reviewer", "Review detection and geometric vision pipelines.", ["computer_vision_review"], "Selected for computer-vision runtime behavior."),
+        "image_processing_review": AgentPlan("image_processing_reviewer", "Image processing reviewer", "Review image transformations and artifacts.", ["image_processing_review"], "Selected for image-processing repositories."),
+        "ml_inference_review": AgentPlan("ml_inference_reviewer", "ML inference reviewer", "Review model loading and inference behavior.", ["ml_inference_review", "ml_reproducibility", "model_evaluation"], "Selected for local ML inference."),
+        "shell_review": AgentPlan("shell_reviewer", "Shell reviewer", "Review shell safety and portability.", ["shell_review"], "Selected for shell-based tools."),
+        "acme_protocol_review": AgentPlan("certificate_reviewer", "Certificate reviewer", "Review ACME and certificate lifecycle safety.", ["acme_protocol_review", "certificate_lifecycle_review"], "Selected for certificate automation."),
+        "integration_review": AgentPlan("integration_reviewer", "Integration reviewer", "Review external provider and tool boundaries.", ["integration_review"], "Selected for integration services and operational hooks."),
+        "mcp_protocol_review": AgentPlan("mcp_reviewer", "MCP reviewer", "Review MCP lifecycle, transport, and protocol behavior.", ["mcp_protocol_review"], "Selected for MCP servers."),
+        "tool_contract_review": AgentPlan("tool_contract_reviewer", "Tool contract reviewer", "Review MCP tool schemas and compatibility.", ["tool_contract_review"], "Selected for registered tool contracts."),
+        "photographic_domain_review": AgentPlan("photographic_reviewer", "Photographic reviewer", "Review photographic processing semantics.", ["photographic_domain_review", "visual_evaluation"], "Selected for photographic tools."),
+        "container_review": AgentPlan("container_reviewer", "Container reviewer", "Review secondary container packaging.", ["container_review"], "Selected when container support exists."),
+        "dns_configuration_review": AgentPlan("dns_reviewer", "DNS configuration reviewer", "Review DNS plans, providers, and apply safety.", ["dns_configuration_review"], "Selected for DNS-as-code repositories."),
     }
     for recommendation in capabilities:
+        if recommendation.capability_id == "ml_reproducibility" and "data_ml" not in profile.project_types:
+            continue
         agent = agent_by_capability.get(recommendation.capability_id)
         if agent:
             agents.append(agent)

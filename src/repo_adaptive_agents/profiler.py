@@ -6,6 +6,7 @@ import json
 import os
 import re
 import tomllib
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,8 +39,11 @@ STRONG_ML_DEPENDENCIES = {
 }
 ML_PATH_DIRECTORIES = {"notebooks", "training", "experiments", "machine-learning", "data-science"}
 ML_ARTIFACT_SUFFIXES = {".pkl", ".pickle", ".joblib", ".onnx", ".pt", ".pth", ".safetensors", ".h5", ".keras"}
-CODE_SUFFIXES = {".c", ".cc", ".cpp", ".cs", ".go", ".java", ".js", ".jsx", ".kt", ".mjs", ".php", ".py", ".rb", ".rs", ".sh", ".ts", ".tsx"}
+CODE_SUFFIXES = {".bats", ".c", ".cc", ".cl", ".cpp", ".cs", ".go", ".java", ".js", ".jsx", ".kt", ".mjs", ".php", ".py", ".rb", ".rs", ".sh", ".ts", ".tsx"}
 DOCUMENTATION_DIRS = {"docs", "doc", "documentation", "templates"}
+FIXTURE_DIRS = {"fixtures", "fixture", "testdata", "test-data", "samples"}
+DEFAULT_EVIDENCE_PATH_LIMIT = 25
+_EVIDENCE_PATH_LIMIT: ContextVar[int] = ContextVar("evidence_path_limit", default=DEFAULT_EVIDENCE_PATH_LIMIT)
 
 
 @dataclass(frozen=True)
@@ -82,7 +86,30 @@ def _secret_risk_type(path: str) -> str | None:
 
 
 def _ignored_directory(name: str) -> bool:
-    return name in IGNORED_DIRS or name.endswith(".egg-info")
+    lower = name.lower()
+    return (
+        name in IGNORED_DIRS
+        or name.endswith(".egg-info")
+        or lower in {"env", "venv"}
+        or lower.startswith((".venv-", "venv-", "env-"))
+    )
+
+
+def _is_installed_dependency_path(path: Path) -> bool:
+    parts = {part.lower() for part in path.parts}
+    return "site-packages" in parts or "dist-packages" in parts
+
+
+def _looks_like_virtualenv(path: Path) -> bool:
+    if (path / "pyvenv.cfg").is_file():
+        return True
+    return any(
+        candidate.is_dir()
+        for candidate in (
+            path / "lib" / "site-packages",
+            path / "Lib" / "site-packages",
+        )
+    )
 
 
 def _files(root: Path) -> tuple[list[Path], list[Evidence]]:
@@ -103,7 +130,7 @@ def _files(root: Path) -> tuple[list[Path], list[Evidence]]:
         safe_dirs: list[str] = []
         for name in sorted(dirs):
             path = Path(current) / name
-            if _ignored_directory(name):
+            if _ignored_directory(name) or _is_installed_dependency_path(path.relative_to(root)) or _looks_like_virtualenv(path):
                 continue
             if path.is_symlink():
                 resolved = _resolve_candidate(path, root)
@@ -145,10 +172,24 @@ def _read(path: Path, limit: int = 200_000) -> str:
 
 
 def _evidence(signal: str, paths: list[str], detail: str) -> Evidence:
-    return Evidence(signal=signal, paths=tuple(paths), detail=detail)
+    unique_paths = sorted(dict.fromkeys(paths))
+    total = len(unique_paths)
+    limit = max(1, _EVIDENCE_PATH_LIMIT.get())
+    shown = unique_paths[:limit]
+    return Evidence(
+        signal=signal,
+        paths=tuple(shown),
+        detail=detail,
+        total_count=total,
+        omitted_count=max(0, total - len(shown)),
+    )
 
 
 def _unique(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))
+
+
+def _unique_evidence(values: list[Evidence]) -> list[Evidence]:
     return list(dict.fromkeys(values))
 
 
@@ -169,6 +210,18 @@ def _is_documentation_path(path: str) -> bool:
         path.lower().endswith((".md", ".rst"))
         or any(part in DOCUMENTATION_DIRS or part == "agents" for part in parts)
         or name in {"readme", "readme.txt", "readme.rst", "changelog", "claude.md", "agents.md"}
+    )
+
+
+def _is_fixture_path(path: str) -> bool:
+    parts = tuple(part.lower() for part in Path(path).parts)
+    return any(part in FIXTURE_DIRS for part in parts)
+
+
+def _is_test_path(path: str) -> bool:
+    parts = tuple(part.lower() for part in Path(path).parts)
+    return any(part in {"tests", "test", "__tests__"} for part in parts) or bool(
+        re.search(r"\.(test|spec)\.[^.]+$", path, re.IGNORECASE)
     )
 
 
@@ -199,7 +252,14 @@ def _load_toml(path: Path) -> tuple[dict[str, Any], str | None]:
 
 
 def _is_runtime_path(path: str) -> bool:
-    return not _is_documentation_path(path) and not path.lower().startswith(".github/workflows/") and Path(path).name.lower() not in {"wrangler.toml", "wrangler.json", "wrangler.jsonc"}
+    return (
+        not _is_documentation_path(path)
+        and not _is_fixture_path(path)
+        and not _is_test_path(path)
+        and not path.lower().startswith(".github/workflows/")
+        and not path.lower().startswith("config/zones/")
+        and Path(path).name.lower() not in {"wrangler.toml", "wrangler.json", "wrangler.jsonc"}
+    )
 
 
 def _runtime_integration_matches(root: Path, contents: dict[str, str], tokens: tuple[str, ...], env_prefix: str) -> tuple[list[str], list[Evidence]]:
@@ -208,12 +268,20 @@ def _runtime_integration_matches(root: Path, contents: dict[str, str], tokens: t
     for relative, content in contents.items():
         if not _is_runtime_path(relative):
             continue
+        name = Path(relative).name
+        if Path(relative).suffix.lower() not in CODE_SUFFIXES and name not in MANIFEST_NAMES and name not in {".env.example", ".env.template"}:
+            continue
         lower_content = content.lower()
-        if any(re.search(rf"\b{re.escape(token.lower())}\b", lower_content) for token in tokens):
+        if name in MANIFEST_NAMES and any(re.search(rf"\b{re.escape(token.lower())}\b", lower_content) for token in tokens):
             paths.append(relative)
-        if re.search(rf"\b{re.escape(env_prefix)}[A-Z0-9_]*\b", content, re.IGNORECASE):
+        env_usage = re.search(
+            rf"(?:process\.env\.|os\.environ(?:\.get)?\s*[\[(]|getenv\s*\(|secrets\.|vars\.|env/)[^)\]\n]*\b{re.escape(env_prefix)}[A-Z0-9_]*\b",
+            content,
+            re.IGNORECASE,
+        )
+        if env_usage:
             paths.append(relative)
-        if Path(relative).name == ".env.example":
+        if Path(relative).name in {".env.example", ".env.template"}:
             declared = re.findall(rf"^\s*(?:export\s+)?({re.escape(env_prefix)}[A-Z0-9_]*)\s*=", content, re.IGNORECASE | re.MULTILINE)
             if declared:
                 paths.append(relative)
@@ -304,12 +372,15 @@ def _packaging_signal(prefix: str, local_paths: list[str], manifest: str | None,
     return any(Path(path).name == "__init__.py" and not any(part in {"tests", "test", "scripts"} for part in Path(_local(path, prefix)).parts) for path in local_paths)
 
 
-def profile_repository(repo_path: str | Path) -> RepoProfile:
+def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT_EVIDENCE_PATH_LIMIT) -> RepoProfile:
+    if evidence_path_limit < 1:
+        raise ValueError("evidence_path_limit must be at least 1")
     root = Path(repo_path).expanduser().resolve()
     if not root.is_dir():
         raise ValueError(f"Repository path is not a directory: {root}")
     if not os.access(root, os.R_OK | os.X_OK):
         raise PermissionError(f"Repository path is not readable: {root}")
+    evidence_limit_token = _EVIDENCE_PATH_LIMIT.set(evidence_path_limit)
 
     paths, scan_evidence = _files(root)
     rel_paths = [_rel(path, root) for path in paths]
@@ -324,6 +395,7 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
             or Path(relative).suffix in {".toml", ".json", ".txt", ".md", ".yml", ".yaml"}
             or Path(relative).suffix.lower() in CODE_SUFFIXES
             or Path(relative).name in {"Dockerfile", "Makefile"}
+            or (not Path(relative).suffix and os.access(path, os.X_OK))
         )
         if not readable_candidate or _secret_risk_type(relative):
             continue
@@ -335,7 +407,7 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
         if result.error:
             all_evidence.append(_evidence("unreadable_file", [relative], f"File could not be read ({result.error})"))
             warnings.append(f"File could not be read during scan: {relative}")
-    manifests = sorted(path for path in rel_paths if Path(path).name in MANIFEST_NAMES)
+    manifests = sorted(path for path in rel_paths if Path(path).name in MANIFEST_NAMES and not _is_fixture_path(path))
     nested_prefixes = sorted({str(Path(path).parent) for path in manifests if str(Path(path).parent) != "."})
     component_specs: list[tuple[str, str, list[str]]] = [("root", "", [path for path in manifests if str(Path(path).parent) == "."])]
     for prefix in nested_prefixes:
@@ -382,6 +454,10 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
     components: list[ComponentProfile] = []
     for name, prefix, component_manifests in component_specs:
         local_paths = _component_files(rel_paths, prefix, nested_prefixes)
+        architecture_paths = [
+            path for path in local_paths
+            if not _is_fixture_path(path) and not _is_test_path(path) and not _is_documentation_path(path)
+        ]
         local_frameworks: list[str] = []
         local_languages: list[str] = []
         local_evidence: list[Evidence] = []
@@ -393,15 +469,20 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
         if component_manifests:
             local_evidence.insert(0, _evidence("manifest", component_manifests, f"Component manifests detected: {', '.join(component_manifests)}"))
         local_contents = {path: contents[path] for path in local_paths if path in contents}
-        worker_configs = [path for path in local_paths if Path(path).name in {"wrangler.toml", "wrangler.json", "wrangler.jsonc"}]
+        runtime_local_contents = {path: text for path, text in local_contents.items() if _is_runtime_path(path)}
+        runtime_text = "\n".join(runtime_local_contents.values())
+        worker_configs = [path for path in architecture_paths if Path(path).name in {"wrangler.toml", "wrangler.json", "wrangler.jsonc"}]
         worker = bool(worker_configs)
-        infrastructure_paths = [path for path in local_paths if path.endswith((".tf", ".tfvars")) or path.lower().startswith(("k8s/", "kubernetes/", "helm/")) or Path(path).name == "Dockerfile"]
+        infrastructure_paths = [path for path in architecture_paths if path.endswith((".tf", ".tfvars")) or path.lower().startswith(("k8s/", "kubernetes/", "helm/"))]
+        container_paths = [path for path in architecture_paths if Path(path).name.lower() in {"dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}]
         package_manifests = [manifest for manifest in component_manifests if Path(manifest).name == "package.json"]
         package = manifest_data.get(package_manifests[0], {}) if package_manifests else {}
         primary_manifest = component_manifests[0] if component_manifests else None
-        package_scripts = package.get("scripts", {}) if isinstance(package.get("scripts", {}), dict) else {}
+        pyproject_manifests = [manifest for manifest in component_manifests if Path(manifest).name == "pyproject.toml"]
+        pyproject = manifest_data.get(pyproject_manifests[0], {}) if pyproject_manifests else {}
+        console_scripts = pyproject.get("project", {}).get("scripts", {}) if isinstance(pyproject.get("project"), dict) else {}
         api_framework = any(item in local_frameworks for item in {"FastAPI", "Flask", "Django", "Express", "Fastify", "Hono"})
-        api_paths = [path for path in local_paths if not _is_documentation_path(path) and "api" in {part.lower() for part in Path(path).parts}]
+        api_paths = [path for path in architecture_paths if "api" in {part.lower() for part in Path(path).parts}]
         edge_api = worker and any(re.search(r"\b(fetch|Request|Response)\b", text) for text in local_contents.values())
         api_evidence_paths = _unique(api_paths + ([primary_manifest] if api_framework and primary_manifest else []) + ([path for path in local_paths if Path(path).name in {"index.ts", "index.js", "worker.ts"}] if edge_api else []))
         project_types: list[str] = []
@@ -414,7 +495,99 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
         if api_framework or api_paths or edge_api:
             project_types.append("api")
             local_evidence.append(_evidence("api_signal", api_evidence_paths, "API framework, edge handler, or API route detected in this component"))
-        strong_ml = _strong_ml_evidence(local_paths, local_evidence)
+        console_script_paths = pyproject_manifests if isinstance(console_scripts, dict) and console_scripts else []
+        interactive_paths = [path for path, text in runtime_local_contents.items() if re.search(r"\bcv2\.imshow\s*\(|\bwaitKey\s*\(|\btkinter\b|\bPyQt\b", text)]
+        if console_script_paths or interactive_paths:
+            project_types.append("application")
+            local_evidence.append(_evidence("application_entrypoint", _unique(console_script_paths + interactive_paths), "Executable application entrypoint or interactive loop detected"))
+        if console_script_paths:
+            project_types.append("cli_tool")
+            local_evidence.append(_evidence("cli_entrypoint", console_script_paths, "Console script declared by the component manifest"))
+        if interactive_paths:
+            project_types.extend(["desktop_application", "interactive_application"])
+            local_evidence.append(_evidence("interactive_ui", interactive_paths, "Desktop or interactive display loop detected"))
+
+        cv_inference_patterns = (
+            r"cv2\.dnn\.readNet", r"readNetFromDarknet", r"blobFromImage",
+            r"\.forward\s*\(", r"NMSBoxes",
+        )
+        cv_inference_paths = [
+            path for path, text in runtime_local_contents.items()
+            if sum(bool(re.search(pattern, text)) for pattern in cv_inference_patterns) >= 2
+        ]
+        cv_dependency = "opencv" in str(pyproject).lower() or any(
+            re.search(r"^\s*(?:import|from)\s+cv2\b|^\s*(?:import|from)\s+pyopencl\b", text, re.MULTILINE)
+            for text in runtime_local_contents.values()
+        )
+        cv_config_paths = [path for path in architecture_paths if Path(path).suffix.lower() in {".cfg", ".prototxt"}]
+        classical_cv_paths = [
+            path for path, text in runtime_local_contents.items()
+            if re.search(r"\b(cv2|pyopencl|Sobel|Hough|image processing|histogram|EXIF)\b", text, re.IGNORECASE)
+        ]
+        if cv_inference_paths and cv_dependency:
+            project_types.extend(["computer_vision", "ml_inference"])
+            local_evidence.append(_evidence("ml_inference_signal", _unique(cv_inference_paths + cv_config_paths), "OpenCV DNN model loading, inference, and post-processing detected"))
+        if (classical_cv_paths or cv_inference_paths) and cv_dependency:
+            project_types.append("image_processing")
+            local_evidence.append(_evidence("image_processing_signal", _unique(classical_cv_paths + cv_inference_paths), "Image-processing or classical computer-vision operations detected"))
+        if (cv_inference_paths or classical_cv_paths) and cv_dependency:
+            project_types.append("computer_vision")
+
+        mcp_dependency = "fastmcp" in str(pyproject).lower() or any(
+            re.search(r"^\s*(?:from|import)\s+fastmcp\b", text, re.MULTILINE)
+            for text in runtime_local_contents.values()
+        )
+        mcp_paths = [
+            path for path, text in runtime_local_contents.items()
+            if re.search(r"@mcp\.tool|FastMCP\s*\(|mcp\.run\s*\(", text)
+        ]
+        if mcp_dependency and mcp_paths:
+            project_types.extend(["mcp_server", "integration_service", "developer_tool"])
+            local_evidence.append(_evidence("mcp_server_signal", _unique(pyproject_manifests + mcp_paths), "FastMCP dependency, tool registration, or MCP server run call detected"))
+        opaque_tool_paths = [
+            path for path, text in runtime_local_contents.items()
+            if "@mcp.tool" in text and re.search(r"dict\s*\[\s*str\s*,\s*Any\s*\]", text)
+        ]
+        if opaque_tool_paths:
+            local_evidence.append(_evidence("opaque_tool_contract", opaque_tool_paths, "MCP tools use open dict[str, Any] structures that weaken contract precision"))
+        photographic_paths = [
+            path for path, text in runtime_local_contents.items()
+            if re.search(r"RawTherapee|PP3|EXIF|LocalLab|lens correction|LUT|histogram", text, re.IGNORECASE)
+        ]
+        photographic_identity = (
+            any(token in str(pyproject).lower() for token in ("rawtherapee", "exifread", "pillow", "piexif"))
+        )
+        if photographic_paths and photographic_identity:
+            project_types.extend(["photographic_tool", "image_processing"])
+            local_evidence.append(_evidence("photographic_domain_signal", photographic_paths, "Photographic processing, metadata, profile, or evaluation operations detected"))
+
+        shell_paths = [
+            path for path, text in runtime_local_contents.items()
+            if text.startswith("#!") and re.search(r"\b(?:ba|z|k)?sh\b", text.splitlines()[0])
+        ]
+        acme_paths = [
+            path for path, text in runtime_local_contents.items()
+            if re.search(r"\bACME(?:v2)?\b|acme-v\d|rfc8555", text, re.IGNORECASE)
+            and re.search(r"openssl|certificate|CSR|revoke", text, re.IGNORECASE)
+        ]
+        dns_hook_paths = [path for path in local_paths if re.search(r"(^|/)dns_(add|del)_", path) and not _is_fixture_path(path)]
+        certificate_paths = [
+            path for path, text in runtime_local_contents.items()
+            if re.search(r"certificate|CSR|private key|revoke|renew|reload_service", text, re.IGNORECASE)
+            and re.search(r"openssl|ACME", text, re.IGNORECASE)
+        ]
+        if shell_paths:
+            project_types.extend(["cli_tool", "shell_tool"])
+            local_evidence.append(_evidence("shell_tool_signal", shell_paths, "Executable shell entrypoints detected"))
+        if acme_paths and shell_paths:
+            project_types.extend(["certificate_automation", "security_tooling", "integration_tool"])
+            local_evidence.append(_evidence("acme_protocol_signal", acme_paths, "ACME protocol operations and cryptographic certificate handling detected"))
+        if certificate_paths and shell_paths:
+            local_evidence.append(_evidence("certificate_lifecycle_signal", certificate_paths, "Certificate issuance, renewal, installation, revocation, or reload operations detected"))
+        if dns_hook_paths:
+            project_types.append("integration_tool")
+            local_evidence.append(_evidence("dns_provider_hooks", dns_hook_paths, "DNS challenge provider add/delete hooks detected"))
+        strong_ml = _strong_ml_evidence(architecture_paths, local_evidence)
         if strong_ml:
             project_types.append("data_ml")
             local_evidence.append(_evidence("ml_signal", _unique([path for item in strong_ml for path in item.paths]), "Strong ML dependency or repository artifact/layout signal detected in this component"))
@@ -428,7 +601,8 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
         if prefix.startswith("server/proxy") or ("Express" in local_frameworks and not worker):
             project_types.extend(item for item in ("node_service", "proxy_service") if item not in project_types)
         packaging = any(_packaging_signal(prefix, local_paths, manifest, manifest_data.get(manifest, {})) for manifest in component_manifests)
-        if packaging and not project_types:
+        executable_identity = {"application", "cli_tool", "mcp_server", "cloudflare_worker", "api", "pipeline", "shell_tool"}.intersection(project_types)
+        if packaging and not executable_identity and not project_types:
             project_types.append("library")
         entrypoints: list[str] = []
         for package_manifest in package_manifests:
@@ -440,7 +614,7 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
             if isinstance(config_data.get("main"), str):
                 entrypoints.append(str(Path(prefix) / config_data["main"]).replace("./", "") if prefix else config_data["main"])
         entrypoints.extend(path for path in operational_entrypoints if _under(path, prefix))
-        entrypoints.extend(path for path in local_paths if Path(path).name in {"server.js", "server.ts", "main.py", "app.py", "index.js", "index.ts", "worker.ts"})
+        entrypoints.extend(path for path in architecture_paths if Path(path).name in {"server.js", "server.ts", "main.py", "app.py", "index.js", "index.ts", "worker.ts"})
         component_targets: list[str] = []
         if worker:
             component_targets.append("Cloudflare Workers")
@@ -450,6 +624,8 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
             project_types.append("unknown")
         if infrastructure_paths:
             local_evidence.append(_evidence("infrastructure_signal", infrastructure_paths, "Infrastructure or container deployment signal detected"))
+        if container_paths:
+            local_evidence.append(_evidence("container_support", container_paths, "Container packaging or runtime support detected"))
         components.append(ComponentProfile(
             name=name,
             path=prefix or ".",
@@ -468,9 +644,54 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
     has_automation = bool(operational_entrypoints or any(path.startswith("scripts/") for path in rel_paths))
     has_ci_cd = bool(workflow_paths and (workflow_scheduled or workflow_manual or workflow_contents))
     runtime_non_docs = {path: text for path, text in contents.items() if _is_runtime_path(path)}
-    cloudflare_api_paths = [path for path, text in runtime_non_docs.items() if re.search(r"api\.cloudflare\.com|CLOUDFLARE_(ACCOUNT_TOKEN|API_TOKEN|ACCOUNT_ID)", text, re.IGNORECASE)]
-    oracle_paths = [path for path, text in runtime_non_docs.items() if re.search(r"oracledb|sqlplus|ORACLE_|oracle", text, re.IGNORECASE)]
-    has_operations = bool(cloudflare_api_paths or oracle_paths or self_hosted_paths)
+    cloudflare_api_paths = [
+        path for path, text in runtime_non_docs.items()
+        if re.search(r"api\.cloudflare\.com|CLOUDFLARE_(ACCOUNT_TOKEN|API_TOKEN|ACCOUNT_ID)", text, re.IGNORECASE)
+        and (
+            (Path(path).suffix.lower() in {".sh", ".bash"} or not Path(path).suffix)
+            and re.search(r"\bcurl\b", text, re.IGNORECASE)
+            or re.search(r"^\s*(?:from|import)\s+(?:requests|urllib)\b", text, re.MULTILINE)
+            or re.search(r"\bfetch\s*\(\s*[\"'`][^\"'`]*api\.cloudflare\.com", text, re.IGNORECASE)
+        )
+    ]
+    oracle_paths = [
+        path for path, text in runtime_non_docs.items()
+        if (
+            re.search(r"^\s*(?:from|import)\s+oracledb\b", text, re.IGNORECASE | re.MULTILINE)
+            or (
+                (Path(path).suffix.lower() in {".sh", ".bash"} or (not Path(path).suffix and text.startswith("#!")))
+                and re.search(r"\bsqlplus\b", text, re.IGNORECASE)
+            )
+        )
+    ]
+    dns_config_paths = [
+        path for path, text in contents.items()
+        if not _is_documentation_path(path)
+        and not _is_fixture_path(path)
+        and Path(path).suffix.lower() in {".yaml", ".yml", ".toml"}
+        and (
+            re.search(r"CloudflareProvider|Rfc2136Provider|YamlProvider|ZoneFileSource", text)
+            or (
+                Path(path).suffix.lower() in {".yaml", ".yml"}
+                and re.search(r"^\s*providers\s*:", text, re.MULTILINE)
+                and re.search(r"^\s*zones\s*:", text, re.MULTILINE)
+            )
+        )
+    ]
+    if dns_config_paths and workflow_paths and not has_pipeline:
+        has_pipeline = True
+    cloudflare_dns_paths = [path for path in dns_config_paths if re.search(r"CloudflareProvider|octodns-cloudflare|octodns_cloudflare", contents.get(path, ""))]
+    rfc2136_dns_paths = [path for path in dns_config_paths if re.search(r"Rfc2136Provider|octodns-bind|octodns_bind", contents.get(path, ""))]
+    sensitive_operation_paths = [
+        path for path, text in runtime_non_docs.items()
+        if re.search(r"\b(?:scp|sftp|ssh|WebDAV|reload_service|RELOAD_CMD|revoke_certificate)\b", text, re.IGNORECASE)
+        and (
+            Path(path).suffix.lower() in {".sh", ".bash", ".ps1"}
+            or (not Path(path).suffix and text.startswith("#!"))
+            or re.search(r"^\s*(?:from|import)\s+subprocess\b", text, re.MULTILINE)
+        )
+    ]
+    has_operations = bool(cloudflare_api_paths or oracle_paths or self_hosted_paths or sensitive_operation_paths or dns_config_paths)
     project_types = [item for item in _unique(component_types) if item != "unknown"]
     if has_pipeline:
         project_types.append("pipeline")
@@ -480,11 +701,26 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
         project_types.append("ci_cd")
     if has_operations:
         project_types.append("operations")
+    if dns_config_paths:
+        project_types.extend(["dns_iac", "dns_configuration"])
     runnable_components = [component for component in components if any(item in component.project_types for item in {"cloudflare_worker", "node_service", "proxy_service", "api"})]
     if len(runnable_components) > 1 and {"cloudflare_worker", "proxy_service"}.issubset(set(component_types)):
         project_types.append("hybrid_service")
     if not project_types or project_types == ["unknown"]:
         project_types = ["library"] if any("library" in component.project_types for component in components) else ["unknown"]
+
+    model_reference_paths: list[str] = []
+    referenced_model_names: set[str] = set()
+    for path, text in runtime_non_docs.items():
+        matches = re.findall(r"""["']([^"']+\.(?:weights|onnx|pt|pth|safetensors|h5|keras))["']""", text, re.IGNORECASE)
+        if matches:
+            model_reference_paths.append(path)
+            referenced_model_names.update(Path(match).name for match in matches)
+    versioned_model_names = {Path(path).name for path in rel_paths if Path(path).suffix.lower() in ML_ARTIFACT_SUFFIXES or Path(path).suffix.lower() == ".weights"}
+    missing_model_names = sorted(referenced_model_names - versioned_model_names)
+    if missing_model_names:
+        all_evidence.append(_evidence("external_model_artifact_missing", model_reference_paths, f"Referenced model artifacts are not present in the repository: {', '.join(missing_model_names)}"))
+        warnings.append(f"External model artifacts referenced but not versioned: {', '.join(missing_model_names)}")
 
     test_dir_paths = [path for path in rel_paths if any(part.lower() in {"tests", "test", "__tests__"} for part in Path(path).parts)]
     test_file_paths = [path for path in rel_paths if re.search(r"\.(test|spec)\.[^.]+$", path, re.IGNORECASE)]
@@ -497,6 +733,18 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
     if real_test_paths:
         test_frameworks.append("repository test files")
         test_evidence.append(_evidence("test_files", real_test_paths, "Test directories or test-file conventions detected"))
+    bats_paths = [path for path in real_test_paths if Path(path).suffix.lower() == ".bats"]
+    shellcheck_paths = [
+        path for path, text in contents.items()
+        if not _is_fixture_path(path) and re.search(r"\bshellcheck\b", text, re.IGNORECASE)
+    ]
+    if bats_paths:
+        test_frameworks.append("Bats")
+        test_commands.append("bats")
+        test_evidence.append(_evidence("bats_tests", bats_paths, "Bats shell test suite detected"))
+    if shellcheck_paths:
+        test_frameworks.append("ShellCheck")
+        test_evidence.append(_evidence("shellcheck_config", shellcheck_paths, "ShellCheck usage or configuration detected"))
     test_config_paths = [path for path in rel_paths if Path(path).name in {"pytest.ini", "tox.ini", "unittest.cfg"} or Path(path).name.startswith(("vitest.config", "jest.config", "playwright.config"))]
     package_test_manifests = [manifest for manifest, data in manifest_data.items() if Path(manifest).name == "package.json" and isinstance(data.get("scripts"), dict) and "test" in data["scripts"]]
     py_test_configs = [manifest for manifest, data in manifest_data.items() if Path(manifest).name == "pyproject.toml" and ("[tool.pytest" in _read(by_rel[manifest]) or "pytest" in _read(by_rel[manifest]).lower() and real_test_paths)]
@@ -523,6 +771,36 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
     if package_manifests:
         deploy_tools.append("npm-scripts")
         deploy_evidence.append(_evidence("npm_scripts", package_manifests, "npm scripts detected in package manifests"))
+    container_paths = [
+        path for path in rel_paths
+        if Path(path).name.lower() in {"dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
+        and not _is_fixture_path(path) and not _is_test_path(path)
+    ]
+    if container_paths:
+        deploy_tools.append("containers")
+        deploy_evidence.append(_evidence("container_support", container_paths, "Container packaging or runtime support detected"))
+    if cloudflare_dns_paths:
+        deploy_targets.append("Cloudflare DNS")
+        deploy_evidence.append(_evidence("cloudflare_dns_target", cloudflare_dns_paths, "octoDNS Cloudflare DNS target detected"))
+    if rfc2136_dns_paths:
+        deploy_targets.append("RFC2136/BIND DNS")
+        deploy_evidence.append(_evidence("rfc2136_dns_target", rfc2136_dns_paths, "RFC2136 or BIND DNS target detected"))
+    dns_hook_paths = [path for path in rel_paths if re.search(r"(^|/)dns_(add|del)_", path) and not _is_fixture_path(path)]
+    if dns_hook_paths:
+        deploy_targets.append("DNS challenge providers")
+        deploy_evidence.append(_evidence("dns_challenge_targets", dns_hook_paths, "DNS provider hooks can mutate challenge records"))
+    if sensitive_operation_paths:
+        deploy_targets.extend(["local filesystem", "remote hosts", "generic web servers"])
+        deploy_evidence.append(_evidence("remote_certificate_operations", sensitive_operation_paths, "Local/remote certificate copy, install, or reload operations detected"))
+    cpanel_iis_paths = [
+        path for path in rel_paths
+        if re.search(r"cpanel|iis", Path(path).name, re.IGNORECASE) and not _is_fixture_path(path)
+    ]
+    if any("cpanel" in path.lower() for path in cpanel_iis_paths):
+        deploy_targets.append("cPanel")
+    if any("iis" in path.lower() for path in cpanel_iis_paths):
+        deploy_targets.append("IIS")
+    deploy_targets = _unique(deploy_targets)
     deployment = DeploymentProfile(_unique(deploy_tools), deploy_targets, deploy_evidence)
 
     entrypoints = _unique(operational_entrypoints + [path for component in components for path in component.entrypoints])
@@ -537,6 +815,10 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
         architecture_evidence.append(_evidence("cloudflare_api", cloudflare_api_paths, "Runtime code calls or configures the Cloudflare API"))
     if oracle_paths:
         architecture_evidence.append(_evidence("oracle_operation", oracle_paths, "Runtime code or configuration references Oracle operations"))
+    if dns_config_paths:
+        architecture_evidence.append(_evidence("dns_configuration", dns_config_paths, "Declarative DNS providers, zones, or targets detected"))
+    if sensitive_operation_paths:
+        architecture_evidence.append(_evidence("sensitive_operations", sensitive_operation_paths, "Remote copy, command execution, certificate revocation, or reload operations detected"))
     styles: list[str] = []
     if "hybrid_service" in project_types:
         styles.append("hybrid-service")
@@ -558,6 +840,17 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
     integrations: list[IntegrationProfile] = []
     for name, tokens, env_prefix in (("jira", ("jira", "atlassian"), "JIRA_"), ("confluence", ("confluence",), "CONFLUENCE_"), ("dify", ("dify",), "DIFY_"), ("cloudflare_api", ("api.cloudflare.com",), "CLOUDFLARE_"), ("oracle_database", ("oracledb", "sqlplus", "oracle"), "ORACLE_")):
         matches, integration_evidence = _runtime_integration_matches(root, contents, tokens, env_prefix)
+        if name == "dify":
+            dify_workflow_paths = [
+                path for path in workflow_paths
+                if re.search(r"\bDIFY_[A-Z0-9_]+\b|dify_[a-z0-9_]+\.py", workflow_contents.get(path, ""), re.IGNORECASE)
+            ]
+            if dify_workflow_paths:
+                matches = _unique(matches + dify_workflow_paths)
+                integration_evidence = _unique_evidence(
+                    integration_evidence
+                    + [_evidence("integration_workflow_reference", dify_workflow_paths, "Workflow invokes Dify-specific scripts or declared variables")]
+                )
         if name == "cloudflare_api":
             matches = _unique(cloudflare_api_paths)
             integration_evidence = [_evidence("cloudflare_api", matches, "Runtime Cloudflare API endpoint or token variable detected")] if matches else []
@@ -588,8 +881,32 @@ def profile_repository(repo_path: str | Path) -> RepoProfile:
     if not all_languages:
         risks.append("Language could not be inferred from recognized manifests")
 
-    return RepoProfile(
-        path=str(root), name=root.name, project_types=_unique(project_types), languages=_unique(all_languages), frameworks=_unique(all_frameworks),
+    project_types = _unique(project_types)
+    if "mcp_server" in project_types:
+        primary_project_types = [item for item in ("mcp_server", "image_processing", "photographic_tool") if item in project_types]
+    elif "certificate_automation" in project_types:
+        primary_project_types = [item for item in ("cli_tool", "certificate_automation", "security_tooling") if item in project_types]
+    elif "computer_vision" in project_types:
+        primary_project_types = [item for item in ("application", "computer_vision", "ml_inference") if item in project_types]
+    elif "dns_iac" in project_types:
+        primary_project_types = [item for item in ("pipeline", "dns_iac") if item in project_types]
+    elif "hybrid_service" in project_types:
+        primary_project_types = ["hybrid_service"]
+    else:
+        primary_project_types = [
+            item for item in project_types
+            if item not in {"automation", "ci_cd", "operations", "containerized", "packaged_python"}
+        ][:3]
+    secondary_project_types = [item for item in project_types if item not in primary_project_types]
+    if container_paths and "containerized" not in secondary_project_types:
+        secondary_project_types.append("containerized")
+    if any(Path(manifest).name == "pyproject.toml" for manifest in manifests) and "library" not in primary_project_types:
+        secondary_project_types.append("packaged_python")
+    project_types = _unique(primary_project_types + secondary_project_types)
+    profile = RepoProfile(
+        path=str(root), name=root.name, project_types=project_types, primary_project_types=primary_project_types, secondary_project_types=_unique(secondary_project_types), languages=_unique(all_languages), frameworks=_unique(all_frameworks),
         manifests=manifests, components=components, architecture=architecture, tests=tests, deployment=deployment,
         integrations=integrations, risks=risks, evidence=all_evidence, warnings=_unique(warnings),
     )
+    _EVIDENCE_PATH_LIMIT.reset(evidence_limit_token)
+    return profile
