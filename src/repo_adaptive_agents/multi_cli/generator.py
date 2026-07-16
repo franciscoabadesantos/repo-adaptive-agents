@@ -122,6 +122,7 @@ def _build_manifest(
             "status": "generated",
             "portability": result.portability,
             "renderer_version": result.renderer_version,
+            "enforcement": result.enforcement,
             "files": [
                 {"path": path, "sha256": _sha256(files[path])}
                 for path in sorted(result.files)

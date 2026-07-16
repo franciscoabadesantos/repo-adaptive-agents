@@ -60,6 +60,11 @@ def render(role: CanonicalRole) -> RenderedTarget:
         renderer_version=VERSION,
         portability=PORTABILITY,
         files={output_path(role): "\n".join(lines)},
+        enforcement={
+            "mode": "sandboxed",
+            "runtime_controls_generated": True,
+            "controls": ["sandbox_mode"],
+        },
         semantic_mapping={
             "id": "name",
             "description": "description",

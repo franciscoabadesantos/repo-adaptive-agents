@@ -6,6 +6,13 @@ input. They never emit absolute paths and never depend on the environment.
 
 from __future__ import annotations
 
+# Shared, deterministic note that makes the guidance-vs-enforcement boundary explicit.
+# Rendered verbatim above the constraints list in every Markdown wrapper.
+ENFORCEMENT_NOTE = (
+    "These constraints are behavioral guidance, not technical enforcement.",
+    "Enforce them through the host tool's permissions, approvals, sandbox, and repository policy.",
+)
+
 
 def yaml_scalar(value: str) -> str:
     """Return a YAML double-quoted scalar. Inputs are single-line by contract."""

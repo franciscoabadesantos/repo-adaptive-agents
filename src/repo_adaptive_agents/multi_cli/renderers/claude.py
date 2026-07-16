@@ -8,7 +8,7 @@ omitted and recorded in the manifest as unsupported. No Agent Teams settings, no
 from __future__ import annotations
 
 from ..models import CanonicalRole, RenderedTarget
-from .common import bullet_list, frontmatter, numbered_list
+from .common import ENFORCEMENT_NOTE, bullet_list, frontmatter, numbered_list
 
 VERSION = "1.0"
 TARGET = "claude"
@@ -41,6 +41,8 @@ def render(role: CanonicalRole) -> RenderedTarget:
             bullet_list(role.response_format),
             "",
             "## Constraints",
+            "",
+            *ENFORCEMENT_NOTE,
             "",
             bullet_list(role.critical_constraints()),
             "",
