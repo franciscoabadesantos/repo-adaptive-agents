@@ -18,9 +18,46 @@ from repo_adaptive_agents.multi_cli import (
     validate_proposal,
     write_proposal,
 )
+from repo_adaptive_agents.multi_cli.roles import INDEPENDENT_REVIEWER
 from repo_adaptive_agents.multi_cli.validator import _parse_frontmatter
 
 ROLE = "independent_reviewer"
+
+# The four rendered wrapper files (Codex, Claude, Copilot, Skill).
+WRAPPER_FILES = (
+    "portable/.agents/skills/independent-review/SKILL.md",
+    "codex/.codex/agents/independent_reviewer.toml",
+    "claude/.claude/agents/independent-review.md",
+    "copilot/.github/agents/independent-review.agent.md",
+)
+
+
+def _canonical_strings(role):
+    """Every human-readable canonical string that reaches a rendered file."""
+    strings = [role.title, role.description, role.purpose]
+    strings.extend(role.capabilities)
+    strings.extend(role.when_to_use)
+    strings.extend(role.procedure)
+    strings.extend(role.response_format)
+    strings.extend(role.evidence_requirements)
+    strings.extend(role.critical_constraints())
+    return strings
+
+
+def _glued_bigrams(role):
+    """Concatenations of adjacent alphabetic canonical words, e.g. 'risks without'->'riskswithout'.
+
+    This is the conservative, dictionary-free guard: the canonical text itself is the
+    ground truth. Pairs where the first token ends in punctuation are skipped, so no
+    linguistic heuristic is involved — only that two clean words must never appear fused.
+    """
+    glued = set()
+    for text in _canonical_strings(role):
+        words = text.split()
+        for first, second in zip(words, words[1:]):
+            if first[-1:].isalpha() and second[:1].isalpha():
+                glued.add(first + second)
+    return glued
 
 # Critical constraints that must survive into every one of the four outputs.
 CRITICAL_MARKERS = (
@@ -132,6 +169,67 @@ class MultiCliRenderTests(unittest.TestCase):
             for entry in declared:
                 self.assertFalse(entry["path"].startswith("/"))
                 self.assertTrue((output / entry["path"]).is_file())
+
+
+class MultiCliWordBoundaryRegressionTests(unittest.TestCase):
+    """Regression coverage for word-gluing at wrapping/concatenation boundaries."""
+
+    def _render(self, root: Path) -> Path:
+        output = root / "proposal"
+        write_proposal(ROLE, None, output)
+        return output
+
+    def test_reported_glued_fragments_are_absent_in_all_four_targets(self):
+        forbidden = ("byseverity", "riskswithout", "codeonly", "notpush")
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            for relative in WRAPPER_FILES:
+                text = (output / relative).read_text()
+                for fragment in forbidden:
+                    self.assertNotIn(fragment, text, f"{fragment!r} glued in {relative}")
+
+    def test_correct_spaced_phrases_are_present(self):
+        expected = ("ordered by severity", "risks without", "adjacent code only", "Do not push")
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            for relative in WRAPPER_FILES:
+                text = (output / relative).read_text()
+                for phrase in expected:
+                    self.assertIn(phrase, text, f"{phrase!r} missing from {relative}")
+
+    def test_no_canonical_words_are_fused_at_any_boundary(self):
+        glued = _glued_bigrams(INDEPENDENT_REVIEWER)
+        self.assertIn("riskswithout", glued)  # guard is actually exercising real boundaries
+        self.assertIn("adjacentcode", glued)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            for relative in WRAPPER_FILES:
+                text = (output / relative).read_text()
+                offenders = sorted(fragment for fragment in glued if fragment in text)
+                self.assertEqual(offenders, [], f"fused words in {relative}: {offenders}")
+
+    def test_formats_still_valid_after_boundary_checks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            # TOML parseable, frontmatter parseable, manifest hashes match.
+            tomllib.loads((output / "codex/.codex/agents/independent_reviewer.toml").read_text())
+            for relative in (
+                "claude/.claude/agents/independent-review.md",
+                "copilot/.github/agents/independent-review.agent.md",
+                "portable/.agents/skills/independent-review/SKILL.md",
+            ):
+                self.assertIsNotNone(_parse_frontmatter((output / relative).read_text()))
+            self.assertEqual(validate_proposal(output), [])
+
+    def test_output_remains_byte_deterministic(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            first = Path(temporary) / "a"
+            second = Path(temporary) / "b"
+            write_proposal(ROLE, None, first)
+            write_proposal(ROLE, None, second)
+            first_files = {p.relative_to(first).as_posix(): p.read_bytes() for p in first.rglob("*") if p.is_file()}
+            second_files = {p.relative_to(second).as_posix(): p.read_bytes() for p in second.rglob("*") if p.is_file()}
+            self.assertEqual(first_files, second_files)
 
 
 class MultiCliSafetyTests(unittest.TestCase):
