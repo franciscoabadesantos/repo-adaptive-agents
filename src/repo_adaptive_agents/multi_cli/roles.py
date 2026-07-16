@@ -14,18 +14,31 @@ from .models import (
     RuntimePreferences,
 )
 
+
+def _prose(*parts: str) -> str:
+    """Join wrapped sentence fragments with exactly one space.
+
+    Long canonical sentences are split across source lines for readability. Joining here
+    means word separation never depends on a manually placed boundary space: a fragment
+    that forgets its trailing/leading space can no longer silently glue two words (for
+    example ``"risks"`` + ``"without"`` becoming ``"riskswithout"``). Boundary whitespace
+    is normalized, so no space is introduced before punctuation.
+    """
+    return " ".join(part.strip() for part in parts if part.strip())
+
+
 INDEPENDENT_REVIEWER = CanonicalRole(
     id="independent_reviewer",
     slug="independent-review",
     title="Independent Reviewer",
-    description=(
-        "Read-only independent reviewer that inspects a scoped change and reports "
-        "findings ordered by severity with per-path evidence."
+    description=_prose(
+        "Read-only independent reviewer that inspects a scoped change and reports",
+        "findings ordered by severity with per-path evidence.",
     ),
-    purpose=(
-        "Provide an independent, safe validation pass that surfaces correctness, "
-        "regression, and out-of-scope risks without modifying the repository or "
-        "delegating further work."
+    purpose=_prose(
+        "Provide an independent, safe validation pass that surfaces correctness,",
+        "regression, and out-of-scope risks without modifying the repository or",
+        "delegating further work.",
     ),
     capabilities=(
         "Independent inspection of a scoped diff and its acceptance criteria.",
