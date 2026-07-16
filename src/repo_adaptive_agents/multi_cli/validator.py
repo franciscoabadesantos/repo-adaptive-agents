@@ -98,6 +98,41 @@ def validate_codex(path: Path) -> list[str]:
     return issues
 
 
+def validate_codex_registration(path: Path) -> list[str]:
+    """Validate a manual Codex agent-registration fragment."""
+    if not path.is_file():
+        return [f"codex registration: missing file {path.name}"]
+    text = path.read_text(encoding="utf-8")
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        return [f"codex registration: invalid TOML ({error})"]
+
+    issues: list[str] = []
+    if set(data) != {"agents"} or not isinstance(data.get("agents"), dict):
+        issues.append("codex registration: expected only an [agents.<role>] table")
+        return issues
+    if len(data["agents"]) != 1:
+        issues.append("codex registration: expected exactly one agent")
+        return issues
+    role_id, entry = next(iter(data["agents"].items()))
+    if role_id != path.stem:
+        issues.append(f"codex registration: table role must match filename {path.stem!r}")
+    if not isinstance(entry, dict):
+        issues.append("codex registration: agent entry must be a table")
+        return issues
+    if set(entry) != {"description", "config_file"}:
+        issues.append("codex registration: only description and config_file are allowed")
+    if not str(entry.get("description", "")).strip():
+        issues.append("codex registration: missing description")
+    expected = f".codex/agents/{role_id}.toml"
+    if entry.get("config_file") != expected:
+        issues.append(f"codex registration: config_file must be {expected!r}")
+    if _ABSOLUTE_PATH.search(text):
+        issues.append("codex registration: contains an absolute path")
+    return issues
+
+
 def _validate_markdown_agent(path: Path, label: str) -> list[str]:
     if not path.is_file():
         return [f"{label}: missing file {path.name}"]
@@ -140,6 +175,7 @@ def validate_manifest(proposal_dir: Path) -> list[str]:
     declared: list[dict] = []
     for section in manifest.get("targets", {}).values():
         declared.extend(section.get("files", []))
+        declared.extend(section.get("artifacts", {}).values())
     declared.extend(manifest.get("shared", {}).get("files", []))
 
     for entry in declared:
@@ -181,5 +217,9 @@ def validate_proposal(proposal_dir: str | Path) -> list[str]:
             issues.append(f"manifest: unknown target {target!r}")
             continue
         for entry in section.get("files", []):
-            issues.extend(validator(proposal / entry["path"]))
+            path = proposal / entry["path"]
+            if target == "codex" and "/.codex/config.fragments/" in f"/{entry['path']}":
+                issues.extend(validate_codex_registration(path))
+            else:
+                issues.extend(validator(path))
     return issues

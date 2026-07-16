@@ -131,6 +131,11 @@ def _build_manifest(
             "unsupported_fields": list(result.unsupported_fields),
             "warnings": list(result.warnings),
         }
+        if result.artifacts:
+            targets_section[target]["artifacts"] = {
+                name: {"path": path, "sha256": _sha256(files[path])}
+                for name, path in sorted(result.artifacts.items())
+            }
         warnings.extend(result.warnings)
 
     return {

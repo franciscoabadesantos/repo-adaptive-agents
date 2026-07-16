@@ -1,8 +1,8 @@
 """Experimental multi-CLI role rendering (pilot).
 
-Renders a single canonical role into portable and target-specific wrappers for the Agent
-Skill format, Codex, Claude Code, and GitHub Copilot. This is a proposal generator only:
-it never applies changes, never writes to HOME, and never touches an existing Codex config.
+Renders canonical roles into portable and target-specific wrappers for the Agent Skill
+format, Codex, Claude Code, and GitHub Copilot. This is a proposal generator only: it
+never applies changes, never writes to HOME, and never touches an existing Codex config.
 """
 
 from __future__ import annotations

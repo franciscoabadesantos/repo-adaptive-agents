@@ -24,6 +24,7 @@ class RoleConstraints:
     allow_deploy: bool
     allowed_paths: tuple[str, ...] = ()
     blocked_paths: tuple[str, ...] = ()
+    additional_rules: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,7 @@ class CanonicalRole:
             rules.append("Do not deploy.")
         if not self.constraints.allow_network:
             rules.append("Do not access the network or external systems.")
+        rules.extend(self.constraints.additional_rules)
         if not self.delegation.recursive_delegation:
             rules.append("Do not delegate recursively or spawn further agents.")
         return tuple(rules)
@@ -108,3 +110,6 @@ class RenderedTarget:
     # Declares whether the wrapper generates real runtime controls or only advisory prose.
     # ``mode`` is ``advisory`` or ``sandboxed``; ``controls`` lists generated control fields.
     enforcement: dict = field(default_factory=lambda: {"mode": "advisory", "runtime_controls_generated": False})
+    # Optional named artifacts for targets that emit more than one file, such as the
+    # Codex agent wrapper and its manual registration fragment.
+    artifacts: dict[str, str] = field(default_factory=dict)
