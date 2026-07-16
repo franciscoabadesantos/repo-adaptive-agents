@@ -1,0 +1,3 @@
+stages:
+  - name: package
+    command: ./mvnw clean install -DskipTests

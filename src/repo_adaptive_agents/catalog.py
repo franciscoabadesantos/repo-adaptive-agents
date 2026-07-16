@@ -91,6 +91,15 @@ CAPABILITIES: dict[str, CapabilityDefinition] = {
     "dns_configuration_review": CapabilityDefinition(
         "dns_configuration_review", "DNS configuration review", "Review declarative DNS providers, zones, plans, and apply safety.", ("dns",)
     ),
+    "java_spring_review": CapabilityDefinition(
+        "java_spring_review", "Java and Spring review", "Review Spring Boot lifecycle, HTTP boundaries, configuration, and module structure.", ("java", "spring")
+    ),
+    "messaging_architecture_review": CapabilityDefinition(
+        "messaging_architecture_review", "Messaging architecture review", "Review producer/consumer boundaries, message flow, retries, and failure handling.", ("messaging", "integration")
+    ),
+    "rabbitmq_review": CapabilityDefinition(
+        "rabbitmq_review", "RabbitMQ review", "Review queues, exchanges, routing, acknowledgements, dead letters, and broker configuration.", ("messaging", "rabbitmq")
+    ),
     "jira_issue_context": CapabilityDefinition(
         "jira_issue_context", "Jira issue context", "Load issue context from Jira for planning and traceability.", ("all",), Availability.UNAVAILABLE, True
     ),

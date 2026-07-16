@@ -1,0 +1,14 @@
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>example.messaging</groupId>
+  <artifactId>messaging-parent</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <modules>
+    <module>common</module>
+    <module>producer</module>
+    <module>consumer</module>
+    <module>manager</module>
+    <module>distribution</module>
+  </modules>
+</project>

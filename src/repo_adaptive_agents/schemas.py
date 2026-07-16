@@ -28,10 +28,11 @@ REPO_PROFILE_SCHEMA = {
         "evidence_group": {"type": "object"},
         "component": {
             "type": "object",
-            "required": ["name", "path", "manifests", "project_types", "languages", "frameworks", "runtimes", "entrypoints"],
+            "required": ["name", "path", "manifests", "role", "project_types", "languages", "frameworks", "runtimes", "entrypoints"],
             "properties": {
                 "name": {"type": "string"}, "path": {"type": "string"},
                 "manifests": {"type": "array", "items": {"type": "string"}},
+                "role": {"type": "string"},
                 "project_types": {"type": "array", "items": {"type": "string"}},
                 "languages": {"type": "array", "items": {"type": "string"}},
                 "frameworks": {"type": "array", "items": {"type": "string"}},

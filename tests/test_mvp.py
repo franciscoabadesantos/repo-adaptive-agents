@@ -484,6 +484,54 @@ class MvpTests(unittest.TestCase):
             self.assertFalse({"frontend", "api", "cloudflare_worker", "data_ml"}.intersection(profile.project_types))
             self.assertEqual([component.name for component in profile.components], ["root"])
 
+    def test_maven_messaging_bridge_prioritizes_runtime_services(self):
+        profile = profile_repository(ROOT / "maven-messaging-bridge")
+        plan = recommend_team(profile)
+        components = {component.name: component for component in profile.components}
+        capability_ids = {item.capability_id for item in plan.capabilities}
+        agent_names = {item.name for item in plan.agents}
+        integrations = {item.name: item for item in profile.integrations}
+
+        self.assertEqual(profile.primary_project_types, ["messaging_application", "integration_service"])
+        self.assertTrue(
+            {
+                "message_pipeline",
+                "distributed_application",
+                "java_application",
+                "operations",
+                "shell_tool",
+                "containerized",
+            }.issubset(profile.secondary_project_types)
+        )
+        self.assertNotIn("cli_tool", profile.primary_project_types)
+        self.assertNotIn("shell_tool", profile.primary_project_types)
+        self.assertNotIn("containerized", profile.primary_project_types)
+        self.assertEqual(components["common"].role, "internal_library")
+        self.assertEqual(components["producer"].role, "service")
+        self.assertEqual(components["consumer"].role, "service")
+        self.assertEqual(components["manager"].role, "service")
+        self.assertEqual(components["distribution"].role, "packaging")
+        self.assertEqual(components["dev/rabbitmq"].role, "broker_support")
+        self.assertTrue(integrations["rabbitmq"].detected)
+        self.assertFalse(any("RabbitMQ" == target for target in profile.deployment.targets))
+        self.assertIn("./mvnw test", profile.tests.commands)
+        self.assertTrue(any(item.signal == "tests_disabled_in_build" for item in profile.evidence))
+        self.assertTrue(
+            {
+                "java_spring_review",
+                "messaging_architecture_review",
+                "rabbitmq_review",
+                "integration_review",
+                "pipeline_review",
+                "dependency_audit",
+                "test_strategy",
+                "operations_review",
+                "container_review",
+            }.issubset(capability_ids)
+        )
+        self.assertNotIn("shell_review", capability_ids)
+        self.assertTrue({"java_spring_reviewer", "messaging_reviewer", "rabbitmq_reviewer"}.issubset(agent_names))
+
 
 if __name__ == "__main__":
     unittest.main()

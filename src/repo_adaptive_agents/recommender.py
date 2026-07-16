@@ -68,11 +68,11 @@ def recommend_team(profile: RepoProfile, request: str = "") -> TeamPlan:
     if profile.manifests:
         _add(capabilities, "dependency_audit", "Recognized dependency manifests are present.", _relevant_evidence(profile, {"manifest", "package_dependency", "python_dependency", "ml_dependency"}))
     if "pipeline" in profile.project_types:
-        _add(capabilities, "pipeline_review", "Operational pipeline entrypoints and stages were detected.", _relevant_evidence(profile, {"operational_entrypoint", "oracle_operation", "cloudflare_api"}))
+        _add(capabilities, "pipeline_review", "Operational or delivery pipeline entrypoints and stages were detected.", _relevant_evidence(profile, {"operational_entrypoint", "oracle_operation", "cloudflare_api", "jenkins_pipeline", "maven_packaging"}))
     if "ci_cd" in profile.project_types:
-        _add(capabilities, "ci_cd_review", "CI/CD workflows, triggers, or runners were detected.", _relevant_evidence(profile, {"ci_cd_workflow", "self_hosted_runner"}))
+        _add(capabilities, "ci_cd_review", "CI/CD workflows, triggers, runners, or delivery pipelines were detected.", _relevant_evidence(profile, {"ci_cd_workflow", "self_hosted_runner", "jenkins_pipeline", "tests_disabled_in_build"}))
     if "operations" in profile.project_types:
-        _add(capabilities, "operations_review", "Operational side effects or external runtime integrations were detected.", _relevant_evidence(profile, {"operations_signal", "cloudflare_api", "oracle_operation", "self_hosted_runner", "operational_entrypoint"}))
+        _add(capabilities, "operations_review", "Operational side effects or external runtime integrations were detected.", _relevant_evidence(profile, {"operations_signal", "cloudflare_api", "oracle_operation", "self_hosted_runner", "operational_entrypoint", "java_service_wrapper", "rabbitmq_signal", "external_http_gateway"}))
     if "frontend" in profile.project_types:
         _add(capabilities, "browser_qa", "A browser-facing framework was detected.", _relevant_evidence(profile, {"frontend_framework"}))
     if "api" in profile.project_types:
@@ -94,13 +94,20 @@ def recommend_team(profile: RepoProfile, request: str = "") -> TeamPlan:
         _add(capabilities, "ml_inference_review", "A local model inference pipeline was detected.", inference_evidence)
         _add(capabilities, "ml_reproducibility", "Inference depends on reproducible model/configuration artifacts and preprocessing.", inference_evidence)
         _add(capabilities, "model_evaluation", "Inference thresholds and post-processing require representative evaluation.", inference_evidence)
-    if "shell_tool" in profile.project_types:
+    if "shell_tool" in profile.project_types and "messaging_application" not in profile.primary_project_types:
         _add(capabilities, "shell_review", "Executable shell tooling was detected.", _relevant_evidence(profile, {"shell_tool_signal", "shellcheck_config"}))
     if "certificate_automation" in profile.project_types:
         _add(capabilities, "acme_protocol_review", "ACME protocol operations were detected.", _relevant_evidence(profile, {"acme_protocol_signal"}))
         _add(capabilities, "certificate_lifecycle_review", "Certificate and key lifecycle operations were detected.", _relevant_evidence(profile, {"certificate_lifecycle_signal", "sensitive_operations"}))
     if {"integration_tool", "integration_service", "dns_iac"}.intersection(profile.project_types):
-        _add(capabilities, "integration_review", "The repository coordinates external tools, providers, or services.", _relevant_evidence(profile, {"dns_provider_hooks", "mcp_server_signal", "dns_configuration", "sensitive_operations", "cloudflare_api", "oracle_operation"}))
+        _add(capabilities, "integration_review", "The repository coordinates external tools, providers, or services.", _relevant_evidence(profile, {"dns_provider_hooks", "mcp_server_signal", "dns_configuration", "sensitive_operations", "cloudflare_api", "oracle_operation", "rabbitmq_signal", "external_http_gateway"}))
+    if "java_application" in profile.project_types:
+        _add(capabilities, "java_spring_review", "Spring Boot services or executable Java components were detected.", _relevant_evidence(profile, {"java_spring_signal", "spring_web_signal", "spring_actuator_signal"}))
+    if "messaging_application" in profile.project_types:
+        _add(capabilities, "messaging_architecture_review", "Publishers, consumers, and runtime integration boundaries form a messaging application.", _relevant_evidence(profile, {"rabbitmq_signal", "external_http_gateway"}))
+    rabbitmq = next((item for item in profile.integrations if item.name == "rabbitmq"), None)
+    if rabbitmq and rabbitmq.detected:
+        _add(capabilities, "rabbitmq_review", "RabbitMQ is a runtime integration with publisher, listener, or broker configuration signals.", rabbitmq.evidence)
     if "mcp_server" in profile.project_types:
         _add(capabilities, "mcp_protocol_review", "A FastMCP server and transport lifecycle were detected.", _relevant_evidence(profile, {"mcp_server_signal"}))
         _add(capabilities, "tool_contract_review", "Registered MCP tools require stable and reviewable contracts.", _relevant_evidence(profile, {"mcp_server_signal", "opaque_tool_contract"}))
@@ -148,6 +155,9 @@ def recommend_team(profile: RepoProfile, request: str = "") -> TeamPlan:
         "photographic_domain_review": AgentPlan("photographic_reviewer", "Photographic reviewer", "Review photographic processing semantics.", ["photographic_domain_review", "visual_evaluation"], "Selected for photographic tools."),
         "container_review": AgentPlan("container_reviewer", "Container reviewer", "Review secondary container packaging.", ["container_review"], "Selected when container support exists."),
         "dns_configuration_review": AgentPlan("dns_reviewer", "DNS configuration reviewer", "Review DNS plans, providers, and apply safety.", ["dns_configuration_review"], "Selected for DNS-as-code repositories."),
+        "java_spring_review": AgentPlan("java_spring_reviewer", "Java and Spring reviewer", "Review Spring Boot service structure and runtime behavior.", ["java_spring_review"], "Selected for executable Spring Boot components."),
+        "messaging_architecture_review": AgentPlan("messaging_reviewer", "Messaging architecture reviewer", "Review message flow, service boundaries, and failure handling.", ["messaging_architecture_review"], "Selected for producer/consumer messaging applications."),
+        "rabbitmq_review": AgentPlan("rabbitmq_reviewer", "RabbitMQ reviewer", "Review RabbitMQ topology, delivery semantics, and broker configuration.", ["rabbitmq_review"], "Selected when RabbitMQ runtime integration is detected."),
     }
     for recommendation in capabilities:
         if recommendation.capability_id == "ml_reproducibility" and "data_ml" not in profile.project_types:

@@ -68,6 +68,7 @@ class ComponentProfile:
     name: str
     path: str
     manifests: list[str]
+    role: str
     project_types: list[str]
     languages: list[str]
     frameworks: list[str]

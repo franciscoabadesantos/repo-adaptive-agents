@@ -392,7 +392,7 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         is_example_env = Path(relative).name.lower() in {".env.example", ".env.template"}
         readable_candidate = (
             is_example_env
-            or Path(relative).suffix in {".toml", ".json", ".txt", ".md", ".yml", ".yaml"}
+            or Path(relative).suffix in {".toml", ".json", ".txt", ".md", ".yml", ".yaml", ".xml", ".properties", ".config"}
             or Path(relative).suffix.lower() in CODE_SUFFIXES
             or Path(relative).name in {"Dockerfile", "Makefile"}
             or (not Path(relative).suffix and os.access(path, os.X_OK))
@@ -412,6 +412,18 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
     component_specs: list[tuple[str, str, list[str]]] = [("root", "", [path for path in manifests if str(Path(path).parent) == "."])]
     for prefix in nested_prefixes:
         component_specs.append((prefix, prefix, [path for path in manifests if str(Path(path).parent) == prefix]))
+    container_component_prefixes = sorted({
+        str(Path(path).parent)
+        for path in rel_paths
+        if Path(path).name.lower() in {"dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
+        and str(Path(path).parent) != "."
+        and not _is_fixture_path(path)
+        and not _is_test_path(path)
+        and str(Path(path).parent) not in nested_prefixes
+    })
+    for prefix in container_component_prefixes:
+        component_specs.append((prefix, prefix, []))
+    component_prefixes = sorted(_unique(nested_prefixes + container_component_prefixes))
 
     all_languages: list[str] = []
     all_frameworks: list[str] = []
@@ -438,6 +450,12 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
     workflow_scheduled = any("schedule:" in text for text in workflow_contents.values())
     workflow_manual = any("workflow_dispatch:" in text for text in workflow_contents.values())
     self_hosted_paths = [path for path, text in workflow_contents.items() if "self-hosted" in text.lower()]
+    jenkins_paths = [
+        path for path in rel_paths
+        if "jenkinsfile" in Path(path).name.lower()
+        and not _is_fixture_path(path)
+        and not _is_documentation_path(path)
+    ]
     workflow_refs = [path for path in rel_paths if (path.startswith("bin/") or path.startswith("scripts/")) and any(path in text for text in workflow_contents.values())]
     readme_text = contents.get("README.md", "")
     readme_refs = [path for path in rel_paths if (path.startswith("bin/") or path.startswith("scripts/")) and (path in readme_text or Path(path).name in readme_text)]
@@ -453,7 +471,7 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
 
     components: list[ComponentProfile] = []
     for name, prefix, component_manifests in component_specs:
-        local_paths = _component_files(rel_paths, prefix, nested_prefixes)
+        local_paths = _component_files(rel_paths, prefix, component_prefixes)
         architecture_paths = [
             path for path in local_paths
             if not _is_fixture_path(path) and not _is_test_path(path) and not _is_documentation_path(path)
@@ -480,6 +498,8 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         primary_manifest = component_manifests[0] if component_manifests else None
         pyproject_manifests = [manifest for manifest in component_manifests if Path(manifest).name == "pyproject.toml"]
         pyproject = manifest_data.get(pyproject_manifests[0], {}) if pyproject_manifests else {}
+        pom_manifests = [manifest for manifest in component_manifests if Path(manifest).name == "pom.xml"]
+        pom_text = "\n".join(_read(by_rel[manifest]) for manifest in pom_manifests)
         console_scripts = pyproject.get("project", {}).get("scripts", {}) if isinstance(pyproject.get("project"), dict) else {}
         api_framework = any(item in local_frameworks for item in {"FastAPI", "Flask", "Django", "Express", "Fastify", "Hono"})
         api_paths = [path for path in architecture_paths if "api" in {part.lower() for part in Path(path).parts}]
@@ -565,6 +585,10 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
             path for path, text in runtime_local_contents.items()
             if text.startswith("#!") and re.search(r"\b(?:ba|z|k)?sh\b", text.splitlines()[0])
         ]
+        java_wrapper_paths = [
+            path for path in shell_paths
+            if re.search(r"\bjava\b[^\n]*\s-jar\s|pid(?:file|[-_.])|\bkill\s+\$?\(?cat\b", runtime_local_contents[path], re.IGNORECASE)
+        ]
         acme_paths = [
             path for path, text in runtime_local_contents.items()
             if re.search(r"\bACME(?:v2)?\b|acme-v\d|rfc8555", text, re.IGNORECASE)
@@ -579,6 +603,8 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         if shell_paths:
             project_types.extend(["cli_tool", "shell_tool"])
             local_evidence.append(_evidence("shell_tool_signal", shell_paths, "Executable shell entrypoints detected"))
+        if java_wrapper_paths:
+            local_evidence.append(_evidence("java_service_wrapper", java_wrapper_paths, "Shell scripts only start, stop, or track packaged JVM services"))
         if acme_paths and shell_paths:
             project_types.extend(["certificate_automation", "security_tooling", "integration_tool"])
             local_evidence.append(_evidence("acme_protocol_signal", acme_paths, "ACME protocol operations and cryptographic certificate handling detected"))
@@ -587,6 +613,99 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         if dns_hook_paths:
             project_types.append("integration_tool")
             local_evidence.append(_evidence("dns_provider_hooks", dns_hook_paths, "DNS challenge provider add/delete hooks detected"))
+
+        java_main_paths = [
+            path for path, text in runtime_local_contents.items()
+            if Path(path).suffix.lower() == ".java"
+            and re.search(r"\bpublic\s+static\s+void\s+main\s*\(", text)
+        ]
+        spring_boot_paths = [
+            path for path, text in runtime_local_contents.items()
+            if Path(path).suffix.lower() == ".java" and "@SpringBootApplication" in text
+        ]
+        spring_controller_paths = [
+            path for path, text in runtime_local_contents.items()
+            if Path(path).suffix.lower() == ".java" and re.search(r"@(RestController|Controller)\b", text)
+        ]
+        rabbit_listener_paths = [
+            path for path, text in runtime_local_contents.items()
+            if Path(path).suffix.lower() == ".java"
+            and re.search(r"@RabbitListener\b|MessageListenerContainer|setQueueNames\s*\(", text)
+        ]
+        rabbit_publisher_paths = [
+            path for path, text in runtime_local_contents.items()
+            if Path(path).suffix.lower() == ".java"
+            and re.search(r"\bRabbitTemplate\b|convertAndSend\s*\(|sendAndReceive\s*\(", text)
+        ]
+        rabbit_config_paths = [
+            path for path, text in runtime_local_contents.items()
+            if (
+                Path(path).suffix.lower() in {".java", ".properties", ".yaml", ".yml", ".xml"}
+                or Path(path).name == "pom.xml"
+            )
+            and re.search(
+                r"spring\.rabbitmq\.|ConnectionFactory|CachingConnectionFactory|"
+                r"\b(?:Queue|Exchange|Binding)\s*\(|dead.?letter|routing.?key|rabbitmq_management|"
+                r"com\.rabbitmq\.http\.client|ClientParameters|RabbitManagementTemplate|managementUri",
+                text,
+                re.IGNORECASE,
+            )
+        ]
+        spring_plugin = bool(re.search(r"spring-boot-(?:maven-plugin|starter-parent)", pom_text))
+        spring_web = bool(re.search(r"spring-boot-starter-web|spring-web", pom_text)) or bool(spring_controller_paths)
+        spring_amqp = bool(re.search(r"spring-(?:boot-starter-)?amqp|spring-rabbit|amqp-client", pom_text)) or bool(
+            rabbit_listener_paths or rabbit_publisher_paths or rabbit_config_paths
+        )
+        spring_actuator = bool(re.search(r"spring-boot-starter-actuator", pom_text))
+        spring_runtime = bool(spring_boot_paths or (java_main_paths and spring_plugin))
+        if spring_runtime:
+            project_types.extend(["java_application", "application"])
+            local_frameworks.append("Spring Boot")
+            local_evidence.append(
+                _evidence(
+                    "java_spring_signal",
+                    _unique(pom_manifests + spring_boot_paths + java_main_paths),
+                    "Spring Boot application annotation, executable main class, or Maven plugin detected",
+                )
+            )
+        if spring_web:
+            local_frameworks.append("Spring Web")
+        if spring_web and (spring_runtime or spring_controller_paths):
+            project_types.append("api")
+            local_evidence.append(
+                _evidence(
+                    "spring_web_signal",
+                    _unique(pom_manifests + spring_controller_paths),
+                    "Spring Web dependency or HTTP controller detected",
+                )
+            )
+        if spring_actuator:
+            local_frameworks.append("Spring Boot Actuator")
+            local_evidence.append(_evidence("spring_actuator_signal", pom_manifests, "Spring Boot Actuator dependency detected"))
+        if spring_amqp:
+            local_frameworks.append("Spring AMQP")
+            local_evidence.append(
+                _evidence(
+                    "rabbitmq_signal",
+                    _unique(pom_manifests + rabbit_listener_paths + rabbit_publisher_paths + rabbit_config_paths),
+                    "Spring AMQP/RabbitMQ dependency, publisher, listener, queue, exchange, or broker configuration detected",
+                )
+            )
+        external_http_paths = [
+            path for path, text in runtime_local_contents.items()
+            if Path(path).suffix.lower() == ".java"
+            and re.search(r"\b(RestTemplate|WebClient|HttpClient|HttpURLConnection)\b", text)
+            and re.search(r"\b(getForObject|postForObject|exchange|execute|send|forward|retry)\b", text, re.IGNORECASE)
+        ]
+        if external_http_paths:
+            project_types.append("integration_service")
+            local_evidence.append(
+                _evidence(
+                    "external_http_gateway",
+                    external_http_paths,
+                    "Configured HTTP client forwards payloads to an external gateway or downstream service",
+                )
+            )
         strong_ml = _strong_ml_evidence(architecture_paths, local_evidence)
         if strong_ml:
             project_types.append("data_ml")
@@ -598,6 +717,8 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
             runtime.append("Python")
         if package_manifests:
             runtime.append("Cloudflare Workers" if worker else "Node.js")
+        if pom_manifests:
+            runtime.append("JVM")
         if prefix.startswith("server/proxy") or ("Express" in local_frameworks and not worker):
             project_types.extend(item for item in ("node_service", "proxy_service") if item not in project_types)
         packaging = any(_packaging_signal(prefix, local_paths, manifest, manifest_data.get(manifest, {})) for manifest in component_manifests)
@@ -615,6 +736,7 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
                 entrypoints.append(str(Path(prefix) / config_data["main"]).replace("./", "") if prefix else config_data["main"])
         entrypoints.extend(path for path in operational_entrypoints if _under(path, prefix))
         entrypoints.extend(path for path in architecture_paths if Path(path).name in {"server.js", "server.ts", "main.py", "app.py", "index.js", "index.ts", "worker.ts"})
+        entrypoints.extend(java_main_paths)
         component_targets: list[str] = []
         if worker:
             component_targets.append("Cloudflare Workers")
@@ -626,10 +748,39 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
             local_evidence.append(_evidence("infrastructure_signal", infrastructure_paths, "Infrastructure or container deployment signal detected"))
         if container_paths:
             local_evidence.append(_evidence("container_support", container_paths, "Container packaging or runtime support detected"))
+        java_source_paths = [path for path in architecture_paths if "/src/main/java/" in f"/{path}"]
+        assembly_signal = bool(re.search(r"maven-(?:assembly|shade)-plugin|appassembler-maven-plugin", pom_text)) and not spring_runtime
+        broker_container_signal = bool(container_paths) and any(
+            re.search(r"\bimage\s*:\s*rabbitmq|FROM\s+rabbitmq", local_contents.get(path, ""), re.IGNORECASE)
+            for path in container_paths
+        )
+        simulator_signal = spring_runtime and bool(
+            re.search(r"\b(simulator|stub|mock server|fake gateway)\b", pom_text + "\n" + runtime_text, re.IGNORECASE)
+        )
+        has_nested_components = any(nested != prefix and _under(nested, prefix) for nested in component_prefixes)
+        if broker_container_signal and not spring_runtime:
+            component_role = "broker_support"
+        elif assembly_signal and not has_nested_components:
+            component_role = "packaging"
+        elif simulator_signal:
+            component_role = "simulator"
+        elif spring_runtime:
+            component_role = "service"
+        elif pom_manifests and java_source_paths:
+            component_role = "internal_library"
+        else:
+            component_role = "root" if not prefix else "module"
+        if component_role == "internal_library":
+            project_types = [
+                item for item in project_types
+                if item not in {"application", "java_application", "api", "integration_service"}
+            ]
+            project_types.append("library")
         components.append(ComponentProfile(
             name=name,
             path=prefix or ".",
             manifests=component_manifests,
+            role=component_role,
             project_types=_unique(project_types),
             languages=_unique(local_languages),
             frameworks=_unique(local_frameworks),
@@ -640,9 +791,38 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         ))
 
     component_types = [item for component in components for item in component.project_types]
-    has_pipeline = any(Path(path).name == "run_pipeline.sh" or "pipeline" in Path(path).name.lower() for path in operational_entrypoints) or any("pipeline" in text.lower() for text in workflow_contents.values())
+    all_frameworks.extend(item for component in components for item in component.frameworks)
+    spring_service_components = [
+        component for component in components
+        if component.role in {"service", "simulator"} and "java_application" in component.project_types
+    ]
+    production_spring_services = [component for component in spring_service_components if component.role == "service"]
+    rabbit_evidence = [
+        item for component in components for item in component.evidence if item.signal == "rabbitmq_signal"
+    ]
+    rabbit_publisher_evidence = [
+        item for component in components for item in component.evidence
+        if item.signal == "rabbitmq_signal"
+        and any(
+            re.search(r"\bRabbitTemplate\b|convertAndSend\s*\(|sendAndReceive\s*\(", contents.get(path, ""))
+            for path in item.paths
+        )
+    ]
+    rabbit_listener_evidence = [
+        item for component in components for item in component.evidence
+        if item.signal == "rabbitmq_signal"
+        and any(re.search(r"@RabbitListener\b|MessageListenerContainer", contents.get(path, "")) for path in item.paths)
+    ]
+    external_gateway_evidence = [
+        item for component in components for item in component.evidence if item.signal == "external_http_gateway"
+    ]
+    has_pipeline = (
+        any(Path(path).name == "run_pipeline.sh" or "pipeline" in Path(path).name.lower() for path in operational_entrypoints)
+        or any("pipeline" in text.lower() for text in workflow_contents.values())
+        or bool(jenkins_paths)
+    )
     has_automation = bool(operational_entrypoints or any(path.startswith("scripts/") for path in rel_paths))
-    has_ci_cd = bool(workflow_paths and (workflow_scheduled or workflow_manual or workflow_contents))
+    has_ci_cd = bool((workflow_paths and (workflow_scheduled or workflow_manual or workflow_contents)) or jenkins_paths)
     runtime_non_docs = {path: text for path, text in contents.items() if _is_runtime_path(path)}
     cloudflare_api_paths = [
         path for path, text in runtime_non_docs.items()
@@ -691,7 +871,10 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
             or re.search(r"^\s*(?:from|import)\s+subprocess\b", text, re.MULTILINE)
         )
     ]
-    has_operations = bool(cloudflare_api_paths or oracle_paths or self_hosted_paths or sensitive_operation_paths or dns_config_paths)
+    java_wrapper_evidence = [
+        item for component in components for item in component.evidence if item.signal == "java_service_wrapper"
+    ]
+    has_operations = bool(cloudflare_api_paths or oracle_paths or self_hosted_paths or sensitive_operation_paths or dns_config_paths or java_wrapper_evidence)
     project_types = [item for item in _unique(component_types) if item != "unknown"]
     if has_pipeline:
         project_types.append("pipeline")
@@ -703,6 +886,16 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         project_types.append("operations")
     if dns_config_paths:
         project_types.extend(["dns_iac", "dns_configuration"])
+    if spring_service_components:
+        project_types.append("java_application")
+    if rabbit_evidence and production_spring_services:
+        project_types.extend(["messaging_application", "integration_service"])
+    if rabbit_publisher_evidence and rabbit_listener_evidence:
+        project_types.append("message_pipeline")
+    if len(production_spring_services) >= 2:
+        project_types.append("distributed_application")
+    if external_gateway_evidence:
+        project_types.append("integration_service")
     runnable_components = [component for component in components if any(item in component.project_types for item in {"cloudflare_worker", "node_service", "proxy_service", "api"})]
     if len(runnable_components) > 1 and {"cloudflare_worker", "proxy_service"}.issubset(set(component_types)):
         project_types.append("hybrid_service")
@@ -711,11 +904,12 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
 
     model_reference_paths: list[str] = []
     referenced_model_names: set[str] = set()
-    for path, text in runtime_non_docs.items():
-        matches = re.findall(r"""["']([^"']+\.(?:weights|onnx|pt|pth|safetensors|h5|keras))["']""", text, re.IGNORECASE)
-        if matches:
-            model_reference_paths.append(path)
-            referenced_model_names.update(Path(match).name for match in matches)
+    if {"ml_inference", "data_ml"}.intersection(project_types):
+        for path, text in runtime_non_docs.items():
+            matches = re.findall(r"""["']([^"']+\.(?:weights|onnx|pt|pth|safetensors|h5|keras))["']""", text, re.IGNORECASE)
+            if matches:
+                model_reference_paths.append(path)
+                referenced_model_names.update(Path(match).name for match in matches)
     versioned_model_names = {Path(path).name for path in rel_paths if Path(path).suffix.lower() in ML_ARTIFACT_SUFFIXES or Path(path).suffix.lower() == ".weights"}
     missing_model_names = sorted(referenced_model_names - versioned_model_names)
     if missing_model_names:
@@ -736,7 +930,14 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
     bats_paths = [path for path in real_test_paths if Path(path).suffix.lower() == ".bats"]
     shellcheck_paths = [
         path for path, text in contents.items()
-        if not _is_fixture_path(path) and re.search(r"\bshellcheck\b", text, re.IGNORECASE)
+        if not _is_fixture_path(path)
+        and not _is_test_path(path)
+        and (
+            path.lower().startswith(".github/workflows/")
+            or Path(path).suffix.lower() in {".sh", ".bash"}
+            or Path(path).name.lower() in {".shellcheckrc", "makefile"}
+        )
+        and re.search(r"\bshellcheck\b", text, re.IGNORECASE)
     ]
     if bats_paths:
         test_frameworks.append("Bats")
@@ -748,6 +949,8 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
     test_config_paths = [path for path in rel_paths if Path(path).name in {"pytest.ini", "tox.ini", "unittest.cfg"} or Path(path).name.startswith(("vitest.config", "jest.config", "playwright.config"))]
     package_test_manifests = [manifest for manifest, data in manifest_data.items() if Path(manifest).name == "package.json" and isinstance(data.get("scripts"), dict) and "test" in data["scripts"]]
     py_test_configs = [manifest for manifest, data in manifest_data.items() if Path(manifest).name == "pyproject.toml" and ("[tool.pytest" in _read(by_rel[manifest]) or "pytest" in _read(by_rel[manifest]).lower() and real_test_paths)]
+    maven_manifests = [manifest for manifest in manifests if Path(manifest).name == "pom.xml"]
+    maven_wrappers = sorted(path for path in rel_paths if Path(path).name == "mvnw" and not _is_fixture_path(path))
     if package_test_manifests:
         test_frameworks.append("package test script")
         test_commands.extend("npm test" for _ in package_test_manifests)
@@ -756,7 +959,32 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         test_frameworks.append("pytest" if any(Path(path).name in {"pytest.ini", "tox.ini"} or "pytest" in _read(by_rel[path]).lower() for path in test_config_paths + py_test_configs) else "test configuration")
         test_commands.append("pytest")
         test_evidence.append(_evidence("test_config", _unique(test_config_paths + py_test_configs), "Recognized test-runner configuration detected"))
+    if maven_manifests:
+        if maven_wrappers:
+            wrapper = min(maven_wrappers, key=lambda path: (len(Path(path).parts), path))
+            wrapper_parent = str(Path(wrapper).parent)
+            test_commands.append("./mvnw test" if wrapper_parent == "." else f"cd {wrapper_parent} && ./mvnw test")
+        else:
+            test_commands.append("mvn test")
+        test_frameworks.append("Maven")
+        test_evidence.append(_evidence("maven_test_command", maven_manifests + maven_wrappers[:1], "Maven project supports a repository-local test command"))
     tests = TestProfile(bool(real_test_paths or test_commands), _unique(test_frameworks), _unique(test_commands), test_evidence)
+
+    skipped_test_build_paths = [
+        path for path, text in contents.items()
+        if not _is_documentation_path(path)
+        and not _is_fixture_path(path)
+        and not _is_test_path(path)
+        and (
+            path.lower().startswith(".github/workflows/")
+            or "jenkinsfile" in Path(path).name.lower()
+            or Path(path).suffix.lower() in {".sh", ".bash", ".xml", ".gradle", ".yaml", ".yml"}
+        )
+        and re.search(r"-DskipTests(?:=true)?\b|-Dmaven\.test\.skip=true\b", text)
+    ]
+    if skipped_test_build_paths:
+        all_evidence.append(_evidence("tests_disabled_in_build", skipped_test_build_paths, "A build or delivery pipeline explicitly disables tests"))
+        warnings.append("Tests are disabled in at least one build or delivery path")
 
     deploy_tools: list[str] = []
     deploy_targets = _unique([target for component in components for target in component.deployment_targets])
@@ -779,6 +1007,16 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
     if container_paths:
         deploy_tools.append("containers")
         deploy_evidence.append(_evidence("container_support", container_paths, "Container packaging or runtime support detected"))
+    ansible_paths = [path for path in rel_paths if Path(path).suffix.lower() in {".yaml", ".yml"} and "ansible" in {part.lower() for part in Path(path).parts}]
+    if ansible_paths:
+        deploy_tools.append("ansible")
+        deploy_evidence.append(_evidence("ansible_deployment", ansible_paths, "Ansible deployment or broker provisioning configuration detected"))
+    if jenkins_paths:
+        deploy_tools.append("jenkins")
+        deploy_evidence.append(_evidence("jenkins_pipeline", jenkins_paths, "Jenkins delivery pipeline detected"))
+    if maven_manifests:
+        deploy_tools.append("maven")
+        deploy_evidence.append(_evidence("maven_packaging", maven_manifests, "Maven build and JAR/module packaging detected"))
     if cloudflare_dns_paths:
         deploy_targets.append("Cloudflare DNS")
         deploy_evidence.append(_evidence("cloudflare_dns_target", cloudflare_dns_paths, "octoDNS Cloudflare DNS target detected"))
@@ -819,6 +1057,10 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         architecture_evidence.append(_evidence("dns_configuration", dns_config_paths, "Declarative DNS providers, zones, or targets detected"))
     if sensitive_operation_paths:
         architecture_evidence.append(_evidence("sensitive_operations", sensitive_operation_paths, "Remote copy, command execution, certificate revocation, or reload operations detected"))
+    if rabbit_evidence:
+        architecture_evidence.extend(_unique_evidence(rabbit_evidence))
+    if external_gateway_evidence:
+        architecture_evidence.extend(_unique_evidence(external_gateway_evidence))
     styles: list[str] = []
     if "hybrid_service" in project_types:
         styles.append("hybrid-service")
@@ -828,6 +1070,10 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         styles.append("edge-worker")
     if any("proxy_service" in component.project_types for component in components):
         styles.append("node-proxy")
+    if "messaging_application" in project_types:
+        styles.append("distributed-messaging-application")
+    if "message_pipeline" in project_types:
+        styles.append("message-pipeline")
     if not styles:
         styles.append("package-or-unknown")
     root_component = next(component for component in components if component.name == "root")
@@ -861,6 +1107,28 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
             integrations.append(IntegrationProfile(name, True, Availability.REQUIRES_AUTHORIZATION, integration_evidence))
         else:
             integrations.append(IntegrationProfile(name, False, Availability.UNAVAILABLE))
+    if rabbit_evidence:
+        integrations.append(
+            IntegrationProfile(
+                "rabbitmq",
+                True,
+                Availability.AVAILABLE,
+                _unique_evidence(rabbit_evidence),
+            )
+        )
+    else:
+        integrations.append(IntegrationProfile("rabbitmq", False, Availability.UNAVAILABLE))
+    if external_gateway_evidence:
+        integrations.append(
+            IntegrationProfile(
+                "external_http_gateway",
+                True,
+                Availability.AVAILABLE,
+                _unique_evidence(external_gateway_evidence),
+            )
+        )
+    else:
+        integrations.append(IntegrationProfile("external_http_gateway", False, Availability.UNAVAILABLE))
 
     risks: list[str] = []
     if not tests.present:
@@ -882,7 +1150,9 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         risks.append("Language could not be inferred from recognized manifests")
 
     project_types = _unique(project_types)
-    if "mcp_server" in project_types:
+    if "messaging_application" in project_types:
+        primary_project_types = [item for item in ("messaging_application", "integration_service") if item in project_types]
+    elif "mcp_server" in project_types:
         primary_project_types = [item for item in ("mcp_server", "image_processing", "photographic_tool") if item in project_types]
     elif "certificate_automation" in project_types:
         primary_project_types = [item for item in ("cli_tool", "certificate_automation", "security_tooling") if item in project_types]
@@ -895,9 +1165,11 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
     else:
         primary_project_types = [
             item for item in project_types
-            if item not in {"automation", "ci_cd", "operations", "containerized", "packaged_python"}
+            if item not in {"automation", "ci_cd", "operations", "containerized", "packaged_python", "shell_tool"}
         ][:3]
     secondary_project_types = [item for item in project_types if item not in primary_project_types]
+    if "messaging_application" in primary_project_types:
+        secondary_project_types = [item for item in secondary_project_types if item != "cli_tool"]
     if container_paths and "containerized" not in secondary_project_types:
         secondary_project_types.append("containerized")
     if any(Path(manifest).name == "pyproject.toml" for manifest in manifests) and "library" not in primary_project_types:
