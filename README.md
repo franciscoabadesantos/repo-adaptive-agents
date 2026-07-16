@@ -152,7 +152,9 @@ JSON serialization.
 ## Experimental multi-CLI role rendering
 
 > **Experimental pilot.** This subsystem is separate from the deterministic profiler above
-> and covers a single role: `independent_reviewer`. The other agents are not migrated yet.
+> and covers four read-only roles: `independent_reviewer`, `repo_explorer`,
+> `api_contract_agent`, and `accessibility_performance_reviewer`. `implementation_agent`,
+> `browser_qa`, and `design_director` are not migrated yet.
 
 A canonical role is the single source of truth for a role's identity, description, purpose,
 capabilities, procedure, constraints, delegation intent, and advisory runtime preferences.
@@ -171,27 +173,35 @@ Each output is classified by portability:
 
 Supported targets in the pilot are `skill`, `codex`, `claude`, and `copilot` (also printed by
 `repo-adaptive-agents targets`; roles by `repo-adaptive-agents roles`). Each has an isolated
-renderer, so the three CLIs are never treated as having identical semantics.
+renderer, so the three CLIs are never treated as having identical semantics. The roles are
+listed deterministically by `repo-adaptive-agents roles`.
 
 Render a proposal (this generates files; it never applies them):
 
 ```sh
 PYTHONPATH=src python3 -m repo_adaptive_agents.cli render-role \
-  independent_reviewer \
+  repo_explorer \
   --targets skill,codex,claude,copilot \
-  --output /tmp/independent-review-pilot
+  --output /tmp/repo-explorer-pilot
 ```
 
 The command produces:
 
 ```
 manifest.json
-portable/.agents/skills/independent-review/SKILL.md
-codex/.codex/agents/independent_reviewer.toml
-claude/.claude/agents/independent-review.md
-copilot/.github/agents/independent-review.agent.md
+portable/.agents/skills/repo-explorer/SKILL.md
+codex/.codex/agents/repo_explorer.toml
+codex/.codex/config.fragments/repo_explorer.toml
+claude/.claude/agents/repo-explorer.md
+copilot/.github/agents/repo-explorer.agent.md
 shared/AGENTS.fragment.md
 ```
+
+The Codex target emits both the agent wrapper and a relative
+`codex/.codex/config.fragments/<role>.toml` registration fragment. The fragment contains
+only the role description and the wrapper's `config_file`; it has no model or concurrency
+settings. It is classified as `target_specific`, included in the manifest, and provided for
+manual merge only. Generation never applies it or modifies `.codex/config.toml`.
 
 The output must not already exist and must be outside this repository; generation is atomic
 (a temporary sibling is renamed into place) and byte-for-byte deterministic across runs
@@ -199,6 +209,18 @@ The output must not already exist and must be outside this repository; generatio
 read-only comparison of the proposal against a destination repo, mapping each wrapper onto
 its real location (`codex/.codex/...` → `.codex/...`) and reporting additions, changes/
 conflicts, and unchanged files without writing anything.
+
+The first batch is read-only and keeps purpose, procedure, response contract,
+capabilities, evidence requirements, and critical constraints in the canonical role model.
+`repo_explorer` separates confirmed facts from inferences and reports evidence paths;
+`api_contract_agent` distinguishes HTTP, RPC/event, schema, client, and documentation
+surfaces; `accessibility_performance_reviewer` separates static evidence from runtime
+validation and unavailable tooling.
+
+The `independent_reviewer` wrapper has already been validated in Codex, Claude Code, and
+GitHub Copilot. The other three roles are validated locally for TOML, frontmatter, hashes,
+determinism, and semantics; generation does not execute external CLI, browser, Lighthouse,
+screen-reader, or API-runtime checks.
 
 What this pilot deliberately does **not** do: migrate the other roles, apply changes, write
 into a target repo, sync with HOME, install or detect CLIs, alter `.codex/config.toml`,

@@ -18,12 +18,18 @@ from repo_adaptive_agents.multi_cli import (
     validate_proposal,
     write_proposal,
 )
-from repo_adaptive_agents.multi_cli.roles import INDEPENDENT_REVIEWER
+from repo_adaptive_agents.multi_cli.roles import INDEPENDENT_REVIEWER, ROLES
 from repo_adaptive_agents.multi_cli.validator import _parse_frontmatter
 
 ROLE = "independent_reviewer"
+ROLE_IDS = (
+    "independent_reviewer",
+    "repo_explorer",
+    "api_contract_agent",
+    "accessibility_performance_reviewer",
+)
 
-# The four rendered wrapper files (Codex, Claude, Copilot, Skill).
+# The four primary role wrapper files (Codex, Claude, Copilot, Skill).
 WRAPPER_FILES = (
     "portable/.agents/skills/independent-review/SKILL.md",
     "codex/.codex/agents/independent_reviewer.toml",
@@ -82,6 +88,7 @@ class MultiCliRenderTests(unittest.TestCase):
             self.assertTrue((output / "manifest.json").is_file())
             self.assertTrue((output / "portable/.agents/skills/independent-review/SKILL.md").is_file())
             self.assertTrue((output / "codex/.codex/agents/independent_reviewer.toml").is_file())
+            self.assertTrue((output / "codex/.codex/config.fragments/independent_reviewer.toml").is_file())
             self.assertTrue((output / "claude/.claude/agents/independent-review.md").is_file())
             self.assertTrue((output / "copilot/.github/agents/independent-review.agent.md").is_file())
             self.assertTrue((output / "shared/AGENTS.fragment.md").is_file())
@@ -136,6 +143,10 @@ class MultiCliRenderTests(unittest.TestCase):
             self.assertEqual(set(manifest["targets"]), set(TARGETS))
             self.assertEqual(manifest["targets"]["skill"]["portability"], "portable")
             self.assertEqual(manifest["targets"]["codex"]["portability"], "target_specific")
+            self.assertEqual(
+                set(manifest["targets"]["codex"]["artifacts"]),
+                {"agent_wrapper", "registration_fragment"},
+            )
 
     def test_critical_constraints_present_in_all_four_outputs(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -363,7 +374,13 @@ class MultiCliCompareTests(unittest.TestCase):
             destination.mkdir()
             before = list(destination.rglob("*"))
             report = compare_proposal(output, destination)
-            self.assertEqual(report.additions, [".codex/agents/independent_reviewer.toml"])
+            self.assertEqual(
+                report.additions,
+                [
+                    ".codex/agents/independent_reviewer.toml",
+                    ".codex/config.fragments/independent_reviewer.toml",
+                ],
+            )
             self.assertEqual(report.changes, [])
             self.assertEqual(report.conflicts, [])
             self.assertIn("add: .codex/agents/independent_reviewer.toml", report.diff)
@@ -378,7 +395,107 @@ class MultiCliCompareTests(unittest.TestCase):
             (destination / ".codex/agents/independent_reviewer.toml").write_text("name = 'old'\n", encoding="utf-8")
             report = compare_proposal(output, destination)
             self.assertEqual(report.changes, [".codex/agents/independent_reviewer.toml"])
-            self.assertEqual(report.additions, [])
+            self.assertEqual(report.additions, [".codex/config.fragments/independent_reviewer.toml"])
+
+
+class MultiCliRoleBatchTests(unittest.TestCase):
+    def test_role_registry_is_exact_and_deterministic(self):
+        self.assertEqual(role_ids(), list(ROLE_IDS))
+        self.assertEqual(list(ROLES), list(ROLE_IDS))
+
+    def test_source_evidence_paths_exist_or_use_explicit_non_path_reference(self):
+        repository_root = Path(__file__).resolve().parent.parent
+        non_path_prefix = "implementation contract: "
+
+        for role_id, role in ROLES.items():
+            for evidence in role.source_evidence:
+                with self.subTest(role=role_id, evidence=evidence):
+                    if evidence.startswith(non_path_prefix):
+                        self.assertTrue(evidence.removeprefix(non_path_prefix).strip())
+                        continue
+                    self.assertTrue(
+                        (repository_root / evidence).is_file(),
+                        f"{role_id} source evidence path does not exist: {evidence}",
+                    )
+
+    def test_all_roles_render_all_targets_and_registration_fragments(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for role_id in ROLE_IDS:
+                with self.subTest(role=role_id):
+                    output = Path(temporary) / role_id
+                    write_proposal(role_id, list(TARGETS), output)
+                    role = ROLES[role_id]
+                    self.assertEqual(validate_proposal(output), [])
+                    self.assertTrue((output / f"portable/.agents/skills/{role.slug}/SKILL.md").is_file())
+                    self.assertTrue((output / f"codex/.codex/agents/{role.id}.toml").is_file())
+                    self.assertTrue((output / f"codex/.codex/config.fragments/{role.id}.toml").is_file())
+                    self.assertTrue((output / f"claude/.claude/agents/{role.slug}.md").is_file())
+                    self.assertTrue((output / f"copilot/.github/agents/{role.slug}.agent.md").is_file())
+
+    def test_all_roles_are_byte_deterministic(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for role_id in ROLE_IDS:
+                with self.subTest(role=role_id):
+                    first = Path(temporary) / f"{role_id}-first"
+                    second = Path(temporary) / f"{role_id}-second"
+                    write_proposal(role_id, None, first)
+                    write_proposal(role_id, None, second)
+                    first_files = {p.relative_to(first).as_posix(): p.read_bytes() for p in first.rglob("*") if p.is_file()}
+                    second_files = {p.relative_to(second).as_posix(): p.read_bytes() for p in second.rglob("*") if p.is_file()}
+                    self.assertEqual(first_files, second_files)
+
+    def test_role_specific_semantics_are_preserved_in_every_target(self):
+        expected = {
+            "repo_explorer": ("architecture_mapping", "component_discovery", "entrypoint_discovery", "facts", "inferences", "evidence paths"),
+            "api_contract_agent": ("compatibility_analysis", "schema_review", "error_contract_review", "Do not make real API calls", "runtime endpoint"),
+            "accessibility_performance_reviewer": ("accessibility_review", "frontend_performance_review", "static evidence", "runtime validation", "Lighthouse", "browser"),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            for role_id, markers in expected.items():
+                with self.subTest(role=role_id):
+                    output = Path(temporary) / role_id
+                    write_proposal(role_id, None, output)
+                    for relative in (
+                        f"portable/.agents/skills/{ROLES[role_id].slug}/SKILL.md",
+                        f"codex/.codex/agents/{role_id}.toml",
+                        f"claude/.claude/agents/{ROLES[role_id].slug}.md",
+                        f"copilot/.github/agents/{ROLES[role_id].slug}.agent.md",
+                    ):
+                        text = (output / relative).read_text(encoding="utf-8").lower()
+                        for marker in markers:
+                            self.assertIn(marker.lower(), text, f"{marker!r} missing from {relative}")
+
+    def test_codex_fragments_are_valid_manual_registrations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for role_id in ROLE_IDS:
+                with self.subTest(role=role_id):
+                    output = Path(temporary) / role_id
+                    write_proposal(role_id, ["codex"], output)
+                    fragment = output / f"codex/.codex/config.fragments/{role_id}.toml"
+                    data = tomllib.loads(fragment.read_text(encoding="utf-8"))
+                    entry = data["agents"][role_id]
+                    self.assertEqual(entry["config_file"], f".codex/agents/{role_id}.toml")
+                    self.assertNotIn("model", entry)
+                    self.assertNotIn("max_threads", entry)
+                    self.assertNotIn("max_depth", entry)
+
+    def test_generated_paths_are_relative_and_enforcement_is_explicit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for role_id in ROLE_IDS:
+                with self.subTest(role=role_id):
+                    output = Path(temporary) / role_id
+                    write_proposal(role_id, None, output)
+                    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+                    self.assertTrue(manifest["source"]["role_hash"].isalnum())
+                    for target in TARGETS:
+                        self.assertEqual(
+                            manifest["targets"][target]["enforcement"]["mode"],
+                            "sandboxed" if target == "codex" else "advisory",
+                        )
+                    for path in output.rglob("*"):
+                        if path.is_file():
+                            self.assertFalse(path.relative_to(output).is_absolute())
+                            self.assertNotIn("/home/", path.read_text(encoding="utf-8"))
 
 
 class MultiCliCliTests(unittest.TestCase):
