@@ -1,0 +1,2 @@
+[console_scripts]
+repo-adaptive-agents = repo_adaptive_agents.cli:main

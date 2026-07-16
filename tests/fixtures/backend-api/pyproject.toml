@@ -1,0 +1,6 @@
+[project]
+name = "billing-api"
+dependencies = ["fastapi>=0.100", "uvicorn>=0.30"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]

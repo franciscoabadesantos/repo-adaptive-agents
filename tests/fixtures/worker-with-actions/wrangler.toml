@@ -1,0 +1,2 @@
+name = "worker-with-actions"
+main = "src/index.ts"

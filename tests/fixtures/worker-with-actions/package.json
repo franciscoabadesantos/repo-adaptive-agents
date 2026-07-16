@@ -1,0 +1,5 @@
+{
+  "name": "worker-with-actions",
+  "private": true,
+  "scripts": {"deploy": "wrangler deploy"}
+}

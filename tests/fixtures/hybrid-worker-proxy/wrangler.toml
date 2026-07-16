@@ -1,0 +1,2 @@
+name = "hybrid-edge-service"
+main = "src/index.ts"

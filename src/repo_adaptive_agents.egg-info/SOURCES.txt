@@ -1,0 +1,17 @@
+README.md
+pyproject.toml
+src/repo_adaptive_agents/__init__.py
+src/repo_adaptive_agents/catalog.py
+src/repo_adaptive_agents/cli.py
+src/repo_adaptive_agents/generator.py
+src/repo_adaptive_agents/models.py
+src/repo_adaptive_agents/profiler.py
+src/repo_adaptive_agents/recommender.py
+src/repo_adaptive_agents/schemas.py
+src/repo_adaptive_agents.egg-info/PKG-INFO
+src/repo_adaptive_agents.egg-info/SOURCES.txt
+src/repo_adaptive_agents.egg-info/dependency_links.txt
+src/repo_adaptive_agents.egg-info/entry_points.txt
+src/repo_adaptive_agents.egg-info/requires.txt
+src/repo_adaptive_agents.egg-info/top_level.txt
+tests/test_mvp.py

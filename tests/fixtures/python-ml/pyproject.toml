@@ -1,0 +1,6 @@
+[project]
+name = "fraud-model"
+dependencies = ["pandas>=2", "scikit-learn>=1.5", "numpy>=2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "jupyter>=1"]

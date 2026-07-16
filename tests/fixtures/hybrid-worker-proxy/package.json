@@ -1,0 +1,5 @@
+{
+  "name": "hybrid-edge-service",
+  "private": true,
+  "scripts": {"deploy": "wrangler deploy", "test": "vitest run"}
+}
