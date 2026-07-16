@@ -149,6 +149,71 @@ The tests assert both the detected project type and that the recommended agent s
 actually differ between fixtures. They also parse every generated TOML file and verify
 JSON serialization.
 
+## Experimental multi-CLI role rendering
+
+> **Experimental pilot.** This subsystem is separate from the deterministic profiler above
+> and covers a single role: `independent_reviewer`. The other agents are not migrated yet.
+
+A canonical role is the single source of truth for a role's identity, description, purpose,
+capabilities, procedure, constraints, delegation intent, and advisory runtime preferences.
+The canonical model in `multi_cli/models.py` contains **no** Codex-, Claude-, or
+Copilot-specific fields; the role itself lives in versioned Python in `multi_cli/roles.py`.
+Renderers translate that shared description into each tool's format, and the manifest records
+exactly what was mapped, omitted, or is tool-specific.
+
+Each output is classified by portability:
+
+- **portable** — the Agent Skill (`SKILL.md`) is the portable materialization of the role;
+- **generated** — the Claude Code and GitHub Copilot Markdown agents are thin wrappers
+  derived from the canonical content;
+- **target_specific** — the Codex TOML embeds runtime semantics (e.g. `sandbox_mode`,
+  `model_reasoning_effort`) that do not carry across tools.
+
+Supported targets in the pilot are `skill`, `codex`, `claude`, and `copilot` (also printed by
+`repo-adaptive-agents targets`; roles by `repo-adaptive-agents roles`). Each has an isolated
+renderer, so the three CLIs are never treated as having identical semantics.
+
+Render a proposal (this generates files; it never applies them):
+
+```sh
+PYTHONPATH=src python3 -m repo_adaptive_agents.cli render-role \
+  independent_reviewer \
+  --targets skill,codex,claude,copilot \
+  --output /tmp/independent-review-pilot
+```
+
+The command produces:
+
+```
+manifest.json
+portable/.agents/skills/independent-review/SKILL.md
+codex/.codex/agents/independent_reviewer.toml
+claude/.claude/agents/independent-review.md
+copilot/.github/agents/independent-review.agent.md
+shared/AGENTS.fragment.md
+```
+
+The output must not already exist and must be outside this repository; generation is atomic
+(a temporary sibling is renamed into place) and byte-for-byte deterministic across runs
+(`manifest.json` omits any timestamp). `--compare-to ../some-repo` performs a strictly
+read-only comparison of the proposal against a destination repo, mapping each wrapper onto
+its real location (`codex/.codex/...` → `.codex/...`) and reporting additions, changes/
+conflicts, and unchanged files without writing anything.
+
+What this pilot deliberately does **not** do: migrate the other roles, apply changes, write
+into a target repo, sync with HOME, install or detect CLIs, alter `.codex/config.toml`,
+generate `CLAUDE.md` or `.github/copilot-instructions.md`, or make any network call. The
+Copilot output is a **custom agent**, not inline-autocomplete configuration and not a
+replacement for `copilot-instructions`; the manifest states this explicitly.
+
+### Security note
+
+Agent instruction files are **not enforcement**. The constraints rendered into each wrapper
+(read-only, no commit/push/deploy, no network, no recursive delegation) are guidance for the
+agent; they must continue to be enforced by CI, sandboxing, and repository/organization
+policies. Do not import third-party skills automatically, and review every generated proposal
+before copying any file into a real repository.
+
 ## Explicit MVP limits
 
 This version does not call Jira, Confluence, Dify, MCP servers, browsers, LLMs, or remote
