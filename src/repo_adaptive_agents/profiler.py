@@ -343,6 +343,14 @@ def _dependency_info(manifest: str, path: Path, by_rel: dict[str, Path], all_evi
         languages.append("go")
     elif name in {"pom.xml", "build.gradle"}:
         languages.append("java")
+        text = _read(path)
+        # Deterministic order: Keycloak before JAX-RS.
+        if "org.keycloak" in text:
+            frameworks.append("Keycloak")
+            scoped.append(_evidence("keycloak_dependency", [manifest], f"Detected Keycloak dependency declared by {manifest}"))
+        if re.search(r"(?:javax|jakarta)\.ws\.rs", text):
+            frameworks.append("JAX-RS")
+            scoped.append(_evidence("jaxrs_dependency", [manifest], f"Detected JAX-RS dependency declared by {manifest}"))
     return languages, _unique(frameworks), scoped, data, parse_error
 
 

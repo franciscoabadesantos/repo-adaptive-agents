@@ -49,6 +49,11 @@ EXPECTED = {
         {"api_contract_agent"},
         "independent_reviewer",
     ),
+    "team-keycloak-service": (
+        {"repo_explorer", "api_contract_agent", "design_director", "independent_reviewer"},
+        {"browser_qa", "accessibility_performance_reviewer"},
+        "independent_reviewer",
+    ),
 }
 
 
@@ -196,6 +201,93 @@ class TeamDesignThemeDetectionTests(unittest.TestCase):
             (root / "theme").mkdir()
             (root / "theme" / "notes.md").write_text("# not a stylesheet", encoding="utf-8")
             self.assertEqual(detect_design_signals(root), [])
+
+
+class TeamKeycloakApiDetectionTests(unittest.TestCase):
+    """Keycloak/JAX-RS REST providers must be recognized as an API surface."""
+
+    @staticmethod
+    def _write(root: Path, files: dict) -> Path:
+        for rel, content in files.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        return root
+
+    def test_profile_frameworks_include_keycloak_and_jaxrs_in_order(self):
+        profile = profile_repository(FIXTURES / "team-keycloak-service")
+        self.assertEqual(profile.frameworks, ["Keycloak", "JAX-RS"])
+
+    def test_fixture_selects_api_and_design_with_consolidator(self):
+        plan = _plan("team-keycloak-service")
+        self.assertIn("api_contract_agent", plan.selected_ids)
+        self.assertIn("design_director", plan.selected_ids)
+        self.assertNotIn("browser_qa", plan.selected_ids)
+        self.assertNotIn("accessibility_performance_reviewer", plan.selected_ids)
+        self.assertEqual(plan.consolidator, "independent_reviewer")
+        self.assertEqual(plan.parallel_groups[0], ("repo_explorer",))
+        self.assertEqual(plan.parallel_groups[1], ("api_contract_agent", "design_director"))
+
+    def test_api_reason_and_evidence_are_explicit_and_clean(self):
+        api = next(rec for rec in _plan("team-keycloak-service").selected_roles if rec.role_id == "api_contract_agent")
+        self.assertEqual(api.confidence, "high")
+        self.assertIn("Keycloak RealmResourceProvider or JAX-RS", api.reasons[0])
+        self.assertIn("pom.xml", api.evidence)
+        self.assertTrue(any(p.endswith("ExampleResourceProvider.java") for p in api.evidence))
+        self.assertTrue(any("META-INF/services/" in p for p in api.evidence))
+        for path in api.evidence:
+            self.assertFalse(path.startswith("/"))
+            for excluded in ("target/", "classes/", "maven-status", "node_modules"):
+                self.assertNotIn(excluded, path)
+
+    def test_bare_keycloak_dependency_is_not_an_api_surface(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._write(Path(temporary), {
+                "pom.xml": "<project><dependencies><dependency><groupId>org.keycloak</groupId>"
+                           "<artifactId>keycloak-core</artifactId></dependency></dependencies></project>",
+                "src/main/java/Util.java": "package a; class Util {}",
+            })
+            profile = profile_repository(root)
+            plan = recommend_team(profile, root)
+            self.assertIn("Keycloak", profile.frameworks)
+            self.assertNotIn("api_contract_agent", plan.selected_ids)
+
+    def test_compiled_target_and_classes_files_are_not_evidence(self):
+        from repo_adaptive_agents.multi_cli.team import detect_api_signals
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._write(Path(temporary), {
+                "pom.xml": "<project><dependencies><dependency><groupId>org.keycloak</groupId>"
+                           "<artifactId>keycloak-core</artifactId></dependency></dependencies></project>",
+                "target/classes/com/x/ExampleResourceProvider.class": "RealmResourceProvider",
+                "target/maven-status/RealmResourceProviderFactory.lst": "RealmResourceProvider",
+                "target/classes/META-INF/services/org.keycloak.services.resource.RealmResourceProviderFactory": "x.Y",
+                "etc/classes/META-INF/services/org.keycloak.services.resource.RealmResourceProviderFactory": "x.Y",
+            })
+            self.assertEqual(detect_api_signals(root), [])
+            self.assertNotIn("api_contract_agent", recommend_team(profile_repository(root), root).selected_ids)
+
+    def test_readme_mentions_do_not_count_as_api_signal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._write(Path(temporary), {
+                "pom.xml": "<project><dependencies><dependency><groupId>org.keycloak</groupId>"
+                           "<artifactId>keycloak-core</artifactId></dependency></dependencies></project>",
+                "README.md": "This exposes a Keycloak RealmResourceProvider with JAX-RS @Path and @GET endpoints.",
+            })
+            plan = recommend_team(profile_repository(root), root)
+            self.assertNotIn("api_contract_agent", plan.selected_ids)
+
+    def test_jaxrs_dependency_alone_is_a_strong_signal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._write(Path(temporary), {
+                "pom.xml": "<project><dependencies><dependency><groupId>javax.ws.rs</groupId>"
+                           "<artifactId>javax.ws.rs-api</artifactId></dependency></dependencies></project>",
+                "src/main/java/A.java": "package a; class A {}",
+            })
+            profile = profile_repository(root)
+            plan = recommend_team(profile, root)
+            self.assertIn("JAX-RS", profile.frameworks)
+            self.assertIn("api_contract_agent", plan.selected_ids)
 
 
 class TeamProposalWritingTests(unittest.TestCase):
