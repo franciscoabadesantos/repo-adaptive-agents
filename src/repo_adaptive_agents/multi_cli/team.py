@@ -11,6 +11,7 @@ profiler and never duplicated.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,12 +68,14 @@ class TeamPlan:
 
 # --- Supplemental design-tooling detection (filenames only, deterministic) --------------
 
-# Directories that must never contribute design signals: the profiler's ignore set plus
-# dependency/build/output trees whose token/theme files are false markers. This is what
-# keeps a node_modules ``theme.css`` from ever selecting design_director.
-_DESIGN_IGNORED_DIRS = frozenset(IGNORED_DIRS) | {
+# Directories that must never contribute design or API signals: the profiler's ignore set
+# plus dependency/build/output trees whose theme/token/service files are false markers. This
+# is what keeps a node_modules ``theme.css`` or a compiled ``classes/`` SPI registration from
+# ever being treated as a source signal.
+_TEAM_IGNORED_DIRS = frozenset(IGNORED_DIRS) | {
     ".firebase", "out", ".svelte-kit", ".angular", "storybook-static", ".parcel-cache",
     ".turbo", ".nuxt", ".output", ".cache-loader", ".yarn", "bower_components",
+    "classes", "bin", "obj",  # JVM/compiled output trees (vendored or generated binaries)
 }
 # Extensions that make a ``tokens.*`` / ``design-tokens.*`` file a genuine design signal
 # (avoids matching, e.g., ``tokens.py``/``tokens.txt`` credential files).
@@ -94,7 +97,7 @@ _DESIGN_LABEL_REASONS = {
 def _iter_repo(repo_root: Path):
     """Yield (relative_dir_posix, dirnames, filenames), pruning ignored directories."""
     for dirpath, dirnames, filenames in os.walk(repo_root):
-        dirnames[:] = sorted(d for d in dirnames if d not in _DESIGN_IGNORED_DIRS)
+        dirnames[:] = sorted(d for d in dirnames if d not in _TEAM_IGNORED_DIRS)
         rel = Path(dirpath).relative_to(repo_root).as_posix()
         yield ("" if rel == "." else rel), dirnames, sorted(filenames)
 
@@ -168,6 +171,58 @@ def detect_design_signals(repo_root: str | Path) -> list[tuple[str, str]]:
     return sorted(set(found), key=lambda item: (item[1], item[0]))
 
 
+# --- Supplemental API detection (JAX-RS / Keycloak REST providers) ----------------------
+
+# A Keycloak REST extension is registered through this SPI service file.
+_KEYCLOAK_SPI_REGISTRATION = "META-INF/services/org.keycloak.services.resource.RealmResourceProviderFactory"
+_JAXRS_IMPORT = re.compile(r"import\s+(?:javax|jakarta)\.ws\.rs")
+_JAXRS_ANNOTATION = re.compile(r"@(?:Path|GET|POST|PUT|DELETE|PATCH)\b")
+_JAXRS_POM_DEPENDENCY = re.compile(r"(?:javax|jakarta)\.ws\.rs")
+
+
+def _read_text(path: Path, limit: int = 200_000) -> str:
+    """Read a small text file, tolerating binary/oversized/unreadable files."""
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            return handle.read(limit)
+    except OSError:
+        return ""
+
+
+def detect_api_signals(repo_root: str | Path) -> list[tuple[str, str]]:
+    """Return sorted ``(label, repo-relative-path)`` REST/API markers found lexically.
+
+    Strong signals (dependency, build, and output trees such as ``target/`` are ignored, so
+    compiled classes and ``maven-status`` never count):
+
+    - JAX-RS: a ``javax.ws.rs``/``jakarta.ws.rs`` dependency in ``pom.xml``, an import of it,
+      or a ``@Path``/``@GET``/``@POST``/``@PUT``/``@DELETE``/``@PATCH`` annotation;
+    - Keycloak REST provider: a ``RealmResourceProvider``/``RealmResourceProviderFactory``
+      class, or the ``META-INF/services`` registration of a ``RealmResourceProviderFactory``.
+
+    A bare Keycloak dependency, without any of the above, is deliberately not a signal.
+    """
+    root = Path(repo_root)
+    found: list[tuple[str, str]] = []
+    for rel, _dirnames, filenames in _iter_repo(root):
+        for name in filenames:
+            marker_path = f"{rel}/{name}" if rel else name
+            if marker_path.endswith(_KEYCLOAK_SPI_REGISTRATION):
+                found.append(("keycloak_spi_registration", marker_path))
+                continue
+            if name == "pom.xml":
+                if _JAXRS_POM_DEPENDENCY.search(_read_text(root / marker_path)):
+                    found.append(("jaxrs", marker_path))
+                continue
+            if name.endswith(".java"):
+                text = _read_text(root / marker_path)
+                if "RealmResourceProvider" in text:
+                    found.append(("keycloak_realm_resource_provider", marker_path))
+                if _JAXRS_IMPORT.search(text) or _JAXRS_ANNOTATION.search(text):
+                    found.append(("jaxrs", marker_path))
+    return sorted(set(found), key=lambda item: (item[1], item[0]))
+
+
 # --- Recommendation rules ---------------------------------------------------------------
 
 
@@ -218,13 +273,25 @@ def recommend_team(
             "high",
         )
 
-    if "api" in project_types:
-        selected[API_CONTRACT_AGENT] = RoleRecommendation(
-            API_CONTRACT_AGENT,
-            ("Profiler detected an API surface (HTTP/RPC/schema handlers, routes, or contracts).",),
-            _evidence_for(profile, "api"),
-            "high",
-        )
+    api_signals = detect_api_signals(repo_root)
+    if "api" in project_types or api_signals:
+        if api_signals:
+            evidence = {path for _, path in api_signals}
+            if (Path(repo_root) / "pom.xml").is_file():
+                evidence.add("pom.xml")  # the manifest that declares the Keycloak/JAX-RS deps
+            selected[API_CONTRACT_AGENT] = RoleRecommendation(
+                API_CONTRACT_AGENT,
+                ("Detected a Keycloak RealmResourceProvider or JAX-RS API surface.",),
+                tuple(sorted(evidence)),
+                "high",
+            )
+        else:
+            selected[API_CONTRACT_AGENT] = RoleRecommendation(
+                API_CONTRACT_AGENT,
+                ("Profiler detected an API surface (HTTP/RPC/schema handlers, routes, or contracts).",),
+                _evidence_for(profile, "api"),
+                "high",
+            )
 
     if "frontend" in project_types:
         selected[BROWSER_QA] = RoleRecommendation(

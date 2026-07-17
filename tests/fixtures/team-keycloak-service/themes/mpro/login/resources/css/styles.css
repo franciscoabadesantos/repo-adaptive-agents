@@ -1,0 +1,6 @@
+:root {
+  --mpro-primary: #1b4079;
+  --mpro-font: "Inter", sans-serif;
+}
+body { font-family: var(--mpro-font); color: var(--mpro-primary); }
+@media (max-width: 768px) { body { font-size: 14px; } }
