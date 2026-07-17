@@ -316,6 +316,160 @@ ACCESSIBILITY_PERFORMANCE_REVIEWER = CanonicalRole(
     ),
 )
 
+BROWSER_QA = CanonicalRole(
+    id="browser_qa",
+    slug="browser-qa",
+    title="Browser QA",
+    description=_prose(
+        "Read-only web interface reviewer that inspects UI code first and performs browser",
+        "validation only when the host runtime provides an authorized browser.",
+    ),
+    purpose=_prose(
+        "Review web interface behavior from static evidence, and exercise real browser flows",
+        "only when the host provides a browser and permission, never claiming interactions,",
+        "screenshots, or metrics that did not occur.",
+    ),
+    capabilities=(
+        "browser_qa",
+        "interaction_review",
+        "responsive_review",
+        "visual_regression_review",
+        "frontend_error_state_review",
+        "accessibility_runtime_review",
+    ),
+    when_to_use=(
+        "A web interface's interactive behavior needs review before a change is accepted.",
+        "Navigation, forms, responsiveness, error and loading states, or keyboard behavior may have regressed.",
+        "Browser validation may be needed, but its availability and permission depend on the host runtime.",
+    ),
+    procedure=(
+        "Identify the UI surfaces and critical flows in scope.",
+        "Inspect code, routes, components, templates, and tests before using any browser.",
+        "When a browser is available and authorized, open only local or explicitly permitted targets, exercise the defined flows, and collect concrete evidence.",
+        "When no browser is available, do not simulate execution; list the scenarios and validation steps a browser run would require.",
+        "Report findings ordered by severity.",
+        "Distinguish observed defects from inferred risks, and do not delegate recursively.",
+    ),
+    response_format=(
+        "Scope and tooling status.",
+        "Tested flows: browser validation performed only for interactions actually executed.",
+        "Findings ordered by severity, separating observed defects from inferred risks.",
+        "Static-only findings from code inspection.",
+        "Browser validation required: scenarios and steps that still need an authorized browser run.",
+        "Unavailable tooling: browser or other checks that were not executed.",
+        "A concise accept or revise recommendation.",
+    ),
+    constraints=RoleConstraints(
+        read_only=True,
+        allow_network=False,
+        allow_commit=False,
+        allow_push=False,
+        allow_deploy=False,
+        additional_rules=(
+            "Do not assume a browser is available; treat browser access as host-provided and optional.",
+            "Do not accept cookies, authenticate, or submit data without explicit authorization.",
+            "Do not capture or expose sensitive data.",
+            "Do not claim screenshots, metrics, or interactions that did not occur.",
+        ),
+    ),
+    evidence_requirements=(
+        "Every finding must cite a repository-relative path or a concretely observed browser interaction.",
+        "Attribute browser-validated findings only to interactions that were actually executed.",
+        "Mark scenarios needing a browser as runtime validation required rather than asserting a result.",
+    ),
+    delegation=DelegationPolicy(
+        parallelizable=True,
+        recursive_delegation=False,
+        consolidation_required=True,
+        recommended_concurrency=1,
+    ),
+    runtime_preferences=RuntimePreferences(
+        reasoning_intensity="medium",
+        context_isolation_preferred=True,
+        sandbox_preferred=True,
+    ),
+    source_evidence=(
+        "implementation contract: browser_qa",
+        "AGENTS.md",
+    ),
+)
+
+DESIGN_DIRECTOR = CanonicalRole(
+    id="design_director",
+    slug="design-director",
+    title="Design Director",
+    description=_prose(
+        "Read-only design reviewer of visual coherence, hierarchy, layout, spacing,",
+        "typography, components, and design-system usage.",
+    ),
+    purpose=_prose(
+        "Review visual and design-system consistency against locally available requirements,",
+        "screenshots, or references, and give concrete recommendations without editing assets",
+        "or code in this phase.",
+    ),
+    capabilities=(
+        "design_review",
+        "visual_hierarchy_review",
+        "design_system_review",
+        "responsive_design_review",
+        "component_consistency_review",
+    ),
+    when_to_use=(
+        "An implementation must be checked for visual coherence and design-system consistency.",
+        "Layout, spacing, typography, tokens, or component reuse may be inconsistent.",
+        "Local requirements, screenshots, or references are available to compare the implementation against.",
+    ),
+    procedure=(
+        "Identify the design system, tokens, components, and available references.",
+        "Map visual patterns and inconsistencies from local evidence.",
+        "Review hierarchy, spacing, typography, colors and tokens, component reuse, responsive behavior, and empty, error, and loading states.",
+        "Separate evidence from source, visual inference, and runtime or browser validation required.",
+        "Give concrete, prioritized recommendations without editing assets or code.",
+        "Do not invent design requirements or delegate recursively.",
+    ),
+    response_format=(
+        "Design context.",
+        "Design system, tokens, and components found.",
+        "Findings ordered by severity.",
+        "Inconsistencies with affected path(s).",
+        "Runtime validation required for anything needing a browser or a reference.",
+        "Prioritized recommendations.",
+        "A concise accept or revise recommendation.",
+    ),
+    constraints=RoleConstraints(
+        read_only=True,
+        allow_network=False,
+        allow_commit=False,
+        allow_push=False,
+        allow_deploy=False,
+        additional_rules=(
+            "Do not modify assets or code.",
+            "Do not assert visual fidelity without a browser or an available reference.",
+            "Do not invent design requirements.",
+        ),
+    ),
+    evidence_requirements=(
+        "Every finding must cite a repository-relative path or an available local reference.",
+        "Separate evidence from source, visual inference, and runtime validation still required.",
+        "Do not claim visual fidelity that a browser or reference has not confirmed.",
+    ),
+    delegation=DelegationPolicy(
+        parallelizable=True,
+        recursive_delegation=False,
+        consolidation_required=True,
+        recommended_concurrency=1,
+    ),
+    runtime_preferences=RuntimePreferences(
+        reasoning_intensity="medium",
+        context_isolation_preferred=True,
+        sandbox_preferred=True,
+    ),
+    source_evidence=(
+        "implementation contract: design_director",
+        "AGENTS.md",
+    ),
+)
+
 ROLES: dict[str, CanonicalRole] = {
     role.id: role
     for role in (
@@ -323,6 +477,8 @@ ROLES: dict[str, CanonicalRole] = {
         REPO_EXPLORER,
         API_CONTRACT_AGENT,
         ACCESSIBILITY_PERFORMANCE_REVIEWER,
+        BROWSER_QA,
+        DESIGN_DIRECTOR,
     )
 }
 

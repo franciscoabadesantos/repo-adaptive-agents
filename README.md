@@ -152,9 +152,14 @@ JSON serialization.
 ## Experimental multi-CLI role rendering
 
 > **Experimental pilot.** This subsystem is separate from the deterministic profiler above
-> and covers four read-only roles: `independent_reviewer`, `repo_explorer`,
-> `api_contract_agent`, and `accessibility_performance_reviewer`. `implementation_agent`,
-> `browser_qa`, and `design_director` are not migrated yet.
+> and covers six read-only roles in two groups:
+>
+> - **General read-only review/exploration:** `independent_reviewer`, `repo_explorer`,
+>   `api_contract_agent`, `accessibility_performance_reviewer`.
+> - **Browser/design roles with optional, host-provided tooling:** `browser_qa`,
+>   `design_director`.
+>
+> `implementation_agent` is intentionally not migrated (it is the only writing role).
 
 A canonical role is the single source of truth for a role's identity, description, purpose,
 capabilities, procedure, constraints, delegation intent, and advisory runtime preferences.
@@ -210,17 +215,38 @@ read-only comparison of the proposal against a destination repo, mapping each wr
 its real location (`codex/.codex/...` → `.codex/...`) and reporting additions, changes/
 conflicts, and unchanged files without writing anything.
 
-The first batch is read-only and keeps purpose, procedure, response contract,
-capabilities, evidence requirements, and critical constraints in the canonical role model.
+All six roles are read-only and keep purpose, procedure, response contract, capabilities,
+evidence requirements, and critical constraints in the canonical role model.
 `repo_explorer` separates confirmed facts from inferences and reports evidence paths;
 `api_contract_agent` distinguishes HTTP, RPC/event, schema, client, and documentation
 surfaces; `accessibility_performance_reviewer` separates static evidence from runtime
 validation and unavailable tooling.
 
-The `independent_reviewer` wrapper has already been validated in Codex, Claude Code, and
-GitHub Copilot. The other three roles are validated locally for TOML, frontmatter, hashes,
-determinism, and semantics; generation does not execute external CLI, browser, Lighthouse,
-screen-reader, or API-runtime checks.
+The two browser/design roles treat their extra tooling as **optional and host-provided**,
+represented only in the canonical prose. `browser_qa` inspects UI code first and separates
+*browser validation performed* (only for interactions actually executed) from *browser
+validation required* and *unavailable tooling*; it never claims screenshots, metrics, or
+interactions that did not occur, and it does not assume a browser, network, or authentication
+is available. `design_director` reviews visual hierarchy, spacing, typography, tokens, and
+component consistency, separating evidence from source, visual inference, and runtime
+validation still required, without editing assets or inventing design requirements. The
+wrappers do **not** guarantee or perform browser execution — no browser was run to produce
+them, and none is launched at generation time.
+
+### Manual-validation policy
+
+Manual validation is deliberately sparse and does not repeat per role and per CLI:
+
+- one pilot role (`independent_reviewer`) was validated manually in **all three** CLIs
+  (Codex, Claude Code, GitHub Copilot);
+- a second role (`repo_explorer`) was validated manually in **two** CLIs (Codex, Claude);
+- the remaining roles are covered by the automated suite (TOML, frontmatter, JSON, hashes,
+  determinism, and per-role semantics);
+- manual re-validation is warranted only when a **renderer, permission model, or tooling
+  assumption** changes — not for each new read-only role.
+
+Generation never executes an external CLI, browser, Lighthouse, screen reader, or API
+runtime, so no output should be read as evidence that such a tool was run.
 
 What this pilot deliberately does **not** do: migrate the other roles, apply changes, write
 into a target repo, sync with HOME, install or detect CLIs, alter `.codex/config.toml`,
