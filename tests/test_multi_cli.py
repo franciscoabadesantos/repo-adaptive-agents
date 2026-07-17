@@ -27,6 +27,8 @@ ROLE_IDS = (
     "repo_explorer",
     "api_contract_agent",
     "accessibility_performance_reviewer",
+    "browser_qa",
+    "design_director",
 )
 
 # The four primary role wrapper files (Codex, Claude, Copilot, Skill).
@@ -449,6 +451,8 @@ class MultiCliRoleBatchTests(unittest.TestCase):
             "repo_explorer": ("architecture_mapping", "component_discovery", "entrypoint_discovery", "facts", "inferences", "evidence paths"),
             "api_contract_agent": ("compatibility_analysis", "schema_review", "error_contract_review", "Do not make real API calls", "runtime endpoint"),
             "accessibility_performance_reviewer": ("accessibility_review", "frontend_performance_review", "static evidence", "runtime validation", "Lighthouse", "browser"),
+            "browser_qa": ("interaction_review", "responsive_review", "browser validation required", "unavailable tooling", "did not occur"),
+            "design_director": ("visual_hierarchy_review", "design_system_review", "typography", "spacing", "runtime validation", "Do not invent design requirements"),
         }
         with tempfile.TemporaryDirectory() as temporary:
             for role_id, markers in expected.items():
@@ -496,6 +500,93 @@ class MultiCliRoleBatchTests(unittest.TestCase):
                         if path.is_file():
                             self.assertFalse(path.relative_to(output).is_absolute())
                             self.assertNotIn("/home/", path.read_text(encoding="utf-8"))
+
+
+class MultiCliBrowserQaTests(unittest.TestCase):
+    """browser_qa must represent browser tooling honestly and never claim it ran."""
+
+    def _wrapper_files(self, output: Path) -> list[Path]:
+        return [
+            output / "portable/.agents/skills/browser-qa/SKILL.md",
+            output / "codex/.codex/agents/browser_qa.toml",
+            output / "claude/.claude/agents/browser-qa.md",
+            output / "copilot/.github/agents/browser-qa.agent.md",
+        ]
+
+    def test_separates_performed_required_and_unavailable_browser_validation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "browser_qa"
+            write_proposal("browser_qa", None, output)
+            for path in self._wrapper_files(output):
+                text = path.read_text(encoding="utf-8").lower()
+                self.assertIn("browser validation performed", text, path.name)
+                self.assertIn("browser validation required", text, path.name)
+                self.assertIn("unavailable tooling", text, path.name)
+
+    def test_forbids_claiming_unexecuted_interactions_and_assumed_access(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "browser_qa"
+            write_proposal("browser_qa", None, output)
+            for path in self._wrapper_files(output):
+                text = path.read_text(encoding="utf-8").lower()
+                # Never claim interactions/metrics/screenshots that did not occur.
+                self.assertIn("did not occur", text, path.name)
+                # Browser is not assumed available; no unauthorized auth/network.
+                self.assertIn("do not assume a browser is available", text, path.name)
+                self.assertIn("authenticate, or submit data without explicit authorization", text, path.name)
+                self.assertIn("do not access the network", text, path.name)
+
+    def test_includes_interaction_responsive_and_error_state_review(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "browser_qa"
+            write_proposal("browser_qa", None, output)
+            for path in self._wrapper_files(output):
+                text = path.read_text(encoding="utf-8").lower()
+                self.assertIn("interaction_review", text, path.name)
+                self.assertIn("responsive_review", text, path.name)
+                self.assertIn("frontend_error_state_review", text, path.name)
+
+
+class MultiCliDesignDirectorTests(unittest.TestCase):
+    """design_director must review visual coherence without editing or inventing requirements."""
+
+    def _wrapper_files(self, output: Path) -> list[Path]:
+        return [
+            output / "portable/.agents/skills/design-director/SKILL.md",
+            output / "codex/.codex/agents/design_director.toml",
+            output / "claude/.claude/agents/design-director.md",
+            output / "copilot/.github/agents/design-director.agent.md",
+        ]
+
+    def test_covers_hierarchy_spacing_typography_and_tokens_components(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "design_director"
+            write_proposal("design_director", None, output)
+            for path in self._wrapper_files(output):
+                text = path.read_text(encoding="utf-8").lower()
+                for marker in ("hierarchy", "spacing", "typography", "tokens", "component"):
+                    self.assertIn(marker, text, f"{marker} missing from {path.name}")
+
+    def test_distinguishes_evidence_inference_and_runtime_validation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "design_director"
+            write_proposal("design_director", None, output)
+            for path in self._wrapper_files(output):
+                text = path.read_text(encoding="utf-8").lower()
+                self.assertIn("evidence from source", text, path.name)
+                self.assertIn("visual inference", text, path.name)
+                self.assertIn("runtime validation", text, path.name)
+
+    def test_does_not_edit_or_invent_design_requirements(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "design_director"
+            write_proposal("design_director", None, output)
+            for path in self._wrapper_files(output):
+                text = path.read_text(encoding="utf-8").lower()
+                self.assertIn("do not modify assets or code", text, path.name)
+                self.assertIn("do not invent design requirements", text, path.name)
+                # read-only edit prohibition is preserved too.
+                self.assertIn("do not edit, create, or delete files", text, path.name)
 
 
 class MultiCliCliTests(unittest.TestCase):
