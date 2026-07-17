@@ -20,12 +20,14 @@ from .generator import (
 from .models import (
     CanonicalRole,
     DelegationPolicy,
+    InvocationScope,
     RenderedTarget,
     RoleConstraints,
     RuntimePreferences,
 )
 from .renderers import TARGETS
 from .roles import ROLES, get_role, role_ids
+from .scope import ScopeError, build_scope, normalize_path
 from .validator import validate_proposal
 
 __all__ = [
@@ -33,15 +35,19 @@ __all__ = [
     "CompareReport",
     "DelegationPolicy",
     "GENERATOR_VERSION",
+    "InvocationScope",
     "MultiCliError",
     "ROLES",
     "RenderedTarget",
     "RoleConstraints",
     "RuntimePreferences",
     "SCHEMA_VERSION",
+    "ScopeError",
     "TARGETS",
+    "build_scope",
     "compare_proposal",
     "get_role",
+    "normalize_path",
     "render_role",
     "resolve_targets",
     "role_ids",

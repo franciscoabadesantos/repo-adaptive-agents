@@ -11,7 +11,10 @@ from repo_adaptive_agents.cli import main
 from repo_adaptive_agents.multi_cli import (
     TARGETS,
     MultiCliError,
+    ScopeError,
+    build_scope,
     compare_proposal,
+    normalize_path,
     render_role,
     resolve_targets,
     role_ids,
@@ -29,7 +32,17 @@ ROLE_IDS = (
     "accessibility_performance_reviewer",
     "browser_qa",
     "design_director",
+    "implementation_agent",
 )
+# Read-only roles render without a scope; write roles require one.
+READ_ONLY_ROLE_IDS = tuple(r for r in ROLE_IDS if r != "implementation_agent")
+
+
+def scope_for(role_id):
+    """A valid scope for write roles, or None for read-only roles."""
+    if ROLES[role_id].constraints.require_explicit_scope:
+        return build_scope("Implement the approved change", ["src/", "tests/"], ["src/generated/"])
+    return None
 
 # The four primary role wrapper files (Codex, Claude, Copilot, Skill).
 WRAPPER_FILES = (
@@ -138,7 +151,7 @@ class MultiCliRenderTests(unittest.TestCase):
             output = self._render(Path(temporary))
             self.assertEqual(validate_proposal(output), [])
             manifest = json.loads((output / "manifest.json").read_text())
-            self.assertEqual(manifest["schema_version"], 1)
+            self.assertEqual(manifest["schema_version"], 2)
             self.assertEqual(manifest["canonical_role_id"], ROLE)
             self.assertEqual(manifest["targets_requested"], list(TARGETS))
             self.assertNotIn("generated_at", manifest)
@@ -425,7 +438,7 @@ class MultiCliRoleBatchTests(unittest.TestCase):
             for role_id in ROLE_IDS:
                 with self.subTest(role=role_id):
                     output = Path(temporary) / role_id
-                    write_proposal(role_id, list(TARGETS), output)
+                    write_proposal(role_id, list(TARGETS), output, scope=scope_for(role_id))
                     role = ROLES[role_id]
                     self.assertEqual(validate_proposal(output), [])
                     self.assertTrue((output / f"portable/.agents/skills/{role.slug}/SKILL.md").is_file())
@@ -440,8 +453,8 @@ class MultiCliRoleBatchTests(unittest.TestCase):
                 with self.subTest(role=role_id):
                     first = Path(temporary) / f"{role_id}-first"
                     second = Path(temporary) / f"{role_id}-second"
-                    write_proposal(role_id, None, first)
-                    write_proposal(role_id, None, second)
+                    write_proposal(role_id, None, first, scope=scope_for(role_id))
+                    write_proposal(role_id, None, second, scope=scope_for(role_id))
                     first_files = {p.relative_to(first).as_posix(): p.read_bytes() for p in first.rglob("*") if p.is_file()}
                     second_files = {p.relative_to(second).as_posix(): p.read_bytes() for p in second.rglob("*") if p.is_file()}
                     self.assertEqual(first_files, second_files)
@@ -474,7 +487,7 @@ class MultiCliRoleBatchTests(unittest.TestCase):
             for role_id in ROLE_IDS:
                 with self.subTest(role=role_id):
                     output = Path(temporary) / role_id
-                    write_proposal(role_id, ["codex"], output)
+                    write_proposal(role_id, ["codex"], output, scope=scope_for(role_id))
                     fragment = output / f"codex/.codex/config.fragments/{role_id}.toml"
                     data = tomllib.loads(fragment.read_text(encoding="utf-8"))
                     entry = data["agents"][role_id]
@@ -488,7 +501,7 @@ class MultiCliRoleBatchTests(unittest.TestCase):
             for role_id in ROLE_IDS:
                 with self.subTest(role=role_id):
                     output = Path(temporary) / role_id
-                    write_proposal(role_id, None, output)
+                    write_proposal(role_id, None, output, scope=scope_for(role_id))
                     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
                     self.assertTrue(manifest["source"]["role_hash"].isalnum())
                     for target in TARGETS:
@@ -587,6 +600,241 @@ class MultiCliDesignDirectorTests(unittest.TestCase):
                 self.assertIn("do not invent design requirements", text, path.name)
                 # read-only edit prohibition is preserved too.
                 self.assertIn("do not edit, create, or delete files", text, path.name)
+
+
+class MultiCliScopeValidationTests(unittest.TestCase):
+    """Lexical path validation and deterministic scope construction."""
+
+    def test_rejects_absolute_parent_empty_dot_and_git_paths(self):
+        for bad in ("/etc/passwd", "../secrets", "", "   ", ".", "./", ".git", ".git/config"):
+            with self.subTest(path=bad):
+                with self.assertRaises(ScopeError):
+                    normalize_path(bad)
+
+    def test_rejects_backslash_and_nul(self):
+        with self.assertRaises(ScopeError):
+            normalize_path("src\\generated")
+        with self.assertRaises(ScopeError):
+            normalize_path("src/\x00evil")
+
+    def test_normalizes_trailing_and_duplicate_slashes_and_dot_components(self):
+        self.assertEqual(normalize_path("src/"), "src")
+        self.assertEqual(normalize_path("src//app/./mod/"), "src/app/mod")
+
+    def test_build_scope_dedups_sorts_and_is_order_independent(self):
+        first = build_scope("brief", ["tests/", "src/", "src"], ["src/generated/"])
+        second = build_scope("brief", ["src", "tests"], ["src/generated"])
+        self.assertEqual(first.allowed_paths, ("src", "tests"))
+        self.assertEqual(first, second)
+
+    def test_build_scope_requires_description_and_allow_path(self):
+        with self.assertRaises(ScopeError):
+            build_scope("", ["src"], [])
+        with self.assertRaises(ScopeError):
+            build_scope("brief", [], [])
+
+
+class MultiCliImplementationAgentTests(unittest.TestCase):
+    """implementation_agent is the only write role and only renders with an explicit scope."""
+
+    def _scope(self):
+        return build_scope("Implement the approved parser change", ["src/", "tests/"], ["src/generated/"])
+
+    def _render(self, root: Path) -> Path:
+        output = root / "impl"
+        write_proposal("implementation_agent", None, output, scope=self._scope())
+        return output
+
+    def test_registry_lists_implementation_agent_last_and_deterministically(self):
+        self.assertEqual(role_ids()[-1], "implementation_agent")
+
+    def test_renders_all_four_targets_with_scope(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            self.assertEqual(validate_proposal(output), [])
+            for relative in (
+                "portable/.agents/skills/implementation-agent/SKILL.md",
+                "codex/.codex/agents/implementation_agent.toml",
+                "codex/.codex/config.fragments/implementation_agent.toml",
+                "claude/.claude/agents/implementation-agent.md",
+                "copilot/.github/agents/implementation-agent.agent.md",
+            ):
+                self.assertTrue((output / relative).is_file(), relative)
+
+    def test_missing_scope_is_rejected_at_api(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(MultiCliError, "requires an explicit invocation scope"):
+                write_proposal("implementation_agent", None, Path(temporary) / "out")
+
+    def test_scope_on_read_only_role_is_rejected_at_api(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(MultiCliError, "read-only role"):
+                write_proposal("independent_reviewer", None, Path(temporary) / "out", scope=self._scope())
+
+    def test_codex_wrapper_is_workspace_write_with_no_invented_fields(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            toml_text = (output / "codex/.codex/agents/implementation_agent.toml").read_text()
+            data = tomllib.loads(toml_text)
+            self.assertEqual(data["sandbox_mode"], "workspace-write")
+            self.assertNotIn("model", data)
+            self.assertNotIn("writable_roots", data)
+            self.assertNotIn("allowed_paths", data)
+            self.assertNotIn("writable_paths", data)
+
+    def test_manifest_schema_2_and_scope_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(manifest["schema_version"], 2)
+
+            codex = manifest["targets"]["codex"]
+            self.assertEqual(codex["enforcement"], {"mode": "sandboxed", "runtime_controls_generated": True, "controls": ["sandbox_mode"]})
+            self.assertEqual(codex["sandbox"], {"mode": "workspace-write", "scope": "workspace", "path_scope_enforced": False})
+            self.assertFalse(codex["sandbox"]["path_scope_enforced"])
+            self.assertFalse(codex["path_validation"]["filesystem_resolved"])
+            self.assertFalse(codex["path_validation"]["symlink_escape_checked"])
+            self.assertTrue(codex["validation_required"])
+
+            # blocked and allowed are serialized on every target; write_scope is not enforced.
+            for target in TARGETS:
+                write_scope = manifest["targets"][target]["write_scope"]
+                self.assertEqual(write_scope["allowed_paths"], ["src", "tests"])
+                self.assertEqual(write_scope["blocked_paths"], ["src/generated"])
+                self.assertFalse(write_scope["enforced"])
+                self.assertEqual(write_scope["mode"], "explicit-advisory")
+
+            # Non-Codex targets stay advisory with no technical sandbox.
+            for target in ("skill", "claude", "copilot"):
+                section = manifest["targets"][target]
+                self.assertEqual(section["enforcement"]["mode"], "advisory")
+                self.assertFalse(section["enforcement"]["runtime_controls_generated"])
+                self.assertEqual(section["sandbox"]["mode"], "none")
+
+    def test_mandatory_advisory_warnings_present(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            warnings = json.loads((output / "manifest.json").read_text())["warnings"]
+            self.assertIn("path scope is advisory and not technically enforced", warnings)
+            self.assertIn("symlink/filesystem validation was not performed", warnings)
+            self.assertIn("Codex workspace-write limits the workspace, not allowed_paths", warnings)
+
+    def test_scope_prose_and_destructive_prohibitions_in_all_targets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(Path(temporary))
+            for relative in (
+                "portable/.agents/skills/implementation-agent/SKILL.md",
+                "codex/.codex/agents/implementation_agent.toml",
+                "claude/.claude/agents/implementation-agent.md",
+                "copilot/.github/agents/implementation-agent.agent.md",
+            ):
+                text = (output / relative).read_text().lower()
+                self.assertIn("implement the approved parser change", text, relative)
+                self.assertIn("blocked paths override allowed paths", text, relative)
+                self.assertIn("src/generated", text, relative)
+                self.assertIn("preserve pre-existing local changes", text, relative)
+                self.assertIn("destructive deletes or renames", text, relative)
+                self.assertIn("do not commit", text, relative)
+
+    def test_output_is_byte_deterministic_with_reordered_scope(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            first = Path(temporary) / "a"
+            second = Path(temporary) / "b"
+            write_proposal("implementation_agent", None, first, scope=build_scope("brief", ["tests/", "src/"], ["src/generated"]))
+            write_proposal("implementation_agent", None, second, scope=build_scope("brief", ["src", "tests"], ["src/generated/"]))
+            first_files = {p.relative_to(first).as_posix(): p.read_bytes() for p in first.rglob("*") if p.is_file()}
+            second_files = {p.relative_to(second).as_posix(): p.read_bytes() for p in second.rglob("*") if p.is_file()}
+            self.assertEqual(first_files, second_files)
+
+    def test_render_writes_nothing_outside_output_and_leaves_codex_config(self):
+        repo_config = Path(__file__).resolve().parent.parent / ".codex" / "config.toml"
+        config_before = repo_config.read_text()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "impl"
+            write_proposal("implementation_agent", None, output, scope=self._scope())
+            outside = {p for p in root.rglob("*") if not p.is_relative_to(output) and p != output}
+            self.assertEqual(outside, set())
+        self.assertEqual(repo_config.read_text(), config_before)
+
+    def test_scope_does_not_change_canonical_role_hash(self):
+        # The scope is not part of the canonical role, so the role_hash is scope-independent.
+        with tempfile.TemporaryDirectory() as temporary:
+            a = Path(temporary) / "a"
+            b = Path(temporary) / "b"
+            write_proposal("implementation_agent", ["skill"], a, scope=build_scope("one", ["src"], []))
+            write_proposal("implementation_agent", ["skill"], b, scope=build_scope("two different", ["tests"], ["tests/x"]))
+            hash_a = json.loads((a / "manifest.json").read_text())["source"]["role_hash"]
+            hash_b = json.loads((b / "manifest.json").read_text())["source"]["role_hash"]
+            self.assertEqual(hash_a, hash_b)
+
+
+class MultiCliImplementationAgentCliTests(unittest.TestCase):
+    """CLI-level scope contract for the write role."""
+
+    def _run(self, argv):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = main(argv)
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_valid_command_writes_and_validates(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "out"
+            code, out, err = self._run([
+                "render-role", "implementation_agent",
+                "--allow-path", "src/", "--allow-path", "tests/",
+                "--block-path", "src/generated/",
+                "--scope-description", "Implement the approved parser change",
+                "--output", str(output),
+            ])
+            self.assertEqual(code, 0, err)
+            self.assertIn("Wrote", out)
+            self.assertEqual(validate_proposal(output), [])
+
+    def test_missing_allow_path_fails_before_writing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "out"
+            code, out, err = self._run([
+                "render-role", "implementation_agent",
+                "--scope-description", "x", "--output", str(output),
+            ])
+            self.assertEqual(code, 2)
+            self.assertEqual(out, "")
+            self.assertIn("at least one --allow-path and a non-empty --scope-description", err)
+            self.assertFalse(output.exists())
+
+    def test_missing_scope_description_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "out"
+            code, _, err = self._run([
+                "render-role", "implementation_agent",
+                "--allow-path", "src/", "--output", str(output),
+            ])
+            self.assertEqual(code, 2)
+            self.assertIn("at least one --allow-path and a non-empty --scope-description", err)
+            self.assertFalse(output.exists())
+
+    def test_scope_flags_rejected_on_read_only_role(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "out"
+            code, _, err = self._run([
+                "render-role", "independent_reviewer",
+                "--allow-path", "src/", "--output", str(output),
+            ])
+            self.assertEqual(code, 2)
+            self.assertIn("read-only", err)
+            self.assertFalse(output.exists())
+
+    def test_absolute_allow_path_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "out"
+            code, _, err = self._run([
+                "render-role", "implementation_agent",
+                "--allow-path", "/etc", "--scope-description", "x", "--output", str(output),
+            ])
+            self.assertEqual(code, 2)
+            self.assertFalse(output.exists())
 
 
 class MultiCliCliTests(unittest.TestCase):

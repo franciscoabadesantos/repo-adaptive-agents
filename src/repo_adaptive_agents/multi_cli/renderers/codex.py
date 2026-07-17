@@ -10,11 +10,20 @@ from __future__ import annotations
 
 import json
 
-from ..models import CanonicalRole, RenderedTarget
+from ..models import CanonicalRole, InvocationScope, RenderedTarget
+from .common import (
+    ADVISORY_SCOPE_WARNINGS,
+    CODEX_WORKSPACE_WARNING,
+    SCOPE_WORKING_RULES,
+    scope_metadata,
+)
 
 VERSION = "1.0"
 TARGET = "codex"
 PORTABILITY = "target_specific"
+
+# Codex enforces a workspace-write sandbox; it bounds the workspace, not allowed_paths.
+_WORKSPACE_SANDBOX = {"mode": "workspace-write", "scope": "workspace", "path_scope_enforced": False}
 
 
 def output_path(role: CanonicalRole) -> str:
@@ -30,8 +39,23 @@ def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _developer_instructions(role: CanonicalRole) -> str:
-    lines = [role.purpose, "", "Capabilities:"]
+def _scope_lines(scope: InvocationScope) -> list[str]:
+    lines = [
+        "Invocation scope (advisory; not technically enforced by this file):",
+        f"- Scope: {scope.description}",
+        f"- Allowed paths: {', '.join(scope.allowed_paths)}",
+        f"- Blocked paths: {', '.join(scope.blocked_paths) if scope.blocked_paths else 'none'}",
+    ]
+    lines.extend(f"- {rule}" for rule in SCOPE_WORKING_RULES)
+    lines.append("")
+    return lines
+
+
+def _developer_instructions(role: CanonicalRole, scope: InvocationScope | None) -> str:
+    lines = [role.purpose, ""]
+    if scope:
+        lines.extend(_scope_lines(scope))
+    lines.append("Capabilities:")
     lines.extend(f"- {capability}" for capability in role.capabilities)
     lines.extend(["", "Procedure:"])
     lines.extend(f"- {step}" for step in role.procedure)
@@ -61,7 +85,7 @@ def _registration_fragment(role: CanonicalRole) -> str:
     )
 
 
-def render(role: CanonicalRole) -> RenderedTarget:
+def render(role: CanonicalRole, scope: InvocationScope | None = None) -> RenderedTarget:
     sandbox = "read-only" if role.constraints.read_only else "workspace-write"
     lines = [
         f"name = {_toml_string(role.id)}",
@@ -69,11 +93,12 @@ def render(role: CanonicalRole) -> RenderedTarget:
         f"model_reasoning_effort = {_toml_string(role.runtime_preferences.reasoning_intensity)}",
         f"sandbox_mode = {_toml_string(sandbox)}",
         'nickname_candidates = ["Auditor"]',
-        f"developer_instructions = {_toml_string(_developer_instructions(role))}",
+        f"developer_instructions = {_toml_string(_developer_instructions(role, scope))}",
         "",
     ]
     wrapper = output_path(role)
     fragment = registration_path(role)
+    scope_warnings = (ADVISORY_SCOPE_WARNINGS + (CODEX_WORKSPACE_WARNING,)) if scope else ()
     return RenderedTarget(
         target=TARGET,
         renderer_version=VERSION,
@@ -95,6 +120,7 @@ def render(role: CanonicalRole) -> RenderedTarget:
             "purpose+capabilities+procedure+constraints+evidence_requirements": "developer_instructions",
             "slug": "developer_instructions skill path reference",
             "registration": "config.fragments TOML fragment",
+            **({"invocation_scope": "developer_instructions scope block"} if scope else {}),
         },
         unsupported_fields=(
             "model (left unset; inherited from .codex/config.toml, not chosen by canonical)",
@@ -103,6 +129,8 @@ def render(role: CanonicalRole) -> RenderedTarget:
         ),
         warnings=(
             "The registration fragment is generated for manual merge only; it is not applied to .codex/config.toml.",
-        ),
+        )
+        + scope_warnings,
         artifacts={"agent_wrapper": wrapper, "registration_fragment": fragment},
+        scope_metadata=scope_metadata(role, scope, _WORKSPACE_SANDBOX) if scope else {},
     )

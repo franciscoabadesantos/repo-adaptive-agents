@@ -25,6 +25,24 @@ class RoleConstraints:
     allowed_paths: tuple[str, ...] = ()
     blocked_paths: tuple[str, ...] = ()
     additional_rules: tuple[str, ...] = ()
+    # Deliberately no allow_edit/allow_create: writing is governed by read_only plus an
+    # explicit invocation scope, not by a boolean the wrapper cannot enforce.
+    allow_delete: bool = False
+    require_explicit_scope: bool = False
+    require_validation: bool = False
+
+
+@dataclass(frozen=True)
+class InvocationScope:
+    """An explicit, advisory write scope supplied at render time.
+
+    The scope is not part of the canonical role definition and never changes the role's
+    canonical hash. Paths are lexically normalized, repo-relative POSIX strings.
+    """
+
+    description: str
+    allowed_paths: tuple[str, ...]
+    blocked_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -113,3 +131,7 @@ class RenderedTarget:
     # Optional named artifacts for targets that emit more than one file, such as the
     # Codex agent wrapper and its manual registration fragment.
     artifacts: dict[str, str] = field(default_factory=dict)
+    # Optional per-target invocation-scope metadata (sandbox, write_scope, destructive
+    # actions, validation, path_validation). Merged into the manifest target section when
+    # a write role is rendered with an explicit scope. Empty for read-only roles.
+    scope_metadata: dict = field(default_factory=dict)
