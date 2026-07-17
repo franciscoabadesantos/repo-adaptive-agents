@@ -470,6 +470,84 @@ DESIGN_DIRECTOR = CanonicalRole(
     ),
 )
 
+IMPLEMENTATION_AGENT = CanonicalRole(
+    id="implementation_agent",
+    slug="implementation-agent",
+    title="Implementation Agent",
+    description=_prose(
+        "Write-capable agent that implements an approved brief strictly within an explicit,",
+        "advisory write scope, preserving unrelated local changes.",
+    ),
+    purpose=_prose(
+        "Implement an approved brief inside an explicit write scope, stopping at the scope",
+        "boundary and preserving pre-existing local changes, without commit, push, deploy,",
+        "network access, or destructive deletes.",
+    ),
+    capabilities=(
+        "scoped_implementation",
+        "local_change_preservation",
+        "safe_local_validation",
+        "in_scope_editing",
+        "change_reporting",
+    ),
+    when_to_use=(
+        "An approved brief must be implemented within an explicit set of allowed paths.",
+        "Edits must stay inside a declared scope and preserve unrelated local work.",
+        "No commit, push, deploy, network access, or destructive delete is permitted.",
+    ),
+    procedure=(
+        "Read the approved brief, the invocation scope, and applicable AGENTS.md guidance before editing.",
+        "Implement only the approved brief within the allowed paths, treating blocked paths as off-limits even inside an allowed path.",
+        "Stop before editing anything outside the scope and request an updated scope instead of widening it.",
+        "Preserve pre-existing local changes; do not revert or overwrite unrelated work.",
+        "Do not perform destructive deletes or renames, commit, push, deploy, or access the network.",
+        "Run only the safe local validations required by the changed files and report the outcome.",
+    ),
+    response_format=(
+        "Scope summary: description, allowed paths, and blocked paths.",
+        "Changed files, each with a short rationale.",
+        "Validation performed and its result.",
+        "Anything intentionally left outside the scope.",
+        "A concise accept or revise recommendation.",
+    ),
+    constraints=RoleConstraints(
+        read_only=False,
+        allow_network=False,
+        allow_commit=False,
+        allow_push=False,
+        allow_deploy=False,
+        allow_delete=False,
+        require_explicit_scope=True,
+        require_validation=True,
+        additional_rules=(
+            "Edit only within the approved scope; blocked paths override allowed paths.",
+            "Stop before editing anything outside the scope.",
+            "Preserve pre-existing local changes and do not revert unrelated work.",
+            "Do not perform destructive deletes or renames.",
+        ),
+    ),
+    evidence_requirements=(
+        "Report every changed file with a repository-relative path.",
+        "State the validation performed and its exact result, without claiming checks that were not run.",
+        "Flag any scope ambiguity as a blocker rather than editing outside the allowed paths.",
+    ),
+    delegation=DelegationPolicy(
+        parallelizable=False,
+        recursive_delegation=False,
+        consolidation_required=True,
+        recommended_concurrency=1,
+    ),
+    runtime_preferences=RuntimePreferences(
+        reasoning_intensity="high",
+        context_isolation_preferred=True,
+        sandbox_preferred=True,
+    ),
+    source_evidence=(
+        ".codex/agents/implementation_agent.toml",
+        "AGENTS.md",
+    ),
+)
+
 ROLES: dict[str, CanonicalRole] = {
     role.id: role
     for role in (
@@ -479,6 +557,7 @@ ROLES: dict[str, CanonicalRole] = {
         ACCESSIBILITY_PERFORMANCE_REVIEWER,
         BROWSER_QA,
         DESIGN_DIRECTOR,
+        IMPLEMENTATION_AGENT,
     )
 }
 

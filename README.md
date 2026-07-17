@@ -152,14 +152,14 @@ JSON serialization.
 ## Experimental multi-CLI role rendering
 
 > **Experimental pilot.** This subsystem is separate from the deterministic profiler above
-> and covers six read-only roles in two groups:
+> and covers seven roles in three groups:
 >
 > - **General read-only review/exploration:** `independent_reviewer`, `repo_explorer`,
 >   `api_contract_agent`, `accessibility_performance_reviewer`.
 > - **Browser/design roles with optional, host-provided tooling:** `browser_qa`,
 >   `design_director`.
->
-> `implementation_agent` is intentionally not migrated (it is the only writing role).
+> - **Write role (scope required):** `implementation_agent` — the only role with
+>   `read_only=False`; it renders only when given an explicit, advisory write scope.
 
 A canonical role is the single source of truth for a role's identity, description, purpose,
 capabilities, procedure, constraints, delegation intent, and advisory runtime preferences.
@@ -248,7 +248,43 @@ Manual validation is deliberately sparse and does not repeat per role and per CL
 Generation never executes an external CLI, browser, Lighthouse, screen reader, or API
 runtime, so no output should be read as evidence that such a tool was run.
 
-What this pilot deliberately does **not** do: migrate the other roles, apply changes, write
+### The write role: `implementation_agent`
+
+`implementation_agent` is the only role with `read_only=False`. It renders **only** when
+given an explicit write scope, and the scope is **advisory**: nothing here technically
+enforces per-path boundaries.
+
+```sh
+PYTHONPATH=src python3 -m repo_adaptive_agents.cli render-role implementation_agent \
+  --allow-path src/ \
+  --allow-path tests/ \
+  --block-path src/generated/ \
+  --scope-description "Implement the approved parser change" \
+  --output /tmp/implementation-agent-pilot
+```
+
+- **Scope is mandatory.** Without at least one `--allow-path` and a non-empty
+  `--scope-description`, the command fails before writing anything. Read-only roles
+  *reject* these flags rather than silently ignoring them.
+- **Per-path scoping is advisory, not enforced.** Paths are only lexically validated
+  (absolute paths, `..`, `.`, empty, `.git`, NUL bytes, and ambiguous backslashes are
+  rejected; non-existent paths are allowed) and then de-duplicated and sorted, so flag
+  order never changes the output. No filesystem, symlink, submodule, or working-tree
+  checks are performed; the manifest declares these limitations.
+- **Codex uses `sandbox_mode = "workspace-write"`**, which limits the *workspace*, not the
+  `allowed_paths` — a warning states this explicitly. No `model` is imposed and no
+  unconfirmed fields (e.g. `writable_roots`) are emitted. The registration fragment is
+  still manual and never applied.
+- **Skill, Claude, and Copilot are guidance only** — advisory scope, no technical sandbox,
+  and the same guidance-not-enforcement note as every other role.
+- **Destructive actions are off:** deletes/renames, commit, push, deploy, and network are
+  all disabled in the canonical constraints, and local changes must be preserved.
+- Generation still only produces a proposal. **It never runs the implementation agent** and
+  applies nothing to any repository. `manifest.json` is now `schema_version: 2` to carry the
+  per-target `sandbox`, `write_scope`, `destructive_actions`, `validation_required`, and
+  `path_validation` metadata.
+
+What this pilot deliberately does **not** do: apply changes, write
 into a target repo, sync with HOME, install or detect CLIs, alter `.codex/config.toml`,
 generate `CLAUDE.md` or `.github/copilot-instructions.md`, or make any network call. The
 Copilot output is a **custom agent**, not inline-autocomplete configuration and not a

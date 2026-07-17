@@ -8,19 +8,33 @@ across modes, so nothing here assumes a single one.
 
 from __future__ import annotations
 
-from ..models import CanonicalRole, RenderedTarget
-from .common import ENFORCEMENT_NOTE, bullet_list, frontmatter, numbered_list
+from ..models import CanonicalRole, InvocationScope, RenderedTarget
+from .common import (
+    ADVISORY_SCOPE_WARNINGS,
+    ENFORCEMENT_NOTE,
+    bullet_list,
+    frontmatter,
+    numbered_list,
+    scope_metadata,
+    scope_section,
+)
 
 VERSION = "1.0"
 TARGET = "copilot"
 PORTABILITY = "generated"
+
+_CUSTOM_AGENT_NOTE = (
+    "This is a Copilot custom agent, not .github/copilot-instructions.md and not inline autocomplete configuration.",
+)
+# Markdown wrappers have no technical sandbox; scope is advisory only.
+_ADVISORY_SANDBOX = {"mode": "none", "scope": "advisory", "path_scope_enforced": False}
 
 
 def output_path(role: CanonicalRole) -> str:
     return f"copilot/.github/agents/{role.slug}.agent.md"
 
 
-def render(role: CanonicalRole) -> RenderedTarget:
+def render(role: CanonicalRole, scope: InvocationScope | None = None) -> RenderedTarget:
     meta = frontmatter([("name", role.slug), ("description", role.description)])
     body = "\n".join(
         [
@@ -29,6 +43,7 @@ def render(role: CanonicalRole) -> RenderedTarget:
             "",
             role.purpose,
             "",
+            *(scope_section(scope) if scope else []),
             "## Capabilities",
             "",
             bullet_list(role.capabilities),
@@ -70,6 +85,7 @@ def render(role: CanonicalRole) -> RenderedTarget:
             "procedure": "## Procedure",
             "constraints": "## Constraints",
             "evidence_requirements": "## Evidence requirements",
+            **({"invocation_scope": "## Invocation scope"} if scope else {}),
         },
         unsupported_fields=(
             "model (frontmatter compatibility not confirmed by this renderer; omitted)",
@@ -77,7 +93,6 @@ def render(role: CanonicalRole) -> RenderedTarget:
             "runtime_preferences (no confirmed frontmatter equivalent; expressed as prose)",
             "delegation (orchestrator concern; not a custom-agent frontmatter field)",
         ),
-        warnings=(
-            "This is a Copilot custom agent, not .github/copilot-instructions.md and not inline autocomplete configuration.",
-        ),
+        warnings=_CUSTOM_AGENT_NOTE + (ADVISORY_SCOPE_WARNINGS if scope else ()),
+        scope_metadata=scope_metadata(role, scope, _ADVISORY_SANDBOX) if scope else {},
     )

@@ -10,8 +10,10 @@ from pathlib import Path
 from .generator import ProposalError, proposal_diff, write_proposal
 from .models import to_jsonable
 from .multi_cli import (
+    ROLES,
     MultiCliError,
     TARGETS,
+    build_scope,
     compare_proposal,
     role_ids,
     validate_proposal,
@@ -59,15 +61,52 @@ def _parser() -> argparse.ArgumentParser:
     render.add_argument("--targets", default=None, help=f"Comma-separated subset of: {', '.join(TARGETS)} (default: all)")
     render.add_argument("--output", required=True, help="Proposal directory (must not exist and be outside this repo)")
     render.add_argument("--compare-to", default=None, help="Destination repo to compare against, strictly read-only")
+    render.add_argument(
+        "--allow-path",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="[write roles] Repeatable repo-relative path the agent may edit (advisory scope)",
+    )
+    render.add_argument(
+        "--block-path",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="[write roles] Repeatable repo-relative path to exclude; blocked overrides allowed",
+    )
+    render.add_argument(
+        "--scope-description",
+        default=None,
+        help="[write roles] Non-empty description of the approved brief/scope",
+    )
 
     subparsers.add_parser("roles", help="[experimental] List available canonical roles")
     subparsers.add_parser("targets", help="[experimental] List supported render targets")
     return parser
 
 
+def _build_render_scope(args):
+    """Build an InvocationScope from CLI flags, enforcing the per-role scope contract."""
+    role = ROLES.get(args.role)
+    scope_flags = bool(args.allow_path or args.block_path or args.scope_description)
+    if role is not None and role.constraints.require_explicit_scope:
+        if not args.allow_path or not (args.scope_description or "").strip():
+            raise MultiCliError(
+                f"{role.id} requires at least one --allow-path and a non-empty --scope-description"
+            )
+        return build_scope(args.scope_description, args.allow_path, args.block_path)
+    if role is not None and scope_flags:
+        raise MultiCliError(
+            f"role {args.role!r} is read-only and does not accept --allow-path, --block-path, or --scope-description"
+        )
+    return None
+
+
 def _run_render_role(args) -> int:
     targets = _parse_targets(args.targets)
-    files = write_role_proposal(args.role, targets, args.output, protected_root=Path.cwd())
+    scope = _build_render_scope(args)
+    files = write_role_proposal(args.role, targets, args.output, protected_root=Path.cwd(), scope=scope)
     issues = validate_proposal(args.output)
     if issues:
         raise MultiCliError("Generated proposal failed validation: " + "; ".join(issues))

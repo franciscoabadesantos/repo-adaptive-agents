@@ -17,12 +17,12 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import CanonicalRole, RenderedTarget
+from .models import CanonicalRole, InvocationScope, RenderedTarget
 from .renderers import RENDERERS, TARGETS, renderer_versions
 from .renderers.common import bullet_list
 from .roles import ROLES
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 GENERATOR_VERSION = "0.1.0"
 MANIFEST_NAME = "manifest.json"
 
@@ -83,19 +83,39 @@ def _shared_fragment(role: CanonicalRole) -> str:
     )
 
 
-def render_role(role_id: str, targets: list[str] | None = None) -> tuple[dict[str, str], dict]:
+def _validate_scope_for_role(role: CanonicalRole, scope: InvocationScope | None) -> None:
+    """Enforce the scope contract before any file is produced."""
+    if role.constraints.require_explicit_scope and scope is None:
+        raise MultiCliError(
+            f"{role.id} requires an explicit invocation scope (at least one allowed path and a description)"
+        )
+    if scope is not None and role.constraints.read_only:
+        raise MultiCliError(f"read-only role {role.id!r} does not accept an invocation scope")
+    if scope is not None and not scope.allowed_paths:
+        raise MultiCliError(f"{role.id} requires at least one allowed path in its scope")
+    if scope is not None and not scope.description.strip():
+        raise MultiCliError(f"{role.id} requires a non-empty scope description")
+
+
+def render_role(
+    role_id: str,
+    targets: list[str] | None = None,
+    scope: InvocationScope | None = None,
+) -> tuple[dict[str, str], dict]:
     """Render a role for the requested targets.
 
     Returns ``(files, manifest)`` where ``files`` maps proposal-relative POSIX paths to
-    content (including ``manifest.json``) and ``manifest`` is the manifest as a dict.
+    content (including ``manifest.json``) and ``manifest`` is the manifest as a dict. A
+    write role requires an explicit ``scope``; a read-only role must not be given one.
     """
     role = get_role_or_error(role_id)
+    _validate_scope_for_role(role, scope)
     resolved = resolve_targets(targets)
 
     files: dict[str, str] = {}
     rendered: dict[str, RenderedTarget] = {}
     for target in resolved:
-        result = RENDERERS[target].render(role)
+        result = RENDERERS[target].render(role, scope)
         rendered[target] = result
         files.update(result.files)
 
@@ -136,6 +156,9 @@ def _build_manifest(
                 name: {"path": path, "sha256": _sha256(files[path])}
                 for name, path in sorted(result.artifacts.items())
             }
+        if result.scope_metadata:
+            # Merge scope blocks (sandbox, write_scope, destructive_actions, …) as siblings.
+            targets_section[target].update(result.scope_metadata)
         warnings.extend(result.warnings)
 
     return {
@@ -165,12 +188,14 @@ def write_proposal(
     output_dir: str | Path,
     *,
     protected_root: str | Path | None = None,
+    scope: InvocationScope | None = None,
 ) -> list[Path]:
     """Render a role and write an atomic proposal directory.
 
     ``protected_root`` (when given) must not contain ``output``; this preserves the
     "never write inside the analyzed repository" guarantee. The output must not already
-    exist and is written atomically via a temporary sibling and ``os.replace``.
+    exist and is written atomically via a temporary sibling and ``os.replace``. A write
+    role requires an explicit ``scope``; the scope is validated before anything is written.
     """
     output = Path(output_dir).expanduser().resolve()
     if protected_root is not None:
@@ -180,7 +205,7 @@ def write_proposal(
     if output.exists() or output.is_symlink():
         raise MultiCliError(f"Proposal output already exists; refusing to overwrite: {output}")
 
-    files, _ = render_role(role_id, targets)
+    files, _ = render_role(role_id, targets, scope)
     _assert_no_absolute_paths(files)
 
     output.parent.mkdir(parents=True, exist_ok=True)
