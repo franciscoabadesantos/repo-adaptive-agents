@@ -1,0 +1,10 @@
+openapi: 3.0.0
+info:
+  title: Items API
+  version: 0.1.0
+paths:
+  /items/{item_id}:
+    get:
+      responses:
+        '200':
+          description: ok

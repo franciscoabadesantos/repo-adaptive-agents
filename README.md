@@ -1,7 +1,7 @@
 # repo-adaptive-agents
 
-Deterministic bootstrapper that analyzes a local repository and proposes a tailored
-Codex multi-agent team. The MVP is Python 3.11+ and uses only the standard library at
+Deterministic bootstrapper that analyzes a local repository and proposes tailored Codex
+and multi-CLI agent teams. The MVP is Python 3.11+ and uses only the standard library at
 runtime.
 
 ## Architecture
@@ -289,6 +289,54 @@ into a target repo, sync with HOME, install or detect CLIs, alter `.codex/config
 generate `CLAUDE.md` or `.github/copilot-instructions.md`, or make any network call. The
 Copilot output is a **custom agent**, not inline-autocomplete configuration and not a
 replacement for `copilot-instructions`; the manifest states this explicitly.
+
+### End-to-end team proposal: `propose-team`
+
+`propose-team` profiles a repository, recommends a **read-only** team with explicit
+deterministic rules, and renders every selected role to the requested targets — one
+sub-proposal per role plus an aggregated manifest.
+
+```sh
+PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-team ./my-repo \
+  --targets skill,codex,claude,copilot \
+  --output /tmp/my-team
+```
+
+Roles are chosen by **explicit, deterministic rules** over the existing profiler's signals
+(no LLM, no scoring, no learning):
+
+- `repo_explorer` — any non-empty repository;
+- `api_contract_agent` — an API surface detected by the profiler (HTTP/RPC/event/schema);
+- `browser_qa` and `accessibility_performance_reviewer` — a detected frontend web project
+  (the accessibility role never claims that a browser, Lighthouse, or performance tool was
+  run — those remain runtime checks it flags as required);
+- `design_director` — strong structural design signals only (a `.storybook` directory, a
+  `tailwind.config.*`, a `design-tokens` directory, or a design-token file), never vague
+  README wording;
+- `independent_reviewer` — added as the **consolidator** when more than one specialized
+  role is selected;
+- `implementation_agent` — **never** selected automatically; it is always listed under
+  `excluded_roles` because it requires an explicit brief and write scope. `propose-team`
+  rejects it in `--include-role`.
+
+`--include-role` (read-only roles only) forces a role in; `--exclude-role` drops one; their
+order never changes the output. `--compare-to DIR` performs a strictly read-only comparison
+of the rendered roles against a destination repo and records additions/changes/unchanged in
+the manifest. The output layout:
+
+```
+OUTPUT/
+  manifest.json            # aggregated: profile summary, selected/excluded roles with
+  team/AGENTS.fragment.md   # reasons+evidence+confidence, execution plan, per-role hashes
+  roles/<role-id>/          # a full per-role proposal (manifest.json + portable/codex/…)
+```
+
+The **execution plan** is data only — no agent is run: `repo_explorer` first, specialized
+read-only roles in a parallel group, and `independent_reviewer` consolidating last when
+selected. Enforcement differs by target exactly as for `render-role` (Codex sandbox vs.
+advisory Skill/Claude/Copilot), and browser/design tooling is never executed. Generation is
+atomic, byte-for-byte deterministic (no timestamps), writes only under `--output`, and never
+touches the analyzed repository, `.codex/config.toml`, or HOME.
 
 ### Security note
 
