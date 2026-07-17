@@ -21,9 +21,10 @@ from .models import CanonicalRole, InvocationScope, RenderedTarget
 from .renderers import RENDERERS, TARGETS, renderer_versions
 from .renderers.common import bullet_list
 from .roles import ROLES
+from repo_adaptive_agents import __version__
 
+GENERATOR_VERSION = __version__
 SCHEMA_VERSION = 2
-GENERATOR_VERSION = "0.1.0"
 MANIFEST_NAME = "manifest.json"
 
 # Buckets are the first path segment of every generated file; used to map a proposal file
@@ -197,6 +198,22 @@ def write_proposal(
     exist and is written atomically via a temporary sibling and ``os.replace``. A write
     role requires an explicit ``scope``; the scope is validated before anything is written.
     """
+    files, _ = render_role(role_id, targets, scope)
+    return write_files_atomically(output_dir, files, protected_root=protected_root)
+
+
+def write_files_atomically(
+    output_dir: str | Path,
+    files: dict[str, str],
+    *,
+    protected_root: str | Path | None = None,
+) -> list[Path]:
+    """Write ``files`` (proposal-relative POSIX paths) atomically to a fresh output dir.
+
+    Enforces the shared safety invariants: the output must be outside ``protected_root``,
+    must not already exist, and must contain no absolute paths. Writes to a temporary
+    sibling and renames into place, cleaning up on any failure.
+    """
     output = Path(output_dir).expanduser().resolve()
     if protected_root is not None:
         root = Path(protected_root).expanduser().resolve()
@@ -205,9 +222,7 @@ def write_proposal(
     if output.exists() or output.is_symlink():
         raise MultiCliError(f"Proposal output already exists; refusing to overwrite: {output}")
 
-    files, _ = render_role(role_id, targets, scope)
     _assert_no_absolute_paths(files)
-
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}.tmp-", dir=output.parent))
     try:

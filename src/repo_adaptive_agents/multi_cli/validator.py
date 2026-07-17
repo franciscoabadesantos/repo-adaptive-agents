@@ -223,3 +223,54 @@ def validate_proposal(proposal_dir: str | Path) -> list[str]:
             else:
                 issues.extend(validator(path))
     return issues
+
+
+def _declared_team_files(manifest: dict) -> list[dict]:
+    declared: list[dict] = []
+    for section in manifest.get("roles", {}).values():
+        declared.append(section.get("manifest", {}))
+        declared.extend(section.get("files", []))
+        declared.extend(section.get("artifacts", {}).values())
+    declared.extend(manifest.get("team", {}).get("files", []))
+    return [entry for entry in declared if entry]
+
+
+def validate_team_proposal(output_dir: str | Path) -> list[str]:
+    """Validate an aggregated team proposal and each per-role sub-proposal.
+
+    Checks the aggregated manifest's declared files exist with matching hashes and relative
+    paths, then runs the single-role validator on every ``roles/<role-id>/`` subtree.
+    """
+    output = Path(output_dir).expanduser().resolve()
+    manifest_path = output / "manifest.json"
+    if not manifest_path.is_file():
+        return ["team manifest: missing manifest.json"]
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        return [f"team manifest: invalid JSON ({error})"]
+
+    issues: list[str] = []
+    if manifest.get("kind") != "team":
+        issues.append("team manifest: kind is not 'team'")
+
+    for entry in _declared_team_files(manifest):
+        relative = entry.get("path", "")
+        if not relative or relative.startswith("/") or ".." in Path(relative).parts:
+            issues.append(f"team manifest: non-relative or unsafe path {relative!r}")
+            continue
+        file_path = output / relative
+        if not file_path.is_file():
+            issues.append(f"team manifest: declared file missing {relative}")
+            continue
+        if _sha256(file_path.read_text(encoding="utf-8")) != entry.get("sha256"):
+            issues.append(f"team manifest: hash mismatch for {relative}")
+
+    for section in manifest.get("compare", {}).values() if isinstance(manifest.get("compare"), dict) else []:
+        for path in section:
+            if isinstance(path, str) and path.startswith("/"):
+                issues.append(f"team manifest: absolute path in compare result {path!r}")
+
+    for role_id in manifest.get("roles", {}):
+        issues.extend(f"roles/{role_id}: {issue}" for issue in validate_proposal(output / "roles" / role_id))
+    return issues

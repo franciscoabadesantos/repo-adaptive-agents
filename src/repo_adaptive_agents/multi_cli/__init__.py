@@ -28,7 +28,9 @@ from .models import (
 from .renderers import TARGETS
 from .roles import ROLES, get_role, role_ids
 from .scope import ScopeError, build_scope, normalize_path
-from .validator import validate_proposal
+from .team import RoleRecommendation, TeamError, TeamPlan, recommend_team
+from .team_generator import render_team, write_team_proposal
+from .validator import validate_proposal, validate_team_proposal
 
 __all__ = [
     "CanonicalRole",
@@ -40,17 +42,24 @@ __all__ = [
     "ROLES",
     "RenderedTarget",
     "RoleConstraints",
+    "RoleRecommendation",
     "RuntimePreferences",
     "SCHEMA_VERSION",
     "ScopeError",
     "TARGETS",
+    "TeamError",
+    "TeamPlan",
     "build_scope",
     "compare_proposal",
     "get_role",
     "normalize_path",
+    "recommend_team",
     "render_role",
+    "render_team",
     "resolve_targets",
     "role_ids",
     "validate_proposal",
+    "validate_team_proposal",
     "write_proposal",
+    "write_team_proposal",
 ]
