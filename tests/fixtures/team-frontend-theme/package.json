@@ -1,0 +1,4 @@
+{
+  "name": "team-frontend-theme",
+  "dependencies": { "vue": "^3.4.0", "primevue": "^3.50.0" }
+}

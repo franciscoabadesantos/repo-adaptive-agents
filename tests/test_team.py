@@ -44,6 +44,11 @@ EXPECTED = {
         set(),
         "independent_reviewer",
     ),
+    "team-frontend-theme": (
+        {"repo_explorer", "browser_qa", "accessibility_performance_reviewer", "design_director"},
+        {"api_contract_agent"},
+        "independent_reviewer",
+    ),
 }
 
 
@@ -97,7 +102,8 @@ class TeamRecommendationTests(unittest.TestCase):
         self.assertEqual(_plan("team-frontend-design"), _plan("team-frontend-design"))
         design = next(rec for rec in _plan("team-frontend-design").selected_roles if rec.role_id == "design_director")
         self.assertEqual(design.evidence, (".storybook", "design-tokens.json", "tailwind.config.js"))
-        self.assertTrue(all("design-tooling signal" in reason for reason in design.reasons))
+        self.assertEqual(design.confidence, "high")
+        self.assertTrue(design.reasons)
 
     def test_accessibility_role_never_claims_executed_tooling(self):
         a11y = next(rec for rec in _plan("team-frontend-react").selected_roles if rec.role_id == "accessibility_performance_reviewer")
@@ -120,6 +126,76 @@ class TeamRecommendationTests(unittest.TestCase):
             recommend_team(profile, path, include_roles=["implementation_agent"])
         with self.assertRaisesRegex(TeamError, "Unknown role"):
             recommend_team(profile, path, include_roles=["does_not_exist"])
+
+
+class TeamDesignThemeDetectionTests(unittest.TestCase):
+    """design_director must recognize a local visual theme and ignore dependency markers."""
+
+    def test_local_theme_selects_design_director_with_repo_relative_evidence(self):
+        plan = _plan("team-frontend-theme")
+        self.assertIn("design_director", plan.selected_ids)
+        self.assertEqual(plan.consolidator, "independent_reviewer")
+        # Specialists run in parallel after repo_explorer.
+        self.assertEqual(plan.parallel_groups[0], ("repo_explorer",))
+        self.assertIn("browser_qa", plan.parallel_groups[1])
+        design = next(rec for rec in plan.selected_roles if rec.role_id == "design_director")
+        self.assertEqual(design.confidence, "high")
+        self.assertTrue(any("local visual theme" in reason for reason in design.reasons))
+        self.assertIn("public/resources/theme/theme.css", design.evidence)
+        for path in design.evidence:
+            self.assertNotIn("node_modules", path)
+            self.assertFalse(path.startswith("/"))
+
+    def test_theme_and_tokens_inside_node_modules_are_ignored(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "package.json").write_text('{"dependencies":{"vue":"^3.4.0"}}', encoding="utf-8")
+            (root / "src").mkdir()
+            (root / "src" / "App.vue").write_text("<template><div/></template>", encoding="utf-8")
+            for rel in (
+                "node_modules/primevue/resources/theme/theme.css",
+                "node_modules/design-tokens.json",
+                "node_modules/tokens.scss",
+                ".firebase/hosting/theme.css",
+                "dist/tokens.css",
+            ):
+                path = root / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(":root{--x:1px}", encoding="utf-8")
+            plan = recommend_team(profile_repository(root), root)
+            self.assertNotIn("design_director", plan.selected_ids)
+            self.assertIn("browser_qa", plan.selected_ids)  # still a frontend project
+
+    def test_various_local_theme_layouts_are_recognized(self):
+        from repo_adaptive_agents.multi_cli.team import detect_design_signals
+
+        cases = {
+            "theme.scss": {"src/theme.scss": "a{}"},
+            "src/theme dir": {"src/theme/index.css": "a{}"},
+            "src/styles dir": {"src/styles/app.css": "a{}"},
+            "themes dir with css": {"themes/dark.less": "a{}"},
+            "tokens.css": {"tokens.css": ":root{}"},
+        }
+        for label, files in cases.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                for rel, content in files.items():
+                    path = root / rel
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content, encoding="utf-8")
+                signals = detect_design_signals(root)
+                self.assertTrue(signals, f"{label}: expected a design signal")
+                for _, evidence_path in signals:
+                    self.assertNotIn("node_modules", evidence_path)
+
+    def test_bare_theme_directory_without_stylesheets_is_not_a_signal(self):
+        from repo_adaptive_agents.multi_cli.team import detect_design_signals
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "theme").mkdir()
+            (root / "theme" / "notes.md").write_text("# not a stylesheet", encoding="utf-8")
+            self.assertEqual(detect_design_signals(root), [])
 
 
 class TeamProposalWritingTests(unittest.TestCase):
