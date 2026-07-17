@@ -67,11 +67,34 @@ class TeamPlan:
 
 # --- Supplemental design-tooling detection (filenames only, deterministic) --------------
 
+# Directories that must never contribute design signals: the profiler's ignore set plus
+# dependency/build/output trees whose token/theme files are false markers. This is what
+# keeps a node_modules ``theme.css`` from ever selecting design_director.
+_DESIGN_IGNORED_DIRS = frozenset(IGNORED_DIRS) | {
+    ".firebase", "out", ".svelte-kit", ".angular", "storybook-static", ".parcel-cache",
+    ".turbo", ".nuxt", ".output", ".cache-loader", ".yarn", "bower_components",
+}
+# Extensions that make a ``tokens.*`` / ``design-tokens.*`` file a genuine design signal
+# (avoids matching, e.g., ``tokens.py``/``tokens.txt`` credential files).
+_TOKEN_EXTENSIONS = ("css", "scss", "sass", "less", "styl", "json", "js", "ts", "cjs", "mjs", "yaml", "yml")
+_STYLE_EXTENSIONS = ("css", "scss", "sass", "less", "styl")
+# Directory paths (repo-relative) that indicate a local visual theme / style system.
+_THEME_DIR_PATHS = ("src/theme", "src/styles", "public/resources/theme")
+_THEME_DIR_NAMES = ("theme", "themes")
+
+# Explicit, deterministic reasons per design signal label.
+_DESIGN_LABEL_REASONS = {
+    "storybook": "Detected a local Storybook setup (component library) to review for consistency.",
+    "css_framework": "Detected a local CSS framework configuration to review for consistent usage.",
+    "design_tokens": "Detected local design-token definitions (colors, spacing, typography).",
+    "visual_theme": "Detected a local visual theme: global styles, typography, breakpoints, and color custom properties.",
+}
+
 
 def _iter_repo(repo_root: Path):
     """Yield (relative_dir_posix, dirnames, filenames), pruning ignored directories."""
     for dirpath, dirnames, filenames in os.walk(repo_root):
-        dirnames[:] = sorted(d for d in dirnames if d not in IGNORED_DIRS)
+        dirnames[:] = sorted(d for d in dirnames if d not in _DESIGN_IGNORED_DIRS)
         rel = Path(dirpath).relative_to(repo_root).as_posix()
         yield ("" if rel == "." else rel), dirnames, sorted(filenames)
 
@@ -80,31 +103,68 @@ def _is_tailwind_config(name: str) -> bool:
     return name in {f"tailwind.config.{ext}" for ext in ("js", "cjs", "mjs", "ts")}
 
 
+def _stem_ext(name: str) -> tuple[str, str]:
+    stem, _, ext = name.rpartition(".")
+    return (stem.lower(), ext.lower()) if stem else (name.lower(), "")
+
+
 def _is_design_token_file(name: str) -> bool:
-    return name.endswith(".tokens.json") or name in {"design-tokens.json", "tokens.css", "tokens.scss"}
+    stem, ext = _stem_ext(name)
+    if ext not in _TOKEN_EXTENSIONS:
+        return name.endswith(".tokens.json")
+    return stem in ("tokens", "design-tokens") or stem.endswith(".tokens")
+
+
+def _is_theme_file(name: str) -> bool:
+    stem, ext = _stem_ext(name)
+    return stem == "theme" and ext in _STYLE_EXTENSIONS
 
 
 def detect_design_signals(repo_root: str | Path) -> list[tuple[str, str]]:
-    """Return sorted ``(label, repo-relative-path)`` design markers found lexically.
+    """Return sorted ``(label, repo-relative-path)`` local design markers found lexically.
 
-    Markers are intentionally strong and unambiguous: a ``.storybook`` directory, a
-    ``tailwind.config.*`` file, a ``design-tokens`` directory, or a design-token file.
+    Recognized strong local signals (dependency, build, and output trees are ignored, so a
+    ``node_modules`` theme/token file never counts):
+
+    - ``.storybook`` directory (component library);
+    - ``tailwind.config.*`` (CSS framework);
+    - ``design-tokens``/``tokens`` files or a ``design-tokens`` directory (design tokens);
+    - a local visual theme: ``theme.{css,scss,sass,less}``, a ``theme``/``themes`` directory
+      containing stylesheets, or ``src/theme/``, ``src/styles/``, ``public/resources/theme/``.
     """
     root = Path(repo_root)
     found: list[tuple[str, str]] = []
+    style_dirs: set[str] = set()  # dirs (repo-relative) that directly contain a stylesheet
+    theme_like_dirs: list[tuple[str, str]] = []  # (label, dir path) pending a stylesheet
+
     for rel, dirnames, filenames in _iter_repo(root):
+        for name in filenames:
+            marker_path = f"{rel}/{name}" if rel else name
+            _, ext = _stem_ext(name)
+            if ext in _STYLE_EXTENSIONS and rel:
+                style_dirs.add(rel)
+            if _is_tailwind_config(name):
+                found.append(("css_framework", marker_path))
+            elif _is_design_token_file(name):
+                found.append(("design_tokens", marker_path))
+            elif _is_theme_file(name):
+                found.append(("visual_theme", marker_path))
         for dirname in dirnames:
             marker_path = f"{rel}/{dirname}" if rel else dirname
             if dirname == ".storybook":
                 found.append(("storybook", marker_path))
             elif dirname == "design-tokens":
                 found.append(("design_tokens", marker_path))
-        for name in filenames:
-            marker_path = f"{rel}/{name}" if rel else name
-            if _is_tailwind_config(name):
-                found.append(("css_framework", marker_path))
-            elif _is_design_token_file(name):
-                found.append(("design_tokens", marker_path))
+            elif marker_path in _THEME_DIR_PATHS:
+                found.append(("visual_theme", marker_path))
+            elif dirname in _THEME_DIR_NAMES:
+                theme_like_dirs.append(("visual_theme", marker_path))
+
+    # A bare ``theme``/``themes`` directory only counts if it actually holds stylesheets.
+    for label, dir_path in theme_like_dirs:
+        if any(style_dir == dir_path or style_dir.startswith(dir_path + "/") for style_dir in style_dirs):
+            found.append((label, dir_path))
+
     return sorted(set(found), key=lambda item: (item[1], item[0]))
 
 
@@ -188,8 +248,8 @@ def recommend_team(
         labels = sorted({label for label, _ in design_markers})
         selected[DESIGN_DIRECTOR] = RoleRecommendation(
             DESIGN_DIRECTOR,
-            tuple(f"Detected design-tooling signal: {label}." for label in labels),
-            tuple(path for _, path in design_markers),
+            tuple(_DESIGN_LABEL_REASONS[label] for label in labels),
+            tuple(sorted({path for _, path in design_markers})),
             "high",
         )
 

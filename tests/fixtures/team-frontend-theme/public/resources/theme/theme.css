@@ -1,0 +1,15 @@
+:root {
+  --color-primary: #1b4079;
+  --color-surface: #ffffff;
+  --font-family-base: "Inter", system-ui, sans-serif;
+  --font-size-base: 16px;
+}
+
+body {
+  font-family: var(--font-family-base);
+  color: var(--color-primary);
+}
+
+@media (max-width: 768px) {
+  body { --font-size-base: 14px; }
+}
