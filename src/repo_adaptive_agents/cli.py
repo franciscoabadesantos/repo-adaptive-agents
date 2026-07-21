@@ -142,7 +142,8 @@ def _parser() -> argparse.ArgumentParser:
         help="Preview or explicitly install a validated adapter bundle into a local repository",
         description=(
             "Plan installation of a generated adapter bundle into a local repository. "
-            "Preview is the default and writes nothing. --apply creates additions only; "
+            "Preview is the default and writes nothing. --apply together with "
+            "--confirm-install creates additions only; "
             "any differing file, symlink, or invalid parent blocks the entire operation."
         ),
     )
@@ -152,6 +153,14 @@ def _parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help="Explicitly create planned additions; existing files are never overwritten",
+    )
+    install.add_argument(
+        "--confirm-install",
+        action="store_true",
+        help=(
+            "Attest that the user reviewed the install preview and separately approved "
+            "applying that exact plan"
+        ),
     )
 
     subparsers.add_parser("roles", help="[experimental] List available canonical roles")
@@ -250,6 +259,13 @@ def _run_adapter_options(args) -> int:
 
 
 def _run_install_adapters(args) -> int:
+    if args.confirm_install and not args.apply:
+        raise AdapterInstallError("--confirm-install is valid only together with --apply")
+    if args.apply and not args.confirm_install:
+        raise AdapterInstallError(
+            "--apply requires --confirm-install after the user reviewed the exact preview "
+            "and separately approved installation"
+        )
     plan = plan_adapter_install(args.bundle, args.repo)
     print(
         f"Install plan: {len(plan.additions)} addition(s), "
@@ -259,7 +275,11 @@ def _run_install_adapters(args) -> int:
         detail = f" — {entry.reason}" if entry.reason else ""
         print(f"{entry.status}: {entry.destination_path}{detail}")
     if not args.apply:
-        print("Preview only; no files were written. Use --apply to install additions.")
+        print("Preview only; no files were written.")
+        print(
+            "STOP: present this exact plan to the user and request separate installation "
+            "approval. Do not apply it in the same turn as role/target selection."
+        )
         return 0
     result = apply_adapter_install(args.bundle, args.repo)
     print(f"Installed {len(result.created)} file(s); {len(result.unchanged)} already unchanged.")

@@ -195,7 +195,7 @@ class InstallCliTests(unittest.TestCase):
             code = main(argv)
         return code, stdout.getvalue(), stderr.getvalue()
 
-    def test_cli_previews_by_default_and_requires_apply_to_write(self):
+    def test_cli_previews_by_default_and_requires_separate_install_confirmation(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             bundle = _bundle(root)
@@ -208,14 +208,38 @@ class InstallCliTests(unittest.TestCase):
             self.assertEqual(code, 0, error)
             self.assertIn("1 addition(s)", preview)
             self.assertIn("Preview only; no files were written", preview)
+            self.assertIn("request separate installation approval", preview)
+            self.assertEqual(_files(destination), {})
+
+            code, unconfirmed, error = self._run([
+                "install-adapters", str(bundle), str(destination), "--apply"
+            ])
+            self.assertEqual(code, 2)
+            self.assertEqual(unconfirmed, "")
+            self.assertIn("requires --confirm-install", error)
             self.assertEqual(_files(destination), {})
 
             code, applied, error = self._run([
-                "install-adapters", str(bundle), str(destination), "--apply"
+                "install-adapters", str(bundle), str(destination), "--apply", "--confirm-install"
             ])
             self.assertEqual(code, 0, error)
             self.assertIn("Installed 1 file(s)", applied)
             self.assertIn(".agents/skills/repo-explorer/SKILL.md", _files(destination))
+
+    def test_install_confirmation_without_apply_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = _bundle(root)
+            destination = root / "repo"
+            destination.mkdir()
+
+            code, stdout, error = self._run([
+                "install-adapters", str(bundle), str(destination), "--confirm-install"
+            ])
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("valid only together with --apply", error)
+            self.assertEqual(_files(destination), {})
 
 
 if __name__ == "__main__":

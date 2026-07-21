@@ -308,7 +308,8 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli render-role implementation_ag
 The rendering commands deliberately do not apply changes, sync with HOME, install or detect
 CLIs, alter `.codex/config.toml`, generate `CLAUDE.md` or
 `.github/copilot-instructions.md`, or make network calls. The separate local installer
-described below can create reviewed adapter files only after explicit `--apply`.
+described below can create reviewed adapter files only after explicit `--apply` and a
+separate installation confirmation.
 
 ### Explicit adapter bundle: `propose-adapters`
 
@@ -340,7 +341,9 @@ The agent-led adoption flow has two separate gates:
 1. run `profile`, `plan`, and `adapter-options`; present its two unresolved questions and
    ask the user to choose roles and targets;
 2. only after that answer, run `propose-adapters --confirm-selection`, preview installation,
-   and request a second approval before `install-adapters --apply`.
+   show the exact additions, and stop to request a second approval;
+3. only after the user separately approves that exact preview, run
+   `install-adapters --apply --confirm-install`.
 
 The confirmation flag is a caller attestation, not identity proof. Recommendations, CLI
 arguments, capability matches, and repository facts must never be described as user choices
@@ -378,8 +381,13 @@ After reviewing the additions, installation requires an explicit flag:
 
 ```sh
 PYTHONPATH=src python3 -m repo_adaptive_agents.cli install-adapters \
-  /tmp/my-adapters /path/to/repository --apply
+  /tmp/my-adapters /path/to/repository --apply --confirm-install
 ```
+
+`--confirm-selection` covers only the earlier choice of roles and targets. It is not
+installation approval. `--confirm-install` is a separate caller attestation that the user
+reviewed the exact preview and approved applying it in a later interaction. The preview
+prints an explicit stop instruction so an agent does not collapse both decisions into one.
 
 The installer validates the complete bundle, maps only target adapter files, and excludes
 bundle manifests, profile reports, and shared fragments. Existing identical files are left
