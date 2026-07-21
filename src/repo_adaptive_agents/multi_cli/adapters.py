@@ -13,6 +13,13 @@ class AdapterSelectionError(ValueError):
 
 
 @dataclass(frozen=True)
+class AdapterOption:
+    role_id: str
+    matched_available_roles: tuple[str, ...]
+    matched_capabilities: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class AdapterSelection:
     role_id: str
     matched_available_roles: tuple[str, ...]
@@ -45,6 +52,28 @@ def _matches(plan: InfrastructurePlan, role_id: str) -> tuple[tuple[str, ...], t
     return tuple(role_names), tuple(sorted(capabilities))
 
 
+def list_adapter_options(
+    plan: InfrastructurePlan,
+) -> tuple[tuple[AdapterOption, ...], tuple[AdapterOption, ...], tuple[str, ...]]:
+    """Separate deterministic matches from preference-based adapter options."""
+    options = tuple(
+        AdapterOption(role_id, *_matches(plan, role_id))
+        for role_id in ROLES
+        if role_id != IMPLEMENTATION_AGENT.id
+    )
+    matched = tuple(item for item in options if item.matched_available_roles)
+    optional = tuple(item for item in options if not item.matched_available_roles)
+    mapped_available = {
+        name
+        for item in options
+        for name in item.matched_available_roles
+    }
+    unmapped = tuple(
+        role.name for role in plan.available_roles if role.name not in mapped_available
+    )
+    return matched, optional, unmapped
+
+
 def select_adapters(
     plan: InfrastructurePlan,
     requested_role_ids: list[str] | tuple[str, ...],
@@ -66,20 +95,16 @@ def select_adapters(
             "implementation_agent requires an explicit write scope; use render-role directly"
         )
 
-    matches = {role_id: _matches(plan, role_id) for role_id in ROLES if role_id != IMPLEMENTATION_AGENT.id}
+    matched_options, optional_options, unmapped = list_adapter_options(plan)
+    matches = {
+        item.role_id: (item.matched_available_roles, item.matched_capabilities)
+        for item in matched_options + optional_options
+    }
     eligible = tuple(role_id for role_id in ROLES if matches.get(role_id, ((), ()))[0])
     selected = tuple(
         AdapterSelection(role_id, *matches[role_id])
         for role_id in ROLES
         if role_id in requested
-    )
-    mapped_available = {
-        name
-        for role_names, _capabilities in matches.values()
-        for name in role_names
-    }
-    unmapped = tuple(
-        role.name for role in plan.available_roles if role.name not in mapped_available
     )
     return AdapterPlan(
         selected_adapters=selected,

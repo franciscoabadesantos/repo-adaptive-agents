@@ -8,7 +8,14 @@ installer requires explicit application and never overwrites existing files or w
 from __future__ import annotations
 
 from .adapter_generator import render_adapter_bundle, write_adapter_bundle
-from .adapters import AdapterPlan, AdapterSelection, AdapterSelectionError, select_adapters
+from .adapters import (
+    AdapterOption,
+    AdapterPlan,
+    AdapterSelection,
+    AdapterSelectionError,
+    list_adapter_options,
+    select_adapters,
+)
 from .deployment import (
     AdapterInstallError,
     InstallEntry,
@@ -41,6 +48,7 @@ from .scope import ScopeError, build_scope, normalize_path
 from .validator import validate_adapter_bundle, validate_proposal
 
 __all__ = [
+    "AdapterOption",
     "AdapterPlan",
     "AdapterSelection",
     "AdapterSelectionError",
@@ -65,6 +73,7 @@ __all__ = [
     "build_scope",
     "compare_proposal",
     "get_role",
+    "list_adapter_options",
     "normalize_path",
     "plan_adapter_install",
     "render_adapter_bundle",

@@ -18,6 +18,7 @@ from .multi_cli import (
     apply_adapter_install,
     build_scope,
     compare_proposal,
+    list_adapter_options,
     plan_adapter_install,
     role_ids,
     validate_adapter_bundle,
@@ -128,6 +129,14 @@ def _parser() -> argparse.ArgumentParser:
     adapters.add_argument("--output", required=True, help="Proposal directory (must not exist and be outside this repo)")
     adapters.add_argument("--compare-to", default=None, help="Destination repo to compare against, strictly read-only")
 
+    adapter_options = subparsers.add_parser(
+        "adapter-options",
+        help="Report matched adapters, preference-based options, and harness targets without writing",
+    )
+    adapter_options.add_argument("repo", help="Local repository path to profile")
+    adapter_options.add_argument("--request", default="", help="Optional user request to shape recommendations")
+    adapter_options.add_argument("--evidence-path-limit", type=int, default=25, help="Maximum paths shown per evidence item")
+
     install = subparsers.add_parser(
         "install-adapters",
         help="Preview or explicitly install a validated adapter bundle into a local repository",
@@ -212,6 +221,34 @@ def _run_propose_adapters(args) -> int:
     return 0
 
 
+def _run_adapter_options(args) -> int:
+    profile = profile_repository(args.repo, evidence_path_limit=args.evidence_path_limit)
+    infrastructure = recommend_infrastructure(profile, args.request)
+    matched, optional, unmapped = list_adapter_options(infrastructure)
+    payload = {
+        "status": "requires_user_selection",
+        "available_targets": list(TARGETS),
+        "matched_adapters": [to_jsonable(item) for item in matched],
+        "optional_adapters": [to_jsonable(item) for item in optional],
+        "unmapped_available_roles": list(unmapped),
+        "questions": [
+            {
+                "id": "harness_targets",
+                "question": "Which harness targets should be installed?",
+                "options": list(TARGETS),
+            },
+            {
+                "id": "adapter_roles",
+                "question": "Which matched and optional adapter roles should be installed?",
+                "options": [item.role_id for item in matched + optional],
+            },
+        ],
+        "next_action": "Ask the user to select roles and targets before propose-adapters.",
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
 def _run_install_adapters(args) -> int:
     plan = plan_adapter_install(args.bundle, args.repo)
     print(
@@ -242,6 +279,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_render_role(args)
         if args.command == "propose-adapters":
             return _run_propose_adapters(args)
+        if args.command == "adapter-options":
+            return _run_adapter_options(args)
         if args.command == "install-adapters":
             return _run_install_adapters(args)
 

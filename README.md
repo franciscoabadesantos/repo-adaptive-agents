@@ -62,12 +62,14 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli plan /path/to/repository
 Generate a portable proposal:
 
 ```sh
+proposal_parent=$(mktemp -d /tmp/repo-adaptive.XXXXXX)
 PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose /path/to/repository \
-  --output /tmp/repo-adaptive-proposal
+  --output "$proposal_parent/proposal"
 ```
 
 `--output` is required. Proposal output must be outside the analyzed repository and must
-not already exist. The generated directory contains:
+not already exist. For temporary output, create a private parent directory and use a new
+child path as above; do not use `mktemp -u`. The generated directory contains:
 
 - `profile.json` — detected facts and evidence;
 - `infrastructure-plan.json` — repository contracts, capabilities, available roles,
@@ -310,6 +312,15 @@ described below can create reviewed adapter files only after explicit `--apply`.
 
 ### Explicit adapter bundle: `propose-adapters`
 
+Before selecting anything, obtain the read-only decision packet:
+
+```sh
+PYTHONPATH=src python3 -m repo_adaptive_agents.cli adapter-options ./my-repo
+```
+
+It reports deterministically matched adapters, preference-based options, unmapped plan
+roles, every supported harness target, and two explicit user questions. It writes nothing.
+
 `propose-adapters` profiles a repository and renders only the read-only roles and harnesses
 confirmed explicitly by the user. Exact capability IDs connect the portable
 `InfrastructurePlan` to compatible canonical roles; they explain eligibility but never
@@ -326,8 +337,8 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-adapters ./my-repo \
 
 The agent-led adoption flow has two separate gates:
 
-1. run `profile` and `plan`, present candidate roles and all available harness targets, then
-   ask the user to choose both;
+1. run `profile`, `plan`, and `adapter-options`; present its two unresolved questions and
+   ask the user to choose roles and targets;
 2. only after that answer, run `propose-adapters --confirm-selection`, preview installation,
    and request a second approval before `install-adapters --apply`.
 

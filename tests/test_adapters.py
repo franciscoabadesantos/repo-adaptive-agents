@@ -230,6 +230,32 @@ class AdapterCliTests(unittest.TestCase):
                 )
             )
 
+    def test_adapter_options_is_read_only_and_requests_user_selection(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = main([
+                "adapter-options",
+                str(FIXTURES / "team-fullstack"),
+            ])
+
+        self.assertEqual(code, 0, stderr.getvalue())
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["status"], "requires_user_selection")
+        self.assertEqual(payload["available_targets"], ["skill", "codex", "claude", "copilot"])
+        self.assertEqual(
+            [item["role_id"] for item in payload["matched_adapters"]],
+            ["repo_explorer", "api_contract_agent", "browser_qa"],
+        )
+        self.assertIn(
+            "design_director",
+            [item["role_id"] for item in payload["optional_adapters"]],
+        )
+        self.assertEqual(
+            {item["id"] for item in payload["questions"]},
+            {"harness_targets", "adapter_roles"},
+        )
+        self.assertIn("Ask the user", payload["next_action"])
+
     def test_cli_requires_user_selection_confirmation_before_writing(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "bundle"
