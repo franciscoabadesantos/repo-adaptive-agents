@@ -87,6 +87,17 @@ class IntegrationProfile:
 
 
 @dataclass
+class TechnologyFinding:
+    """Technology whose repository role needs semantic classification."""
+
+    technology: str
+    category: str
+    status: str
+    inferred_behaviors: list[str] = field(default_factory=list)
+    evidence: list[Evidence] = field(default_factory=list)
+
+
+@dataclass
 class ComponentProfile:
     """A root or nested runnable/package unit discovered from a local manifest."""
 
@@ -128,6 +139,7 @@ class RepoProfile:
     risks: list[str]
     evidence: list[Evidence]
     warnings: list[str] = field(default_factory=list)
+    technology_findings: list[TechnologyFinding] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -84,11 +84,11 @@ def recommend_infrastructure(profile: RepoProfile, request: str = "") -> Infrast
     if profile.manifests:
         _add(capabilities, "dependency_audit", "Recognized dependency manifests are present.", _relevant_evidence(profile, {"manifest", "package_dependency", "python_dependency", "ml_dependency"}))
     if "pipeline" in profile.project_types:
-        _add(capabilities, "pipeline_review", "Operational or delivery pipeline entrypoints and stages were detected.", _relevant_evidence(profile, {"operational_entrypoint", "oracle_operation", "cloudflare_api", "jenkins_pipeline", "maven_packaging"}))
+        _add(capabilities, "pipeline_review", "Operational or delivery pipeline entrypoints and stages were detected.", _relevant_evidence(profile, {"operational_entrypoint", "orchestration_config", "orchestrated_entrypoint", "orchestration_schedule", "oracle_operation", "cloudflare_api", "jenkins_pipeline", "maven_packaging"}))
     if "ci_cd" in profile.project_types:
         _add(capabilities, "ci_cd_review", "CI/CD workflows, triggers, runners, or delivery pipelines were detected.", _relevant_evidence(profile, {"ci_cd_workflow", "self_hosted_runner", "jenkins_pipeline", "tests_disabled_in_build"}))
     if "operations" in profile.project_types:
-        _add(capabilities, "operations_review", "Operational side effects or external runtime integrations were detected.", _relevant_evidence(profile, {"operations_signal", "cloudflare_api", "oracle_operation", "self_hosted_runner", "operational_entrypoint", "java_service_wrapper", "rabbitmq_signal", "external_http_gateway"}))
+        _add(capabilities, "operations_review", "Operational side effects or external runtime integrations were detected.", _relevant_evidence(profile, {"operations_signal", "orchestration_config", "orchestration_schedule", "orchestration_worker", "cloudflare_api", "oracle_operation", "self_hosted_runner", "operational_entrypoint", "java_service_wrapper", "rabbitmq_signal", "external_http_gateway"}))
     if "frontend" in profile.project_types:
         _add(capabilities, "browser_qa", "A browser-facing framework was detected.", _relevant_evidence(profile, {"frontend_framework"}))
     if "api" in profile.project_types:
@@ -140,7 +140,7 @@ def recommend_infrastructure(profile: RepoProfile, request: str = "") -> Infrast
     if profile.deployment.targets:
         _add(capabilities, "deployment_review", "One or more concrete deployment targets were detected.", profile.deployment.evidence)
     if {"api", "cloudflare_worker", "proxy_service", "infrastructure", "operations", "pipeline", "security_tooling", "certificate_automation", "dns_iac"}.intersection(profile.project_types):
-        _add(capabilities, "security_review", "The repository exposes service, edge, infrastructure, certificate, DNS, or operational trust boundaries.", _relevant_evidence(profile, {"api_signal", "cloudflare_deployment", "cloudflare_api", "oracle_operation", "self_hosted_runner", "infrastructure_signal", "acme_protocol_signal", "certificate_lifecycle_signal", "sensitive_operations", "dns_configuration"}))
+        _add(capabilities, "security_review", "The repository exposes service, edge, infrastructure, certificate, DNS, or operational trust boundaries.", _relevant_evidence(profile, {"api_signal", "orchestration_config", "orchestration_worker", "cloudflare_deployment", "cloudflare_api", "oracle_operation", "self_hosted_runner", "infrastructure_signal", "acme_protocol_signal", "certificate_lifecycle_signal", "sensitive_operations", "dns_configuration"}))
 
     available_roles: list[AgentPlan] = [AgentPlan("repo_mapper", "Repository mapper", "Maintain the evidence-backed repository profile.", ["repo_analysis"], "Available to ground future work in local facts when repository mapping adds value.")]
     available_roles.append(AgentPlan("test_engineer", "Test engineer", "Assess and run the safest available test strategy.", ["test_strategy"], "Available when test strategy or independent test evidence is needed."))
@@ -201,6 +201,18 @@ def recommend_infrastructure(profile: RepoProfile, request: str = "") -> Infrast
         questions.append(UserQuestion("test_baseline", "Should the proposal include a test-baseline task for this repository?", "No real test suite or recognized test command was detected.", ["Yes, add baseline", "No, defer tests"]))
     if len(profile.deployment.targets) > 1:
         questions.append(UserQuestion("deployment_scope", "Which deployment target should receive priority in the infrastructure plan?", "More than one concrete deployment target was detected.", profile.deployment.targets))
+    for finding in profile.technology_findings:
+        if finding.status != "unclassified":
+            continue
+        identifier = "".join(character if character.isalnum() else "_" for character in finding.technology.lower()).strip("_")
+        questions.append(
+            UserQuestion(
+                f"classify_{identifier}",
+                f"Is {finding.technology} the repository's production workflow orchestrator?",
+                "Local configuration and entrypoints imply orchestration behavior, but the technology is not in the versioned knowledge catalog.",
+                ["Yes", "No", "Unsure"],
+            )
+        )
 
     assumptions = [
         "Available roles are repository capabilities, not a mandatory execution pipeline; select them proportionally per task.",

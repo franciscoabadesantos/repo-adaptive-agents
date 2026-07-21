@@ -1,0 +1,9 @@
+[project]
+name = "market-data-ops"
+dependencies = ["pandas"]
+
+[project.optional-dependencies]
+orchestration = ["prefect>=3"]
+
+[project.scripts]
+dataops = "market_data_ops.cli:main"

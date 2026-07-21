@@ -20,6 +20,7 @@ from .models import (
     Evidence,
     IntegrationProfile,
     RepoProfile,
+    TechnologyFinding,
     TestProfile,
     WorkflowProfile,
 )
@@ -32,7 +33,7 @@ IGNORED_DIRS = {
 IGNORED_FILES = {".coverage", ".DS_Store"}
 MANIFEST_NAMES = {"package.json", "pyproject.toml", "requirements.txt", "requirements-dev.txt", "setup.py", "setup.cfg", "Cargo.toml", "go.mod", "pom.xml", "build.gradle", "Gemfile", "composer.json"}
 PACKAGE_FRAMEWORKS = {"next": "Next.js", "react": "React", "vue": "Vue", "@angular/core": "Angular", "svelte": "Svelte", "hono": "Hono", "express": "Express", "fastify": "Fastify"}
-PYTHON_FRAMEWORKS = {"fastapi": "FastAPI", "flask": "Flask", "django": "Django", "pandas": "pandas", "scikit-learn": "scikit-learn", "sklearn": "scikit-learn", "torch": "PyTorch", "tensorflow": "TensorFlow", "numpy": "NumPy"}
+PYTHON_FRAMEWORKS = {"fastapi": "FastAPI", "flask": "Flask", "django": "Django", "prefect": "Prefect", "pandas": "pandas", "scikit-learn": "scikit-learn", "sklearn": "scikit-learn", "torch": "PyTorch", "tensorflow": "TensorFlow", "numpy": "NumPy"}
 STRONG_ML_DEPENDENCIES = {
     "scikit-learn": "scikit-learn", "sklearn": "scikit-learn", "torch": "PyTorch", "tensorflow": "TensorFlow", "keras": "Keras",
     "xgboost": "XGBoost", "lightgbm": "LightGBM", "catboost": "CatBoost", "jax": "JAX", "transformers": "Transformers",
@@ -199,6 +200,86 @@ def _unique(values: list[str]) -> list[str]:
 
 def _unique_evidence(values: list[Evidence]) -> list[Evidence]:
     return list(dict.fromkeys(values))
+
+
+def _dependency_name(specification: str) -> str | None:
+    match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", specification)
+    return match.group(1) if match else None
+
+
+def _python_dependency_specifications(name: str, data: dict[str, Any], path: Path) -> list[str]:
+    if name == "pyproject.toml":
+        project = data.get("project", {})
+        if not isinstance(project, dict):
+            return []
+        specifications = [item for item in project.get("dependencies", []) if isinstance(item, str)]
+        optional = project.get("optional-dependencies", {})
+        if isinstance(optional, dict):
+            specifications.extend(
+                item
+                for values in optional.values()
+                if isinstance(values, list)
+                for item in values
+                if isinstance(item, str)
+            )
+        return specifications
+    if name in {"requirements.txt", "requirements-dev.txt"}:
+        return [
+            line.split("#", 1)[0].strip()
+            for line in _read(path).splitlines()
+            if line.split("#", 1)[0].strip() and not line.lstrip().startswith(("-", "#"))
+        ]
+    return []
+
+
+def _declared_python_dependencies(
+    manifests: list[str],
+    manifest_data: dict[str, dict[str, Any]],
+    by_rel: dict[str, Path],
+) -> dict[str, str]:
+    """Return normalized dependency name -> declared spelling for local Python manifests."""
+    dependencies: dict[str, str] = {}
+    for manifest in manifests:
+        name = Path(manifest).name
+        specifications = _python_dependency_specifications(name, manifest_data.get(manifest, {}), by_rel[manifest])
+        for specification in specifications:
+            dependency = _dependency_name(specification)
+            if dependency:
+                dependencies.setdefault(dependency.lower().replace("_", "-"), dependency)
+    return dependencies
+
+
+def _orchestration_config(text: str) -> bool:
+    deployments = bool(re.search(r"^\s*deployments\s*:", text, re.MULTILINE | re.IGNORECASE))
+    entrypoint = bool(re.search(r"^\s*(?:entrypoint|flow_entrypoint)\s*:", text, re.MULTILINE | re.IGNORECASE))
+    scheduling = bool(re.search(r"^\s*(?:schedules?|cron|interval)\s*:", text, re.MULTILINE | re.IGNORECASE))
+    worker = bool(re.search(r"^\s*(?:work_pool|work_pool_name|work_queue_name|queue)\s*:", text, re.MULTILINE | re.IGNORECASE))
+    return deployments or (entrypoint and (scheduling or worker))
+
+
+def _orchestration_entrypoints(config_texts: dict[str, str], repository_paths: set[str]) -> list[str]:
+    entrypoints: list[str] = []
+    for text in config_texts.values():
+        for raw in re.findall(r"^\s*(?:entrypoint|flow_entrypoint)\s*:\s*[\"']?([^\s#\"']+)", text, re.MULTILINE | re.IGNORECASE):
+            candidate = raw.rsplit(":", 1)[0]
+            if candidate in repository_paths:
+                entrypoints.append(candidate)
+    return _unique(entrypoints)
+
+
+def _orchestration_behaviors(config_texts: dict[str, str], flow_texts: dict[str, str]) -> list[str]:
+    config_text = "\n".join(config_texts.values())
+    flow_text = "\n".join(flow_texts.values())
+    behaviors = ["workflow_execution"]
+    if re.search(r"^\s*deployments\s*:", config_text, re.MULTILINE | re.IGNORECASE):
+        behaviors.append("deployments")
+    if re.search(r"^\s*(?:schedules?|cron|interval)\s*:", config_text, re.MULTILINE | re.IGNORECASE):
+        behaviors.append("scheduling")
+    if re.search(r"^\s*(?:work_pool|work_pool_name|work_queue_name|queue)\s*:", config_text, re.MULTILINE | re.IGNORECASE):
+        behaviors.append("worker_or_queue_execution")
+    if re.search(r"\b(?:retries|retry_delay|retry_delay_seconds)\s*=", flow_text, re.IGNORECASE):
+        behaviors.append("retries")
+    return behaviors
 
 
 def _package_manager(
@@ -544,16 +625,18 @@ def _dependency_info(manifest: str, path: Path, by_rel: dict[str, Path], all_evi
     elif name == "pyproject.toml":
         data, parse_error = _load_toml(path)
         languages.append("python")
-        project = data.get("project", {})
-        dependency_text = " ".join(project.get("dependencies", []))
-        dependency_text += " " + " ".join(item for values in project.get("optional-dependencies", {}).values() for item in values)
+        dependency_names = {
+            dependency.lower().replace("_", "-")
+            for specification in _python_dependency_specifications(name, data, path)
+            if (dependency := _dependency_name(specification))
+        }
         for dependency, framework in PYTHON_FRAMEWORKS.items():
-            if dependency.lower() in dependency_text.lower():
+            if dependency.lower().replace("_", "-") in dependency_names:
                 frameworks.append(framework)
                 signal = "ml_dependency" if dependency in STRONG_ML_DEPENDENCIES else "python_dependency"
                 scoped.append(_evidence(signal, [manifest], f"Detected dependency {dependency} declared by {manifest}"))
         for dependency, framework in STRONG_ML_DEPENDENCIES.items():
-            if dependency.lower() in dependency_text.lower() and framework not in frameworks:
+            if dependency.lower().replace("_", "-") in dependency_names and framework not in frameworks:
                 frameworks.append(framework)
                 scoped.append(_evidence("ml_dependency", [manifest], f"Detected ML dependency {dependency} declared by {manifest}"))
     elif name in {"requirements.txt", "requirements-dev.txt"}:
@@ -706,6 +789,100 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         and any(candidate in contents.get(source, "") or Path(candidate).name in contents.get(source, "") for source in reference_sources)
     ]
     operational_entrypoints = _unique(operational_entrypoints + referenced_operational_paths)
+
+    repository_path_set = set(rel_paths)
+    orchestration_config_paths = [
+        path
+        for path, text in contents.items()
+        if Path(path).suffix.lower() in {".yaml", ".yml"}
+        and path not in workflow_paths
+        and not _is_fixture_path(path)
+        and not _is_test_path(path)
+        and not _is_documentation_path(path)
+        and _orchestration_config(text)
+    ]
+    orchestration_config_texts = {path: contents[path] for path in orchestration_config_paths}
+    configured_flow_paths = _orchestration_entrypoints(orchestration_config_texts, repository_path_set)
+    prefect_flow_paths = [
+        path
+        for path, text in contents.items()
+        if Path(path).suffix.lower() == ".py"
+        and _is_runtime_path(path)
+        and re.search(r"^\s*(?:from\s+prefect\s+import|import\s+prefect\b)", text, re.MULTILINE)
+        and re.search(r"@(?:prefect\.)?flow\b", text)
+    ]
+    orchestration_flow_paths = _unique(configured_flow_paths + prefect_flow_paths)
+    operational_entrypoints = _unique(operational_entrypoints + orchestration_flow_paths)
+    orchestration_flow_texts = {path: contents.get(path, "") for path in orchestration_flow_paths}
+    orchestration_behaviors = (
+        _orchestration_behaviors(orchestration_config_texts, orchestration_flow_texts)
+        if orchestration_config_paths or orchestration_flow_paths
+        else []
+    )
+    orchestration_evidence: list[Evidence] = []
+    if orchestration_config_paths:
+        orchestration_evidence.append(
+            _evidence(
+                "orchestration_config",
+                orchestration_config_paths,
+                "Deployment, entrypoint, schedule, or worker/queue orchestration configuration detected",
+            )
+        )
+    if orchestration_flow_paths:
+        orchestration_evidence.append(
+            _evidence(
+                "orchestrated_entrypoint",
+                orchestration_flow_paths,
+                "Workflow entrypoints were referenced by orchestration configuration or declared as framework flows",
+            )
+        )
+    if "scheduling" in orchestration_behaviors:
+        orchestration_evidence.append(
+            _evidence("orchestration_schedule", orchestration_config_paths, "Scheduled workflow execution detected")
+        )
+    if "worker_or_queue_execution" in orchestration_behaviors:
+        orchestration_evidence.append(
+            _evidence("orchestration_worker", orchestration_config_paths, "Worker, work-pool, or queue execution detected")
+        )
+
+    declared_python_dependencies = _declared_python_dependencies(manifests, manifest_data, by_rel)
+    prefect_manifest_paths = []
+    for manifest in manifests:
+        specifications = _python_dependency_specifications(
+            Path(manifest).name,
+            manifest_data.get(manifest, {}),
+            by_rel[manifest],
+        )
+        dependency_names = {
+            dependency.lower().replace("_", "-")
+            for specification in specifications
+            if (dependency := _dependency_name(specification))
+        }
+        if "prefect" in dependency_names:
+            prefect_manifest_paths.append(manifest)
+    prefect_config_paths = [path for path in orchestration_config_paths if Path(path).stem.lower() == "prefect"]
+    prefect_detected = bool(prefect_manifest_paths or prefect_config_paths or prefect_flow_paths)
+    unclassified_orchestrators: list[str] = []
+    if orchestration_flow_paths and not prefect_detected:
+        for path in orchestration_flow_paths:
+            text = orchestration_flow_texts.get(path, "")
+            modules = re.findall(
+                r"^\s*from\s+([A-Za-z][\w.]*)\s+import[^\n]*(?:flow|workflow|dag)\b",
+                text,
+                re.MULTILINE | re.IGNORECASE,
+            )
+            for module in modules:
+                normalized = module.split(".", 1)[0].lower().replace("_", "-")
+                dependency = declared_python_dependencies.get(normalized)
+                if dependency and normalized not in PYTHON_FRAMEWORKS:
+                    unclassified_orchestrators.append(dependency)
+    if orchestration_config_paths and not prefect_detected and not unclassified_orchestrators:
+        generic_names = {"deployments", "orchestration", "pipeline", "pipelines", "workflow", "workflows"}
+        for path in orchestration_config_paths:
+            candidate = Path(path).stem
+            if candidate.lower() not in generic_names:
+                unclassified_orchestrators.append(candidate)
+    unclassified_orchestrators = _unique(unclassified_orchestrators)
 
     components: list[ComponentProfile] = []
     for name, prefix, component_manifests in component_specs:
@@ -1055,7 +1232,8 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         item for component in components for item in component.evidence if item.signal == "external_http_gateway"
     ]
     has_pipeline = (
-        any(Path(path).name == "run_pipeline.sh" or "pipeline" in Path(path).name.lower() for path in operational_entrypoints)
+        bool(orchestration_config_paths or orchestration_flow_paths)
+        or any(Path(path).name == "run_pipeline.sh" or "pipeline" in Path(path).name.lower() for path in operational_entrypoints)
         or any("pipeline" in text.lower() for text in workflow_contents.values())
         or bool(jenkins_paths)
     )
@@ -1112,7 +1290,7 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
     java_wrapper_evidence = [
         item for component in components for item in component.evidence if item.signal == "java_service_wrapper"
     ]
-    has_operations = bool(cloudflare_api_paths or oracle_paths or self_hosted_paths or sensitive_operation_paths or dns_config_paths or java_wrapper_evidence)
+    has_operations = bool(orchestration_config_paths or cloudflare_api_paths or oracle_paths or self_hosted_paths or sensitive_operation_paths or dns_config_paths or java_wrapper_evidence)
     project_types = [item for item in _unique(component_types) if item != "unknown"]
     if has_pipeline:
         project_types.append("pipeline")
@@ -1164,7 +1342,6 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
     build_commands: list[str] = []
     validation_commands: list[str] = []
     browser_commands: list[str] = []
-    repository_path_set = set(rel_paths)
     for manifest in package_json_manifests:
         data = manifest_data.get(manifest, {})
         manager, manager_evidence_path = _package_manager(manifest, data, repository_path_set)
@@ -1440,6 +1617,7 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         architecture_evidence.append(_evidence("self_hosted_runner", self_hosted_paths, "Self-hosted CI runner detected"))
     if operational_entrypoints:
         architecture_evidence.append(_evidence("operational_entrypoint", operational_entrypoints, "Operational scripts or workflow-referenced commands detected"))
+    architecture_evidence.extend(orchestration_evidence)
     if cloudflare_api_paths:
         architecture_evidence.append(_evidence("cloudflare_api", cloudflare_api_paths, "Runtime code calls or configures the Cloudflare API"))
     if oracle_paths:
@@ -1540,6 +1718,37 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
     if not all_languages:
         risks.append("Language could not be inferred from recognized manifests")
 
+    technology_findings: list[TechnologyFinding] = []
+    if prefect_detected:
+        prefect_evidence = list(orchestration_evidence)
+        if prefect_manifest_paths:
+            prefect_evidence.insert(
+                0,
+                _evidence("python_dependency", prefect_manifest_paths, "Detected dependency prefect in a Python manifest"),
+            )
+        technology_findings.append(
+            TechnologyFinding(
+                technology="Prefect",
+                category="workflow_orchestrator",
+                status="recognized",
+                inferred_behaviors=orchestration_behaviors,
+                evidence=_unique_evidence(prefect_evidence),
+            )
+        )
+    for technology in unclassified_orchestrators:
+        technology_findings.append(
+            TechnologyFinding(
+                technology=technology,
+                category="workflow_orchestrator",
+                status="unclassified",
+                inferred_behaviors=orchestration_behaviors,
+                evidence=list(orchestration_evidence),
+            )
+        )
+        warnings.append(
+            f"Unclassified workflow orchestrator detected from local evidence: {technology}; confirm its repository role before adapter selection"
+        )
+
     project_types = _unique(project_types)
     if "messaging_application" in project_types:
         primary_project_types = [item for item in ("messaging_application", "integration_service") if item in project_types]
@@ -1553,6 +1762,8 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         primary_project_types = [item for item in ("pipeline", "dns_iac") if item in project_types]
     elif "hybrid_service" in project_types:
         primary_project_types = ["hybrid_service"]
+    elif "pipeline" in project_types:
+        primary_project_types = ["pipeline"]
     else:
         primary_project_types = [
             item for item in project_types
@@ -1571,6 +1782,7 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         manifests=manifests, components=components, architecture=architecture, workflow=workflow, tests=tests,
         browser_qa=browser_qa, deployment=deployment,
         integrations=integrations, risks=risks, evidence=all_evidence, warnings=_unique(warnings),
+        technology_findings=technology_findings,
     )
     _EVIDENCE_PATH_LIMIT.reset(evidence_limit_token)
     return profile

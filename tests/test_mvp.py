@@ -237,6 +237,63 @@ class MvpTests(unittest.TestCase):
         self.assertTrue(next(item for item in profile.integrations if item.name == "cloudflare_api").detected)
         self.assertEqual(next(item for item in plan.capabilities if item.capability_id == "test_strategy").status, "missing")
 
+    def test_prefect_data_ops_is_pipeline_first_with_nested_api(self):
+        profile = profile_repository(ROOT / "prefect-data-ops")
+        plan = recommend_team(profile)
+        components = {component.name: component for component in profile.components}
+        capability_ids = {item.capability_id for item in plan.capabilities}
+
+        self.assertEqual(profile.primary_project_types, ["pipeline"])
+        self.assertIn("api", profile.secondary_project_types)
+        self.assertIn("Prefect", profile.frameworks)
+        self.assertIn("flows/market_daily.py", profile.architecture.entrypoints)
+        self.assertEqual(components["services/jobs-worker"].project_types, ["api"])
+        self.assertTrue(
+            {"pipeline_review", "operations_review", "api_contract_review", "ci_cd_review"}.issubset(capability_ids)
+        )
+        self.assertNotIn("browser_qa", capability_ids)
+        self.assertEqual(len(profile.technology_findings), 1)
+        finding = profile.technology_findings[0]
+        self.assertEqual((finding.technology, finding.status), ("Prefect", "recognized"))
+        self.assertEqual(
+            finding.inferred_behaviors,
+            ["workflow_execution", "deployments", "scheduling", "worker_or_queue_execution", "retries"],
+        )
+        self.assertFalse(any(question.id.startswith("classify_") for question in plan.questions))
+
+    def test_unknown_orchestrator_preserves_behavior_and_asks_for_classification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write(
+                root,
+                "pyproject.toml",
+                "[project]\nname='custom-ops'\ndependencies=['acme-flow>=1']\n",
+            )
+            self._write(
+                root,
+                "orchestra.yaml",
+                "deployments:\n  - name: daily\n    entrypoint: flows/daily.py:daily\n"
+                "    schedules:\n      - cron: '0 1 * * *'\n    work_pool: workers\n",
+            )
+            self._write(
+                root,
+                "flows/daily.py",
+                "from acme_flow import flow\n\n@flow(retries=1)\ndef daily():\n    return None\n",
+            )
+
+            profile = profile_repository(root)
+            plan = recommend_team(profile)
+            finding = profile.technology_findings[0]
+
+            self.assertEqual(profile.primary_project_types, ["pipeline"])
+            self.assertEqual((finding.technology, finding.status), ("acme-flow", "unclassified"))
+            self.assertIn("scheduling", finding.inferred_behaviors)
+            self.assertIn("operations", profile.project_types)
+            self.assertIn("pipeline_review", {item.capability_id for item in plan.capabilities})
+            self.assertIn("operations_review", {item.capability_id for item in plan.capabilities})
+            self.assertTrue(any(question.id == "classify_acme_flow" for question in plan.questions))
+            self.assertTrue(any("Unclassified workflow orchestrator" in warning for warning in profile.warnings))
+
     def test_python_library_requires_packaging_and_importable_package(self):
         profile = profile_repository(ROOT / "python-library")
         plan = recommend_team(profile)

@@ -1,0 +1,8 @@
+name: market-data-ops
+deployments:
+  - name: market-daily
+    entrypoint: flows/market_daily.py:market_daily
+    schedules:
+      - cron: "0 22 * * 1-5"
+    work_pool:
+      name: data-workers

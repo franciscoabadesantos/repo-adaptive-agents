@@ -11,7 +11,7 @@ The implementation is intentionally split into small, inspectable layers:
 1. `profiler.py` walks a repository while ignoring generated/dependency directories,
    parses root and nested manifests/workflows, and emits a `RepoProfile` with scoped
    evidence paths, `ComponentProfile` entries, repository-native commands, browser-QA
-   lifecycle facts, and deployment signals.
+   lifecycle facts, deployment signals, and semantic technology findings.
 2. `catalog.py` defines capabilities independently from agents. Built-in capabilities
    are available; Jira, Confluence, and Dify entries are catalogued as optional but have
    no adapters in this MVP.
@@ -92,7 +92,13 @@ pipelines and DNS-as-code, executable/desktop applications, local ML inference a
 computer vision, shell certificate automation, MCP servers, image-processing tools,
 libraries, and unknown repositories. It also records languages, frameworks, manifests,
 components, architecture, tests, deployment, integration hints, risks, warnings, and
-evidence. Each component records its
+evidence. `technology_findings` is a focused semantic inventory rather than a copy of every
+dependency: it records technologies whose role affects the infrastructure recommendation,
+their inferred behavior, local evidence, and whether the versioned catalog recognizes them.
+An unclassified workflow tool can therefore still yield `pipeline` and `operations`
+capabilities from deployments, entrypoints, schedules, workers/queues, and retries; the plan
+then asks the user to confirm the tool's role instead of silently guessing. Each component
+records its
 path, all manifests declared in that component, project types, frameworks, runtime,
 entrypoints, deployment targets, and
 evidence. Nested manifests such as `server/proxy/package.json` therefore do not leak
@@ -426,15 +432,18 @@ before copying any file into a real repository.
 
 ## Explicit MVP limits
 
-This version does not call Jira, Confluence, Dify, MCP servers, browsers, LLMs, or remote
+This version does not call Jira, Confluence, Dify, MCP servers, browsers, LLMs, package
+registries, documentation sites, or remote
 deployment systems. It does not read credential values, install integrations, overwrite
 existing repository files, commit, push, deploy remotely, create a PR, or provide a UI. Manifest parsing
-and framework detection are intentionally conservative; unusual build systems and
-custom conventions may be reported as `unknown` and should be reviewed before use.
+and framework detection are intentionally conservative. Generic local behavior is detected
+independently from brand names; unfamiliar orchestration technology is reported as
+`unclassified` with a user question and is never researched or added to the catalog
+automatically.
 
 ## Next steps
 
-1. Add a versioned profile/plan schema validator and fixture cases for more languages.
+1. Add a versioned profile/plan schema validator and fixture cases for more behavioral patterns.
 2. Add a machine-readable install-plan output if automation consumers require it.
 3. Add explicit organization/team policy input with precedence over local preferences.
 4. Expand canonical adapter coverage only where portable capability contracts exist.

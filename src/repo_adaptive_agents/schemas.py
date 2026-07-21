@@ -8,7 +8,7 @@ REPO_PROFILE_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "RepoProfile",
     "type": "object",
-    "required": ["path", "name", "project_types", "primary_project_types", "secondary_project_types", "languages", "frameworks", "manifests", "components", "architecture", "workflow", "tests", "browser_qa", "deployment", "risks", "warnings"],
+    "required": ["path", "name", "project_types", "primary_project_types", "secondary_project_types", "languages", "frameworks", "manifests", "components", "architecture", "workflow", "tests", "browser_qa", "deployment", "risks", "warnings", "technology_findings"],
     "properties": {
         "path": {"type": "string"}, "name": {"type": "string"},
         "project_types": {"type": "array", "items": {"type": "string"}},
@@ -25,6 +25,7 @@ REPO_PROFILE_SCHEMA = {
         "deployment": {"$ref": "#/$defs/evidence_group"},
         "risks": {"type": "array", "items": {"type": "string"}},
         "warnings": {"type": "array", "items": {"type": "string"}},
+        "technology_findings": {"type": "array", "items": {"$ref": "#/$defs/technology_finding"}},
     },
     "$defs": {
         "evidence_group": {"type": "object"},
@@ -41,6 +42,17 @@ REPO_PROFILE_SCHEMA = {
                 "runtimes": {"type": "array", "items": {"type": "string"}},
                 "entrypoints": {"type": "array", "items": {"type": "string"}},
                 "deployment_targets": {"type": "array", "items": {"type": "string"}},
+                "evidence": {"type": "array"},
+            },
+        },
+        "technology_finding": {
+            "type": "object",
+            "required": ["technology", "category", "status", "inferred_behaviors", "evidence"],
+            "properties": {
+                "technology": {"type": "string"},
+                "category": {"type": "string"},
+                "status": {"enum": ["recognized", "unclassified"]},
+                "inferred_behaviors": {"type": "array", "items": {"type": "string"}},
                 "evidence": {"type": "array"},
             },
         },
