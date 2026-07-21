@@ -266,8 +266,10 @@ def validate_adapter_bundle(output_dir: str | Path) -> list[str]:
         issues.append("adapter manifest: kind is not 'adapter_bundle'")
     if "execution_plan" in manifest:
         issues.append("adapter manifest: execution_plan is not allowed")
-    if manifest.get("selection_confirmation") not in {"caller_attested", "not_recorded"}:
-        issues.append("adapter manifest: invalid or missing selection_confirmation")
+    if manifest.get("schema_version") != 3:
+        issues.append("adapter manifest: unsupported schema_version")
+    if manifest.get("selection_status") != "tool_proposal":
+        issues.append("adapter manifest: invalid or missing selection_status")
 
     for entry in _declared_adapter_files(manifest):
         relative = entry.get("path", "")

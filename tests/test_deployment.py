@@ -26,7 +26,6 @@ def _bundle(root: Path, targets=None, roles=None) -> Path:
         targets or ["skill"],
         roles or ["repo_explorer"],
         output,
-        selection_confirmed=True,
     )
     return output
 
@@ -40,7 +39,7 @@ def _files(root: Path) -> dict[str, bytes]:
 
 
 class InstallPlanTests(unittest.TestCase):
-    def test_unconfirmed_bundle_can_be_previewed_but_not_installed(self):
+    def test_tool_proposal_can_be_planned_and_installed_by_api(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             bundle = root / "bundle"
@@ -55,9 +54,8 @@ class InstallPlanTests(unittest.TestCase):
 
             plan = plan_adapter_install(bundle, destination)
             self.assertEqual(len(plan.additions), 1)
-            with self.assertRaisesRegex(AdapterInstallError, "regenerated after explicit user selection"):
-                apply_adapter_install(bundle, destination)
-            self.assertEqual(_files(destination), {})
+            result = apply_adapter_install(bundle, destination)
+            self.assertEqual(result.created, (".agents/skills/repo-explorer/SKILL.md",))
 
     def test_preview_reports_additions_without_writing(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -211,7 +209,7 @@ class InstallCliTests(unittest.TestCase):
             self.assertIn("Decision summary:", preview)
             self.assertIn("Selected targets: skill", preview)
             self.assertIn("Other available targets: codex, claude, copilot", preview)
-            self.assertIn("Selection status: caller attested prior user selection", preview)
+            self.assertIn("Selection status: tool proposal", preview)
             self.assertIn("repo_explorer (Repository Explorer)", preview)
             self.assertIn("capabilities=repo_analysis", preview)
             self.assertIn("Evidence: repo_analysis:", preview)
@@ -225,8 +223,8 @@ class InstallCliTests(unittest.TestCase):
             )
             self.assertIn("1 addition(s)", preview)
             self.assertIn("Preview only; no files were written", preview)
-            self.assertIn("request separate installation approval", preview)
-            self.assertIn("not only file paths", preview)
+            self.assertIn("request installation approval", preview)
+            self.assertIn("including proposed roles and targets", preview)
             self.assertEqual(_files(destination), {})
 
             code, unconfirmed, error = self._run([
@@ -244,7 +242,7 @@ class InstallCliTests(unittest.TestCase):
             self.assertIn("Installed 1 file(s)", applied)
             self.assertIn(".agents/skills/repo-explorer/SKILL.md", _files(destination))
 
-    def test_cli_previews_unconfirmed_proposal_and_blocks_apply(self):
+    def test_cli_preview_acceptance_covers_proposed_roles_targets_and_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             bundle = root / "bundle"
@@ -262,10 +260,10 @@ class InstallCliTests(unittest.TestCase):
             ])
             self.assertEqual(code, 0, error)
             self.assertIn(
-                "Selection status: proposal only; prior user selection is not recorded",
+                "Selection status: tool proposal",
                 preview,
             )
-            self.assertIn("regenerate with --confirm-selection", preview)
+            self.assertIn("Approval of this preview accepts both the selection", preview)
             self.assertEqual(_files(destination), {})
 
             code, output, error = self._run([
@@ -275,10 +273,10 @@ class InstallCliTests(unittest.TestCase):
                 "--apply",
                 "--confirm-install",
             ])
-            self.assertEqual(code, 2)
+            self.assertEqual(code, 0, error)
             self.assertIn("Decision summary:", output)
-            self.assertIn("regenerated after explicit user selection", error)
-            self.assertEqual(_files(destination), {})
+            self.assertIn("Installed 1 file(s)", output)
+            self.assertIn(".agents/skills/repo-explorer/SKILL.md", _files(destination))
 
     def test_preview_labels_preference_based_adapter_without_profiler_match(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -11,7 +11,6 @@ from ..recommender import recommend_infrastructure
 from .adapters import AdapterPlan, select_adapters
 from .generator import (
     GENERATOR_VERSION,
-    SCHEMA_VERSION,
     MultiCliError,
     _repo_relative,
     _sha256,
@@ -19,6 +18,8 @@ from .generator import (
     resolve_targets,
     write_files_atomically,
 )
+
+ADAPTER_BUNDLE_SCHEMA_VERSION = 3
 
 
 def _profile_summary(profile: RepoProfile) -> dict:
@@ -36,7 +37,7 @@ def _profile_summary(profile: RepoProfile) -> dict:
 def _selection_dict(selection) -> dict:
     return {
         "role_id": selection.role_id,
-        "selection_source": "caller_supplied",
+        "selection_source": "tool_proposal",
         "matched_available_roles": list(selection.matched_available_roles),
         "matched_capabilities": list(selection.matched_capabilities),
     }
@@ -99,7 +100,6 @@ def render_adapter_bundle(
     role_ids: list[str],
     *,
     compare_to: str | Path | None = None,
-    selection_confirmed: bool = False,
 ) -> tuple[dict[str, str], dict, AdapterPlan]:
     """Profile a repository and render only the adapters explicitly requested."""
     profile = profile_repository(repo_path)
@@ -127,14 +127,12 @@ def render_adapter_bundle(
         _compare_to_destination(files, compare_to) if compare_to is not None else None
     )
     manifest = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": ADAPTER_BUNDLE_SCHEMA_VERSION,
         "generator_version": GENERATOR_VERSION,
         "kind": "adapter_bundle",
         "profile": _profile_summary(profile),
         "requested_targets": list(resolved_targets),
-        "selection_confirmation": (
-            "caller_attested" if selection_confirmed else "not_recorded"
-        ),
+        "selection_status": "tool_proposal",
         "selected_adapters": [
             _selection_dict(item) for item in adapter_plan.selected_adapters
         ],
@@ -161,7 +159,6 @@ def write_adapter_bundle(
     *,
     compare_to: str | Path | None = None,
     protected_root: str | Path | None = None,
-    selection_confirmed: bool = False,
 ) -> tuple[list[Path], AdapterPlan, dict]:
     repo = Path(repo_path).expanduser().resolve()
     if not repo.is_dir():
@@ -174,7 +171,6 @@ def write_adapter_bundle(
         targets,
         role_ids,
         compare_to=compare_to,
-        selection_confirmed=selection_confirmed,
     )
     written = write_files_atomically(output_dir, files, protected_root=protected_root)
     return written, plan, manifest

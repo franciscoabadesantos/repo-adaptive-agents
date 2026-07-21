@@ -84,6 +84,11 @@ writes `infrastructure-plan.json` instead of `team-plan.json`, and no longer gen
 TOML. The former experimental `propose-team` command is replaced by the explicit
 `propose-adapters` flow.
 
+Version 0.4 removes the unverifiable `--confirm-selection` attestation. Adapter bundles now
+use schema version 3 and are always labelled `tool_proposal`; regenerate older bundles before
+installation. The exact installation preview is the single decision packet approved by the
+user.
+
 ## Domain model
 
 `RepoProfile` separates `primary_project_types` from secondary characteristics and keeps
@@ -332,8 +337,8 @@ supported harness target, and two explicit user questions. Consumers should pres
 facts and coverage gaps before asking for roles and targets. It writes nothing.
 
 `propose-adapters` profiles a repository and renders only the read-only roles and harnesses
-supplied by the caller. Without `--confirm-selection`, the result is explicitly an
-unconfirmed proposal: it can be previewed but cannot be installed. Exact capability IDs connect the portable
+supplied by the caller. The result is always a tool proposal: roles and targets remain
+recommendations until the user approves the exact installation preview. Exact capability IDs connect the portable
 `InfrastructurePlan` to compatible canonical roles; they explain eligibility but never
 select, schedule, or invoke an agent.
 
@@ -342,25 +347,24 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-adapters ./my-repo \
   --targets skill,codex,claude,copilot \
   --role repo_explorer \
   --role browser_qa \
-  --confirm-selection \
   --output /tmp/my-adapters
 ```
 
-The agent-led adoption flow retains two separate gates:
+The agent-led adoption flow uses one honest write gate:
 
-1. run `profile`, `plan`, and `adapter-options`; present its two unresolved questions and
-   ask the user to choose roles and targets;
-2. an agent may render an unconfirmed proposal for review, but it must describe it as a
-   recommendation rather than a user choice; after the user chooses, regenerate the bundle
-   with `propose-adapters --confirm-selection`, preview installation,
-   show the exact additions, and stop to request a second approval;
-3. only after the user separately approves that exact preview, run
+1. run `profile`, `plan`, and `adapter-options`; present the repository facts, adapter
+   coverage, and gaps. The user may choose roles/targets now, or review a tool-generated
+   recommendation later;
+2. render a proposal, preview installation, show the proposed roles/targets and exact
+   additions, then stop for approval. Approval of that exact preview accepts both the
+   selection and the file plan;
+3. only after that approval, run
    `install-adapters --apply --confirm-install`.
 
-The confirmation flag is a caller attestation, not identity proof. Unconfirmed proposals
-are useful for audit and discussion but are mechanically non-installable. Recommendations, CLI
-arguments, capability matches, and repository facts must never be described as user choices
-before the user actually answers. Both `--targets` and at least one `--role` are required. A user may explicitly choose a
+The CLI cannot prove whether a selection came from a human when agent and user share the
+same permissions, so it never claims prior user approval. Recommendations, CLI arguments,
+capability matches, and repository facts must not be described as user choices before the
+installation preview is approved. Both `--targets` and at least one `--role` are required. A user may explicitly choose a
 read-only role without a deterministic capability match (for example, design judgment);
 the manifest records empty match evidence rather than pretending the profiler inferred it.
 `implementation_agent` remains available only through `render-role` with an explicit write
@@ -398,9 +402,8 @@ from the validated bundle so approval does not depend on an agent supplying a co
 narrative. An agent must relay this decision summary with the exact install plan; a
 file-only approval request is insufficient.
 
-Both confirmed and unconfirmed bundles may be previewed. An unconfirmed preview instructs
-the caller to collect the user's role/target choice and regenerate the bundle. Apply remains
-blocked until that confirmed bundle exists.
+Every bundle is a tool proposal and may be previewed. The preview is the authoritative
+decision packet for roles, targets, and exact file additions.
 
 After reviewing the additions, installation requires an explicit flag:
 
@@ -409,10 +412,10 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli install-adapters \
   /tmp/my-adapters /path/to/repository --apply --confirm-install
 ```
 
-`--confirm-selection` covers only the earlier choice of roles and targets. It is not
-installation approval. `--confirm-install` is a separate caller attestation that the user
-reviewed the exact preview and approved applying it in a later interaction. The preview
-prints an explicit stop instruction so an agent does not collapse both decisions into one.
+`--confirm-install` is a caller attestation that the user reviewed the exact preview and
+approved its proposed roles, targets, and file additions in a later interaction. It is not
+identity proof; a harness must enforce human approval if that guarantee is required. The
+preview prints an explicit stop instruction so an agent does not apply in the same turn.
 
 The installer validates the complete bundle, maps only target adapter files, and excludes
 bundle manifests, profile reports, and shared fragments. Existing identical files are left

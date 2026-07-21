@@ -101,7 +101,7 @@ def _parser() -> argparse.ArgumentParser:
         help="[experimental] Render explicitly selected role adapters for a repository",
         description=(
             "[EXPERIMENTAL] Profile a repository and render only the canonical read-only "
-            "roles and harness targets supplied by the caller after user confirmation. Capability matches "
+            "roles and harness targets supplied by the caller as a tool proposal. Capability matches "
             "are recorded as evidence, but no execution order, concurrency, consolidator, "
             "or mandatory team is generated. The command never applies or runs adapters. "
             f"Read-only roles: {', '.join(r for r in role_ids() if r != 'implementation_agent')}. "
@@ -120,11 +120,6 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         metavar="ROLE",
         help="Repeat for each explicit read-only adapter role",
-    )
-    adapters.add_argument(
-        "--confirm-selection",
-        action="store_true",
-        help="Attest that the user already selected the requested roles and harness targets",
     )
     adapters.add_argument("--output", required=True, help="Proposal directory (must not exist and be outside this repo)")
     adapters.add_argument("--compare-to", default=None, help="Destination repo to compare against, strictly read-only")
@@ -211,20 +206,16 @@ def _run_propose_adapters(args) -> int:
         args.output,
         compare_to=args.compare_to,
         protected_root=Path.cwd(),
-        selection_confirmed=args.confirm_selection,
     )
     issues = validate_adapter_bundle(args.output)
     if issues:
         raise MultiCliError("Generated adapter bundle failed validation: " + "; ".join(issues))
     print(f"Wrote {len(written)} adapter bundle files to {args.output}")
-    print("Selected adapters: " + ", ".join(plan.selected_ids))
-    if args.confirm_selection:
-        print("Selection confirmation: caller attested prior user approval of roles and targets.")
-    else:
-        print(
-            "Selection confirmation: not recorded. Proposal only; present the decision "
-            "packet and ask the user to choose roles and targets before regeneration."
-        )
+    print("Proposed adapters: " + ", ".join(plan.selected_ids))
+    print(
+        "Selection status: tool proposal. Roles and targets remain recommendations until "
+        "the user approves the exact installation preview."
+    )
     print("No execution order or agent invocation was generated.")
     if args.compare_to:
         print(f"Compared (read-only) against {args.compare_to}; see manifest.json 'compare'.")
@@ -245,7 +236,7 @@ def _run_adapter_options(args) -> int:
         for capability in role.capabilities
     }
     payload = {
-        "status": "requires_user_selection",
+        "status": "requires_install_decision",
         "repository_summary": {
             "name": profile.name,
             "primary_project_types": list(profile.primary_project_types),
@@ -281,8 +272,8 @@ def _run_adapter_options(args) -> int:
         ],
         "next_action": (
             "Present the repository summary, recommended capabilities, matched adapters, "
-            "and unmapped capabilities; then ask the user to select roles and targets "
-            "before propose-adapters."
+            "and unmapped capabilities. The user may choose roles and targets before a "
+            "proposal, or review them in the exact installation preview."
         ),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -328,14 +319,9 @@ def _adapter_decision_lines(bundle_dir: str | Path) -> list[str]:
     other_targets = [target for target in TARGETS if target not in selected_targets]
     lines.append(f"  Selected targets: {joined(selected_targets)}")
     lines.append(f"  Other available targets: {joined(other_targets)}")
-    confirmed = manifest.get("selection_confirmation") == "caller_attested"
     lines.append(
-        "  Selection status: "
-        + (
-            "caller attested prior user selection"
-            if confirmed
-            else "proposal only; prior user selection is not recorded"
-        )
+        "  Selection status: tool proposal; roles and targets are recommendations until "
+        "this exact install plan is approved"
     )
     lines.append("  Selected adapters:")
     for item in selected:
@@ -420,23 +406,11 @@ def _run_install_adapters(args) -> int:
         print(f"{entry.status}: {entry.destination_path}{detail}")
     if not args.apply:
         print("Preview only; no files were written.")
-        manifest = json.loads(
-            (Path(args.bundle).expanduser().resolve() / "manifest.json").read_text(
-                encoding="utf-8"
-            )
+        print(
+            "STOP: present the Decision summary and exact install plan above, including "
+            "proposed roles and targets, and request installation approval. Approval of "
+            "this preview accepts both the selection and the exact additions."
         )
-        if manifest.get("selection_confirmation") == "caller_attested":
-            print(
-                "STOP: present the Decision summary and exact install plan above, not only "
-                "file paths, and request separate installation approval from the user. Do "
-                "not apply it in the same turn as role/target selection."
-            )
-        else:
-            print(
-                "STOP: this is an unconfirmed proposal. Present the Decision summary, ask "
-                "the user to choose or change roles and targets, then regenerate with "
-                "--confirm-selection before any apply."
-            )
         return 0
     result = apply_adapter_install(args.bundle, args.repo)
     print(f"Installed {len(result.created)} file(s); {len(result.unchanged)} already unchanged.")

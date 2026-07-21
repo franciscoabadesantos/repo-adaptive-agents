@@ -152,12 +152,6 @@ def apply_adapter_install(
     bundle = Path(bundle_dir).expanduser().resolve()
     destination = Path(destination_repo).expanduser().resolve()
     plan = plan_adapter_install(bundle, destination)
-    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("selection_confirmation") != "caller_attested":
-        raise AdapterInstallError(
-            "Adapter installation requires a bundle regenerated after explicit user "
-            "selection of roles and harness targets"
-        )
     if plan.conflicts:
         paths = ", ".join(item.destination_path for item in plan.conflicts)
         raise AdapterInstallError(f"Installation blocked by conflicts: {paths}")

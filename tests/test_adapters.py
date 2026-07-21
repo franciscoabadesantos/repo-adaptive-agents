@@ -85,7 +85,8 @@ class AdapterBundleTests(unittest.TestCase):
             )
             self.assertEqual(validate_adapter_bundle(output), [])
             self.assertEqual(manifest["kind"], "adapter_bundle")
-            self.assertEqual(manifest["selection_confirmation"], "not_recorded")
+            self.assertEqual(manifest["schema_version"], 3)
+            self.assertEqual(manifest["selection_status"], "tool_proposal")
             self.assertNotIn("execution_plan", manifest)
             self.assertNotIn("parallel_groups", json.dumps(manifest))
             self.assertNotIn("consolidator", json.dumps(manifest))
@@ -204,7 +205,7 @@ class AdapterCliTests(unittest.TestCase):
             code = main(argv)
         return code, stdout.getvalue(), stderr.getvalue()
 
-    def test_valid_command_reports_explicit_selection(self):
+    def test_valid_command_reports_tool_proposal_without_claiming_user_selection(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "bundle"
             code, stdout, stderr = self._run([
@@ -213,19 +214,18 @@ class AdapterCliTests(unittest.TestCase):
                 "--targets", "skill,codex",
                 "--role", "repo_explorer",
                 "--role", "browser_qa",
-                "--confirm-selection",
                 "--output", str(output),
             ])
             self.assertEqual(code, 0, stderr)
-            self.assertIn("Selected adapters: repo_explorer, browser_qa", stdout)
-            self.assertIn("caller attested prior user approval", stdout)
+            self.assertIn("Proposed adapters: repo_explorer, browser_qa", stdout)
+            self.assertIn("Selection status: tool proposal", stdout)
             self.assertIn("No execution order or agent invocation was generated.", stdout)
             self.assertEqual(validate_adapter_bundle(output), [])
             manifest = json.loads((output / "manifest.json").read_text())
-            self.assertEqual(manifest["selection_confirmation"], "caller_attested")
+            self.assertEqual(manifest["selection_status"], "tool_proposal")
             self.assertTrue(
                 all(
-                    item["selection_source"] == "caller_supplied"
+                    item["selection_source"] == "tool_proposal"
                     for item in manifest["selected_adapters"]
                 )
             )
@@ -240,7 +240,7 @@ class AdapterCliTests(unittest.TestCase):
 
         self.assertEqual(code, 0, stderr.getvalue())
         payload = json.loads(stdout.getvalue())
-        self.assertEqual(payload["status"], "requires_user_selection")
+        self.assertEqual(payload["status"], "requires_install_decision")
         self.assertEqual(payload["repository_summary"]["primary_project_types"], ["frontend", "api"])
         self.assertIn("repository_contracts", payload)
         self.assertIn("recommended_capabilities", payload)
@@ -287,7 +287,7 @@ class AdapterCliTests(unittest.TestCase):
         self.assertIn("pipeline_reviewer", payload["unmapped_available_roles"])
         self.assertTrue(any(item["name"] == "pipeline_reviewer" for item in payload["unmapped_roles"]))
 
-    def test_cli_can_write_unconfirmed_proposal_without_claiming_user_selection(self):
+    def test_cli_always_writes_tool_proposal_without_claiming_user_selection(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "bundle"
             code, stdout, stderr = self._run([
@@ -298,10 +298,10 @@ class AdapterCliTests(unittest.TestCase):
                 "--output", str(output),
             ])
             self.assertEqual(code, 0, stderr)
-            self.assertIn("Proposal only", stdout)
+            self.assertIn("tool proposal", stdout)
             self.assertTrue(output.is_dir())
             manifest = json.loads((output / "manifest.json").read_text())
-            self.assertEqual(manifest["selection_confirmation"], "not_recorded")
+            self.assertEqual(manifest["selection_status"], "tool_proposal")
 
     def test_unknown_and_write_roles_fail_without_output(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -312,7 +312,6 @@ class AdapterCliTests(unittest.TestCase):
                     str(FIXTURES / "team-fullstack"),
                     "--targets", "skill",
                     "--role", role,
-                    "--confirm-selection",
                     "--output", str(output),
                 ])
                 self.assertEqual(code, 2)
