@@ -21,7 +21,7 @@ class AdapterSelection:
 
 @dataclass(frozen=True)
 class AdapterPlan:
-    """Adapters selected by the user; this is not an execution plan."""
+    """Adapter candidates supplied by the caller; this is not an execution plan."""
 
     selected_adapters: tuple[AdapterSelection, ...]
     eligible_role_ids: tuple[str, ...]
@@ -51,8 +51,9 @@ def select_adapters(
 ) -> AdapterPlan:
     """Validate an explicit selection and explain its connection to the plan.
 
-    A canonical read-only role may be selected even when no deterministic capability match
-    exists. That records a human choice rather than pretending the profiler inferred it.
+    A canonical read-only role may be supplied even when no deterministic capability match
+    exists. That records caller input rather than pretending the profiler inferred it;
+    user approval is a separate workflow gate.
     """
     requested = set(requested_role_ids)
     if not requested:
@@ -85,8 +86,8 @@ def select_adapters(
         eligible_role_ids=eligible,
         unmapped_available_roles=unmapped,
         assumptions=(
-            "Adapters were selected explicitly; no role is mandatory or automatically invoked.",
+            "Adapter candidates were supplied by the caller; no role is mandatory or automatically invoked.",
             "Capability matches explain availability but do not define execution order or concurrency.",
-            "A selected adapter without a capability match is an explicit human choice.",
+            "A supplied adapter without a capability match is not evidence of user approval.",
         ),
     )

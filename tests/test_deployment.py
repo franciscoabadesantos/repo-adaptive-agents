@@ -26,6 +26,7 @@ def _bundle(root: Path, targets=None) -> Path:
         targets or ["skill"],
         ["repo_explorer"],
         output,
+        selection_confirmed=True,
     )
     return output
 
@@ -39,6 +40,23 @@ def _files(root: Path) -> dict[str, bytes]:
 
 
 class InstallPlanTests(unittest.TestCase):
+    def test_unconfirmed_bundle_cannot_be_previewed_or_installed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = root / "bundle"
+            write_adapter_bundle(
+                FIXTURES / "team-fullstack",
+                ["skill"],
+                ["repo_explorer"],
+                bundle,
+            )
+            destination = root / "repo"
+            destination.mkdir()
+
+            with self.assertRaisesRegex(AdapterInstallError, "explicit user selection"):
+                plan_adapter_install(bundle, destination)
+            self.assertEqual(_files(destination), {})
+
     def test_preview_reports_additions_without_writing(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

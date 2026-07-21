@@ -36,7 +36,7 @@ def _profile_summary(profile: RepoProfile) -> dict:
 def _selection_dict(selection) -> dict:
     return {
         "role_id": selection.role_id,
-        "selection_source": "explicit",
+        "selection_source": "caller_supplied",
         "matched_available_roles": list(selection.matched_available_roles),
         "matched_capabilities": list(selection.matched_capabilities),
     }
@@ -99,6 +99,7 @@ def render_adapter_bundle(
     role_ids: list[str],
     *,
     compare_to: str | Path | None = None,
+    selection_confirmed: bool = False,
 ) -> tuple[dict[str, str], dict, AdapterPlan]:
     """Profile a repository and render only the adapters explicitly requested."""
     profile = profile_repository(repo_path)
@@ -131,6 +132,9 @@ def render_adapter_bundle(
         "kind": "adapter_bundle",
         "profile": _profile_summary(profile),
         "requested_targets": list(resolved_targets),
+        "selection_confirmation": (
+            "caller_attested" if selection_confirmed else "not_recorded"
+        ),
         "selected_adapters": [
             _selection_dict(item) for item in adapter_plan.selected_adapters
         ],
@@ -157,6 +161,7 @@ def write_adapter_bundle(
     *,
     compare_to: str | Path | None = None,
     protected_root: str | Path | None = None,
+    selection_confirmed: bool = False,
 ) -> tuple[list[Path], AdapterPlan, dict]:
     repo = Path(repo_path).expanduser().resolve()
     if not repo.is_dir():
@@ -165,7 +170,11 @@ def write_adapter_bundle(
     if output == repo or output.is_relative_to(repo):
         raise MultiCliError("Proposal output cannot be inside the analyzed repository")
     files, manifest, plan = render_adapter_bundle(
-        repo_path, targets, role_ids, compare_to=compare_to
+        repo_path,
+        targets,
+        role_ids,
+        compare_to=compare_to,
+        selection_confirmed=selection_confirmed,
     )
     written = write_files_atomically(output_dir, files, protected_root=protected_root)
     return written, plan, manifest

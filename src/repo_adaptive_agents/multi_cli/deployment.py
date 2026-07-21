@@ -107,6 +107,11 @@ def plan_adapter_install(
     if issues:
         raise AdapterInstallError("Invalid adapter bundle: " + "; ".join(issues))
     manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("selection_confirmation") != "caller_attested":
+        raise AdapterInstallError(
+            "Adapter installation requires a bundle generated after explicit user "
+            "selection of roles and harness targets"
+        )
 
     entries: list[InstallEntry] = []
     for relative, source in sorted(_installable_sources(bundle, manifest).items()):

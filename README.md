@@ -311,7 +311,7 @@ described below can create reviewed adapter files only after explicit `--apply`.
 ### Explicit adapter bundle: `propose-adapters`
 
 `propose-adapters` profiles a repository and renders only the read-only roles and harnesses
-chosen explicitly by the user. Exact capability IDs connect the portable
+confirmed explicitly by the user. Exact capability IDs connect the portable
 `InfrastructurePlan` to compatible canonical roles; they explain eligibility but never
 select, schedule, or invoke an agent.
 
@@ -320,10 +320,20 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-adapters ./my-repo \
   --targets skill,codex,claude,copilot \
   --role repo_explorer \
   --role browser_qa \
+  --confirm-selection \
   --output /tmp/my-adapters
 ```
 
-Both `--targets` and at least one `--role` are required. A user may explicitly choose a
+The agent-led adoption flow has two separate gates:
+
+1. run `profile` and `plan`, present candidate roles and all available harness targets, then
+   ask the user to choose both;
+2. only after that answer, run `propose-adapters --confirm-selection`, preview installation,
+   and request a second approval before `install-adapters --apply`.
+
+The confirmation flag is a caller attestation, not identity proof. Recommendations, CLI
+arguments, capability matches, and repository facts must never be described as user choices
+before the user actually answers. Both `--targets` and at least one `--role` are required. A user may explicitly choose a
 read-only role without a deterministic capability match (for example, design judgment);
 the manifest records empty match evidence rather than pretending the profiler inferred it.
 `implementation_agent` remains available only through `render-role` with an explicit write

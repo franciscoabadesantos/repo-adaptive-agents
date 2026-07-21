@@ -100,7 +100,7 @@ def _parser() -> argparse.ArgumentParser:
         help="[experimental] Render explicitly selected role adapters for a repository",
         description=(
             "[EXPERIMENTAL] Profile a repository and render only the canonical read-only "
-            "roles and harness targets selected explicitly by the user. Capability matches "
+            "roles and harness targets supplied by the caller after user confirmation. Capability matches "
             "are recorded as evidence, but no execution order, concurrency, consolidator, "
             "or mandatory team is generated. The command never applies or runs adapters. "
             f"Read-only roles: {', '.join(r for r in role_ids() if r != 'implementation_agent')}. "
@@ -119,6 +119,11 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         metavar="ROLE",
         help="Repeat for each explicit read-only adapter role",
+    )
+    adapters.add_argument(
+        "--confirm-selection",
+        action="store_true",
+        help="Attest that the user already selected the requested roles and harness targets",
     )
     adapters.add_argument("--output", required=True, help="Proposal directory (must not exist and be outside this repo)")
     adapters.add_argument("--compare-to", default=None, help="Destination repo to compare against, strictly read-only")
@@ -180,6 +185,11 @@ def _run_render_role(args) -> int:
 
 
 def _run_propose_adapters(args) -> int:
+    if not args.confirm_selection:
+        raise AdapterSelectionError(
+            "Adapter roles and targets require prior user selection; rerun with "
+            "--confirm-selection only after the user has chosen both"
+        )
     targets = _parse_targets(args.targets)
     written, plan, _ = write_adapter_bundle(
         args.repo,
@@ -188,12 +198,14 @@ def _run_propose_adapters(args) -> int:
         args.output,
         compare_to=args.compare_to,
         protected_root=Path.cwd(),
+        selection_confirmed=True,
     )
     issues = validate_adapter_bundle(args.output)
     if issues:
         raise MultiCliError("Generated adapter bundle failed validation: " + "; ".join(issues))
     print(f"Wrote {len(written)} adapter bundle files to {args.output}")
     print("Selected adapters: " + ", ".join(plan.selected_ids))
+    print("Selection confirmation: caller attested prior user approval of roles and targets.")
     print("No execution order or agent invocation was generated.")
     if args.compare_to:
         print(f"Compared (read-only) against {args.compare_to}; see manifest.json 'compare'.")

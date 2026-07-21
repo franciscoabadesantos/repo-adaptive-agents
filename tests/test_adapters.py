@@ -85,6 +85,7 @@ class AdapterBundleTests(unittest.TestCase):
             )
             self.assertEqual(validate_adapter_bundle(output), [])
             self.assertEqual(manifest["kind"], "adapter_bundle")
+            self.assertEqual(manifest["selection_confirmation"], "not_recorded")
             self.assertNotIn("execution_plan", manifest)
             self.assertNotIn("parallel_groups", json.dumps(manifest))
             self.assertNotIn("consolidator", json.dumps(manifest))
@@ -212,12 +213,37 @@ class AdapterCliTests(unittest.TestCase):
                 "--targets", "skill,codex",
                 "--role", "repo_explorer",
                 "--role", "browser_qa",
+                "--confirm-selection",
                 "--output", str(output),
             ])
             self.assertEqual(code, 0, stderr)
             self.assertIn("Selected adapters: repo_explorer, browser_qa", stdout)
+            self.assertIn("caller attested prior user approval", stdout)
             self.assertIn("No execution order or agent invocation was generated.", stdout)
             self.assertEqual(validate_adapter_bundle(output), [])
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(manifest["selection_confirmation"], "caller_attested")
+            self.assertTrue(
+                all(
+                    item["selection_source"] == "caller_supplied"
+                    for item in manifest["selected_adapters"]
+                )
+            )
+
+    def test_cli_requires_user_selection_confirmation_before_writing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "bundle"
+            code, stdout, stderr = self._run([
+                "propose-adapters",
+                str(FIXTURES / "team-fullstack"),
+                "--targets", "skill,codex",
+                "--role", "repo_explorer",
+                "--output", str(output),
+            ])
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("prior user selection", stderr)
+            self.assertFalse(output.exists())
 
     def test_unknown_and_write_roles_fail_without_output(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -228,6 +254,7 @@ class AdapterCliTests(unittest.TestCase):
                     str(FIXTURES / "team-fullstack"),
                     "--targets", "skill",
                     "--role", role,
+                    "--confirm-selection",
                     "--output", str(output),
                 ])
                 self.assertEqual(code, 2)
