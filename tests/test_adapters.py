@@ -241,6 +241,9 @@ class AdapterCliTests(unittest.TestCase):
         self.assertEqual(code, 0, stderr.getvalue())
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["status"], "requires_user_selection")
+        self.assertEqual(payload["repository_summary"]["primary_project_types"], ["frontend", "api"])
+        self.assertIn("repository_contracts", payload)
+        self.assertIn("recommended_capabilities", payload)
         self.assertEqual(payload["available_targets"], ["skill", "codex", "claude", "copilot"])
         self.assertEqual(
             [item["role_id"] for item in payload["matched_adapters"]],
@@ -254,7 +257,35 @@ class AdapterCliTests(unittest.TestCase):
             {item["id"] for item in payload["questions"]},
             {"harness_targets", "adapter_roles"},
         )
-        self.assertIn("Ask the user", payload["next_action"])
+        self.assertIn("Present the repository summary", payload["next_action"])
+
+    def test_adapter_options_is_a_complete_decision_packet_for_prefect(self):
+        code, stdout, stderr = self._run([
+            "adapter-options",
+            str(FIXTURES / "prefect-data-ops"),
+        ])
+
+        self.assertEqual(code, 0, stderr)
+        payload = json.loads(stdout)
+        summary = payload["repository_summary"]
+        self.assertEqual(summary["primary_project_types"], ["pipeline"])
+        self.assertIn("api", summary["secondary_project_types"])
+        self.assertEqual(
+            [(item["technology"], item["status"]) for item in summary["technology_findings"]],
+            [("Prefect", "recognized")],
+        )
+        capability_ids = {item["capability_id"] for item in payload["recommended_capabilities"]}
+        self.assertTrue(
+            {"pipeline_review", "operations_review", "ci_cd_review", "api_contract_review"}.issubset(capability_ids)
+        )
+        self.assertEqual(
+            [item["role_id"] for item in payload["matched_adapters"]],
+            ["repo_explorer", "api_contract_agent"],
+        )
+        unmapped_ids = {item["capability_id"] for item in payload["unmapped_capabilities"]}
+        self.assertTrue({"pipeline_review", "operations_review", "ci_cd_review"}.issubset(unmapped_ids))
+        self.assertIn("pipeline_reviewer", payload["unmapped_available_roles"])
+        self.assertTrue(any(item["name"] == "pipeline_reviewer" for item in payload["unmapped_roles"]))
 
     def test_cli_can_write_unconfirmed_proposal_without_claiming_user_selection(self):
         with tempfile.TemporaryDirectory() as temporary:

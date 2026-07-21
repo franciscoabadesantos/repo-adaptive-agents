@@ -235,12 +235,38 @@ def _run_adapter_options(args) -> int:
     profile = profile_repository(args.repo, evidence_path_limit=args.evidence_path_limit)
     infrastructure = recommend_infrastructure(profile, args.request)
     matched, optional, unmapped = list_adapter_options(infrastructure)
+    unmapped_names = set(unmapped)
+    unmapped_roles = [
+        role for role in infrastructure.available_roles if role.name in unmapped_names
+    ]
+    unmapped_capability_ids = {
+        capability
+        for role in unmapped_roles
+        for capability in role.capabilities
+    }
     payload = {
         "status": "requires_user_selection",
+        "repository_summary": {
+            "name": profile.name,
+            "primary_project_types": list(profile.primary_project_types),
+            "secondary_project_types": list(profile.secondary_project_types),
+            "languages": list(profile.languages),
+            "frameworks": list(profile.frameworks),
+            "technology_findings": to_jsonable(profile.technology_findings),
+            "warnings": list(profile.warnings),
+        },
+        "repository_contracts": to_jsonable(infrastructure.repository_contracts),
+        "recommended_capabilities": to_jsonable(infrastructure.capabilities),
         "available_targets": list(TARGETS),
         "matched_adapters": [to_jsonable(item) for item in matched],
         "optional_adapters": [to_jsonable(item) for item in optional],
         "unmapped_available_roles": list(unmapped),
+        "unmapped_roles": to_jsonable(unmapped_roles),
+        "unmapped_capabilities": [
+            to_jsonable(capability)
+            for capability in infrastructure.capabilities
+            if capability.capability_id in unmapped_capability_ids
+        ],
         "questions": [
             {
                 "id": "harness_targets",
@@ -253,7 +279,11 @@ def _run_adapter_options(args) -> int:
                 "options": [item.role_id for item in matched + optional],
             },
         ],
-        "next_action": "Ask the user to select roles and targets before propose-adapters.",
+        "next_action": (
+            "Present the repository summary, recommended capabilities, matched adapters, "
+            "and unmapped capabilities; then ask the user to select roles and targets "
+            "before propose-adapters."
+        ),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0

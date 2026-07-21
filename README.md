@@ -325,8 +325,11 @@ Before selecting anything, obtain the read-only decision packet:
 PYTHONPATH=src python3 -m repo_adaptive_agents.cli adapter-options ./my-repo
 ```
 
-It reports deterministically matched adapters, preference-based options, unmapped plan
-roles, every supported harness target, and two explicit user questions. It writes nothing.
+It emits a self-contained decision packet: repository identity and technologies,
+repository-native contracts, recommended capabilities, deterministically matched adapters,
+preference-based options, capabilities and plan roles without canonical adapters, every
+supported harness target, and two explicit user questions. Consumers should present these
+facts and coverage gaps before asking for roles and targets. It writes nothing.
 
 `propose-adapters` profiles a repository and renders only the read-only roles and harnesses
 supplied by the caller. Without `--confirm-selection`, the result is explicitly an
