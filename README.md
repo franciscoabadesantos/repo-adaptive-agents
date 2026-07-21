@@ -377,6 +377,13 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli install-adapters \
   /tmp/my-adapters /path/to/repository
 ```
 
+The preview is a decision packet, not just a file list. It reports detected repository
+facts, selected and alternative harness targets, each selected adapter's purpose and match
+evidence, other matched and preference-based adapters, repository roles without a canonical
+adapter, the functional effect, and the exact additions/conflicts. This output is generated
+from the validated bundle so approval does not depend on an agent supplying a complete
+narrative.
+
 After reviewing the additions, installation requires an explicit flag:
 
 ```sh

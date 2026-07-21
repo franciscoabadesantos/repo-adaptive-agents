@@ -258,6 +258,110 @@ def _run_adapter_options(args) -> int:
     return 0
 
 
+def _adapter_decision_lines(bundle_dir: str | Path) -> list[str]:
+    """Build a concise, evidence-backed decision packet from a validated bundle."""
+    bundle = Path(bundle_dir).expanduser().resolve()
+    try:
+        manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+        infrastructure = json.loads(
+            (bundle / "infrastructure-plan.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as error:
+        raise AdapterInstallError(f"Invalid adapter decision metadata: {error}") from error
+
+    profile = manifest.get("profile", {})
+    selected = manifest.get("selected_adapters", [])
+    selected_ids = {item.get("role_id") for item in selected}
+    eligible_ids = set(manifest.get("eligible_role_ids", []))
+    read_only_roles = [role for role in ROLES.values() if role.constraints.read_only]
+    available_roles = {
+        item.get("name"): item for item in infrastructure.get("available_roles", [])
+    }
+    capabilities = {
+        item.get("capability_id"): item
+        for item in infrastructure.get("capabilities", [])
+    }
+
+    def joined(items) -> str:
+        values = [str(item) for item in items if item]
+        return ", ".join(values) if values else "none"
+
+    lines = ["Decision summary:"]
+    lines.append(
+        "  Repository facts: "
+        f"types={joined(profile.get('primary_project_types', []))}; "
+        f"languages={joined(profile.get('languages', []))}; "
+        f"frameworks={joined(profile.get('frameworks', []))}"
+    )
+    selected_targets = manifest.get("requested_targets", [])
+    other_targets = [target for target in TARGETS if target not in selected_targets]
+    lines.append(f"  Selected targets: {joined(selected_targets)}")
+    lines.append(f"  Other available targets: {joined(other_targets)}")
+    lines.append("  Selected adapters:")
+    for item in selected:
+        role_id = item.get("role_id", "unknown")
+        role = ROLES.get(role_id)
+        title = role.title if role else "Unknown role"
+        purpose = role.purpose if role else "No canonical purpose available."
+        matched_roles = item.get("matched_available_roles", [])
+        matched_capabilities = item.get("matched_capabilities", [])
+        lines.append(f"    - {role_id} ({title}): {purpose}")
+        if matched_capabilities:
+            lines.append(
+                "      Match: "
+                f"capabilities={joined(matched_capabilities)}; "
+                f"repository roles={joined(matched_roles)}"
+            )
+            evidence_parts: list[str] = []
+            for capability_id in matched_capabilities:
+                capability = capabilities.get(capability_id, {})
+                paths: list[str] = []
+                for evidence in capability.get("evidence", []):
+                    paths.extend(evidence.get("paths", []))
+                paths = list(dict.fromkeys(paths))
+                reason = capability.get("reason", "matched repository capability")
+                evidence_parts.append(
+                    f"{capability_id}: {reason} [{joined(paths[:3])}]"
+                )
+            lines.append("      Evidence: " + "; ".join(evidence_parts))
+        else:
+            lines.append("      Match: preference-based; no deterministic repository capability match")
+
+    other_matched = [
+        role for role in read_only_roles
+        if role.id in eligible_ids and role.id not in selected_ids
+    ]
+    lines.append(
+        "  Other matched adapters: "
+        + joined(f"{role.id} ({role.title})" for role in other_matched)
+    )
+    optional = [
+        role for role in read_only_roles
+        if role.id not in eligible_ids and role.id not in selected_ids
+    ]
+    lines.append(
+        "  Optional adapters without a deterministic match: "
+        + joined(f"{role.id} ({role.title})" for role in optional)
+    )
+    unmapped = []
+    for role_id in manifest.get("unmapped_available_roles", []):
+        available = available_roles.get(role_id, {})
+        title = available.get("title", role_id)
+        purpose = available.get("purpose", "No canonical adapter is available.")
+        unmapped.append(f"{role_id} ({title}): {purpose}")
+    lines.append("  Repository roles without a canonical adapter:")
+    if unmapped:
+        lines.extend(f"    - {item}" for item in unmapped)
+    else:
+        lines.append("    - none")
+    lines.append(
+        "  Functional effect: add repository-local, read-only role definitions for the "
+        "selected harnesses. No agent is invoked, no application command changes, no CLI "
+        "is installed, and registration fragments are not merged automatically."
+    )
+    return lines
+
+
 def _run_install_adapters(args) -> int:
     if args.confirm_install and not args.apply:
         raise AdapterInstallError("--confirm-install is valid only together with --apply")
@@ -267,6 +371,7 @@ def _run_install_adapters(args) -> int:
             "and separately approved installation"
         )
     plan = plan_adapter_install(args.bundle, args.repo)
+    print("\n".join(_adapter_decision_lines(args.bundle)))
     print(
         f"Install plan: {len(plan.additions)} addition(s), "
         f"{len(plan.unchanged)} unchanged, {len(plan.conflicts)} conflict(s)"

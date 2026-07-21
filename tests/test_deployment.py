@@ -19,12 +19,12 @@ from repo_adaptive_agents.multi_cli import (
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _bundle(root: Path, targets=None) -> Path:
+def _bundle(root: Path, targets=None, roles=None) -> Path:
     output = root / "bundle"
     write_adapter_bundle(
         FIXTURES / "team-fullstack",
         targets or ["skill"],
-        ["repo_explorer"],
+        roles or ["repo_explorer"],
         output,
         selection_confirmed=True,
     )
@@ -206,6 +206,20 @@ class InstallCliTests(unittest.TestCase):
                 "install-adapters", str(bundle), str(destination)
             ])
             self.assertEqual(code, 0, error)
+            self.assertIn("Decision summary:", preview)
+            self.assertIn("Selected targets: skill", preview)
+            self.assertIn("Other available targets: codex, claude, copilot", preview)
+            self.assertIn("repo_explorer (Repository Explorer)", preview)
+            self.assertIn("capabilities=repo_analysis", preview)
+            self.assertIn("Evidence: repo_analysis:", preview)
+            self.assertIn("api_contract_agent (API Contract Agent)", preview)
+            self.assertIn("browser_qa (Browser QA)", preview)
+            self.assertIn("Optional adapters without a deterministic match:", preview)
+            self.assertIn("Repository roles without a canonical adapter:", preview)
+            self.assertIn(
+                "Functional effect: add repository-local, read-only role definitions",
+                preview,
+            )
             self.assertIn("1 addition(s)", preview)
             self.assertIn("Preview only; no files were written", preview)
             self.assertIn("request separate installation approval", preview)
@@ -225,6 +239,25 @@ class InstallCliTests(unittest.TestCase):
             self.assertEqual(code, 0, error)
             self.assertIn("Installed 1 file(s)", applied)
             self.assertIn(".agents/skills/repo-explorer/SKILL.md", _files(destination))
+
+    def test_preview_labels_preference_based_adapter_without_profiler_match(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = _bundle(root, roles=["design_director"])
+            destination = root / "repo"
+            destination.mkdir()
+
+            code, preview, error = self._run([
+                "install-adapters", str(bundle), str(destination)
+            ])
+
+            self.assertEqual(code, 0, error)
+            self.assertIn("design_director (Design Director)", preview)
+            self.assertIn(
+                "Match: preference-based; no deterministic repository capability match",
+                preview,
+            )
+            self.assertEqual(_files(destination), {})
 
     def test_install_confirmation_without_apply_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
