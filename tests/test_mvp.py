@@ -113,8 +113,12 @@ class MvpTests(unittest.TestCase):
             self._write(
                 root,
                 "playwright.config.ts",
+                "const externalBaseUrl = process.env.PLAYWRIGHT_BASE_URL?.trim()\n"
                 "export default {\n"
-                "  webServer: { command: 'npm run dev', url: 'http://127.0.0.1:3000' },\n"
+                "  webServer: externalBaseUrl ? undefined : {\n"
+                "    command: 'npm run dev',\n"
+                "    url: 'http://127.0.0.1:3000',\n"
+                "  },\n"
                 "  metadata: { command: 'not-a-server' },\n"
                 "}\n",
             )

@@ -305,7 +305,12 @@ def _javascript_property_container(
     source: str,
     property_name: str,
 ) -> tuple[str, str] | None:
-    """Return an object/array property value and its masked structural twin."""
+    """Return an object/array property value and its masked structural twin.
+
+    Besides a direct container, accept a single conditional expression with a container
+    in either branch. Playwright commonly disables ``webServer`` for an external base URL
+    with ``condition ? undefined : { ... }``.
+    """
     masked = _mask_javascript_comments_and_strings(source)
     match = re.search(rf"\b{re.escape(property_name)}\s*:", masked)
     if not match:
@@ -313,23 +318,73 @@ def _javascript_property_container(
     start = match.end()
     while start < len(masked) and masked[start].isspace():
         start += 1
-    if start >= len(masked) or masked[start] not in "[{":
+
+    def container_at(container_start: int) -> tuple[str, str] | None:
+        if container_start >= len(masked) or masked[container_start] not in "[{":
+            return None
+        pairs = {"[": "]", "{": "}"}
+        stack = [masked[container_start]]
+        index = container_start + 1
+        while index < len(masked):
+            character = masked[index]
+            if character in pairs:
+                stack.append(character)
+            elif character in "]}":
+                if not stack or pairs[stack[-1]] != character:
+                    return None
+                stack.pop()
+                if not stack:
+                    end = index + 1
+                    return source[container_start:end], masked[container_start:end]
+            index += 1
         return None
 
-    pairs = {"[": "]", "{": "}"}
-    stack = [masked[start]]
-    index = start + 1
+    direct = container_at(start)
+    if direct is not None:
+        return direct
+
+    question: int | None = None
+    parenthesis_depth = 0
+    index = start
     while index < len(masked):
         character = masked[index]
-        if character in pairs:
-            stack.append(character)
-        elif character in "]}":
-            if not stack or pairs[stack[-1]] != character:
+        if character == "(":
+            parenthesis_depth += 1
+        elif character == ")":
+            parenthesis_depth = max(0, parenthesis_depth - 1)
+        elif parenthesis_depth == 0 and character == "?" and masked[index : index + 2] != "?.":
+            question = index
+            break
+        elif parenthesis_depth == 0 and character in ",}":
+            return None
+        index += 1
+    if question is None:
+        return None
+
+    true_start = question + 1
+    while true_start < len(masked) and masked[true_start].isspace():
+        true_start += 1
+    true_container = container_at(true_start)
+    if true_container is not None:
+        return true_container
+
+    branch_depth = 0
+    index = true_start
+    while index < len(masked):
+        character = masked[index]
+        if character in "([{":
+            branch_depth += 1
+        elif character in ")]}":
+            if branch_depth == 0:
                 return None
-            stack.pop()
-            if not stack:
-                end = index + 1
-                return source[start:end], masked[start:end]
+            branch_depth -= 1
+        elif branch_depth == 0 and character == ":":
+            false_start = index + 1
+            while false_start < len(masked) and masked[false_start].isspace():
+                false_start += 1
+            return container_at(false_start)
+        elif branch_depth == 0 and character == ",":
+            return None
         index += 1
     return None
 
