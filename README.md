@@ -382,7 +382,8 @@ facts, selected and alternative harness targets, each selected adapter's purpose
 evidence, other matched and preference-based adapters, repository roles without a canonical
 adapter, the functional effect, and the exact additions/conflicts. This output is generated
 from the validated bundle so approval does not depend on an agent supplying a complete
-narrative.
+narrative. An agent must relay this decision summary with the exact install plan; a
+file-only approval request is insufficient.
 
 After reviewing the additions, installation requires an explicit flag:
 

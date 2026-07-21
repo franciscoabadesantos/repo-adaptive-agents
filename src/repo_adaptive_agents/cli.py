@@ -305,13 +305,8 @@ def _adapter_decision_lines(bundle_dir: str | Path) -> list[str]:
         purpose = role.purpose if role else "No canonical purpose available."
         matched_roles = item.get("matched_available_roles", [])
         matched_capabilities = item.get("matched_capabilities", [])
-        lines.append(f"    - {role_id} ({title}): {purpose}")
+        detail = f"{role_id} ({title}): {purpose}"
         if matched_capabilities:
-            lines.append(
-                "      Match: "
-                f"capabilities={joined(matched_capabilities)}; "
-                f"repository roles={joined(matched_roles)}"
-            )
             evidence_parts: list[str] = []
             for capability_id in matched_capabilities:
                 capability = capabilities.get(capability_id, {})
@@ -323,9 +318,14 @@ def _adapter_decision_lines(bundle_dir: str | Path) -> list[str]:
                 evidence_parts.append(
                     f"{capability_id}: {reason} [{joined(paths[:3])}]"
                 )
-            lines.append("      Evidence: " + "; ".join(evidence_parts))
+            detail += (
+                f" Match: capabilities={joined(matched_capabilities)}; "
+                f"repository roles={joined(matched_roles)}. Evidence: "
+                + "; ".join(evidence_parts)
+            )
         else:
-            lines.append("      Match: preference-based; no deterministic repository capability match")
+            detail += " Match: preference-based; no deterministic repository capability match."
+        lines.append(f"    - {detail}")
 
     other_matched = [
         role for role in read_only_roles
@@ -349,11 +349,10 @@ def _adapter_decision_lines(bundle_dir: str | Path) -> list[str]:
         title = available.get("title", role_id)
         purpose = available.get("purpose", "No canonical adapter is available.")
         unmapped.append(f"{role_id} ({title}): {purpose}")
-    lines.append("  Repository roles without a canonical adapter:")
-    if unmapped:
-        lines.extend(f"    - {item}" for item in unmapped)
-    else:
-        lines.append("    - none")
+    lines.append(
+        "  Repository roles without a canonical adapter: "
+        + ("; ".join(unmapped) if unmapped else "none")
+    )
     lines.append(
         "  Functional effect: add repository-local, read-only role definitions for the "
         "selected harnesses. No agent is invoked, no application command changes, no CLI "
@@ -382,8 +381,9 @@ def _run_install_adapters(args) -> int:
     if not args.apply:
         print("Preview only; no files were written.")
         print(
-            "STOP: present this exact plan to the user and request separate installation "
-            "approval. Do not apply it in the same turn as role/target selection."
+            "STOP: present the Decision summary and exact install plan above, not only "
+            "file paths, and request separate installation approval from the user. Do "
+            "not apply it in the same turn as role/target selection."
         )
         return 0
     result = apply_adapter_install(args.bundle, args.repo)

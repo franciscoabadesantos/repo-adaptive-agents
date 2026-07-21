@@ -223,6 +223,7 @@ class InstallCliTests(unittest.TestCase):
             self.assertIn("1 addition(s)", preview)
             self.assertIn("Preview only; no files were written", preview)
             self.assertIn("request separate installation approval", preview)
+            self.assertIn("not only file paths", preview)
             self.assertEqual(_files(destination), {})
 
             code, unconfirmed, error = self._run([
