@@ -256,7 +256,7 @@ class AdapterCliTests(unittest.TestCase):
         )
         self.assertIn("Ask the user", payload["next_action"])
 
-    def test_cli_requires_user_selection_confirmation_before_writing(self):
+    def test_cli_can_write_unconfirmed_proposal_without_claiming_user_selection(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "bundle"
             code, stdout, stderr = self._run([
@@ -266,10 +266,11 @@ class AdapterCliTests(unittest.TestCase):
                 "--role", "repo_explorer",
                 "--output", str(output),
             ])
-            self.assertEqual(code, 2)
-            self.assertEqual(stdout, "")
-            self.assertIn("prior user selection", stderr)
-            self.assertFalse(output.exists())
+            self.assertEqual(code, 0, stderr)
+            self.assertIn("Proposal only", stdout)
+            self.assertTrue(output.is_dir())
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(manifest["selection_confirmation"], "not_recorded")
 
     def test_unknown_and_write_roles_fail_without_output(self):
         with tempfile.TemporaryDirectory() as temporary:

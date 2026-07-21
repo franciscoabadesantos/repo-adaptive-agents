@@ -29,6 +29,9 @@ architectures, workflows, risks, and organizational preferences.
 - Treat role/target selection and installation as separate approvals. After an adapter
   install preview, stop and ask the user before applying the exact plan; never infer that
   approval from an earlier role/target selection.
+- An agent-selected bundle is an unconfirmed proposal, not a user choice. It may be
+  previewed for discussion but must be regenerated after explicit user selection before
+  installation.
 - Do not hide validation failures by weakening checks.
 
 ## MVP boundaries

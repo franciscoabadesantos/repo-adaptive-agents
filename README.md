@@ -323,7 +323,8 @@ It reports deterministically matched adapters, preference-based options, unmappe
 roles, every supported harness target, and two explicit user questions. It writes nothing.
 
 `propose-adapters` profiles a repository and renders only the read-only roles and harnesses
-confirmed explicitly by the user. Exact capability IDs connect the portable
+supplied by the caller. Without `--confirm-selection`, the result is explicitly an
+unconfirmed proposal: it can be previewed but cannot be installed. Exact capability IDs connect the portable
 `InfrastructurePlan` to compatible canonical roles; they explain eligibility but never
 select, schedule, or invoke an agent.
 
@@ -336,16 +337,19 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-adapters ./my-repo \
   --output /tmp/my-adapters
 ```
 
-The agent-led adoption flow has two separate gates:
+The agent-led adoption flow retains two separate gates:
 
 1. run `profile`, `plan`, and `adapter-options`; present its two unresolved questions and
    ask the user to choose roles and targets;
-2. only after that answer, run `propose-adapters --confirm-selection`, preview installation,
+2. an agent may render an unconfirmed proposal for review, but it must describe it as a
+   recommendation rather than a user choice; after the user chooses, regenerate the bundle
+   with `propose-adapters --confirm-selection`, preview installation,
    show the exact additions, and stop to request a second approval;
 3. only after the user separately approves that exact preview, run
    `install-adapters --apply --confirm-install`.
 
-The confirmation flag is a caller attestation, not identity proof. Recommendations, CLI
+The confirmation flag is a caller attestation, not identity proof. Unconfirmed proposals
+are useful for audit and discussion but are mechanically non-installable. Recommendations, CLI
 arguments, capability matches, and repository facts must never be described as user choices
 before the user actually answers. Both `--targets` and at least one `--role` are required. A user may explicitly choose a
 read-only role without a deterministic capability match (for example, design judgment);
@@ -384,6 +388,10 @@ adapter, the functional effect, and the exact additions/conflicts. This output i
 from the validated bundle so approval does not depend on an agent supplying a complete
 narrative. An agent must relay this decision summary with the exact install plan; a
 file-only approval request is insufficient.
+
+Both confirmed and unconfirmed bundles may be previewed. An unconfirmed preview instructs
+the caller to collect the user's role/target choice and regenerate the bundle. Apply remains
+blocked until that confirmed bundle exists.
 
 After reviewing the additions, installation requires an explicit flag:
 

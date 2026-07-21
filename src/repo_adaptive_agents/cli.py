@@ -203,11 +203,6 @@ def _run_render_role(args) -> int:
 
 
 def _run_propose_adapters(args) -> int:
-    if not args.confirm_selection:
-        raise AdapterSelectionError(
-            "Adapter roles and targets require prior user selection; rerun with "
-            "--confirm-selection only after the user has chosen both"
-        )
     targets = _parse_targets(args.targets)
     written, plan, _ = write_adapter_bundle(
         args.repo,
@@ -216,14 +211,20 @@ def _run_propose_adapters(args) -> int:
         args.output,
         compare_to=args.compare_to,
         protected_root=Path.cwd(),
-        selection_confirmed=True,
+        selection_confirmed=args.confirm_selection,
     )
     issues = validate_adapter_bundle(args.output)
     if issues:
         raise MultiCliError("Generated adapter bundle failed validation: " + "; ".join(issues))
     print(f"Wrote {len(written)} adapter bundle files to {args.output}")
     print("Selected adapters: " + ", ".join(plan.selected_ids))
-    print("Selection confirmation: caller attested prior user approval of roles and targets.")
+    if args.confirm_selection:
+        print("Selection confirmation: caller attested prior user approval of roles and targets.")
+    else:
+        print(
+            "Selection confirmation: not recorded. Proposal only; present the decision "
+            "packet and ask the user to choose roles and targets before regeneration."
+        )
     print("No execution order or agent invocation was generated.")
     if args.compare_to:
         print(f"Compared (read-only) against {args.compare_to}; see manifest.json 'compare'.")
@@ -297,6 +298,15 @@ def _adapter_decision_lines(bundle_dir: str | Path) -> list[str]:
     other_targets = [target for target in TARGETS if target not in selected_targets]
     lines.append(f"  Selected targets: {joined(selected_targets)}")
     lines.append(f"  Other available targets: {joined(other_targets)}")
+    confirmed = manifest.get("selection_confirmation") == "caller_attested"
+    lines.append(
+        "  Selection status: "
+        + (
+            "caller attested prior user selection"
+            if confirmed
+            else "proposal only; prior user selection is not recorded"
+        )
+    )
     lines.append("  Selected adapters:")
     for item in selected:
         role_id = item.get("role_id", "unknown")
@@ -380,11 +390,23 @@ def _run_install_adapters(args) -> int:
         print(f"{entry.status}: {entry.destination_path}{detail}")
     if not args.apply:
         print("Preview only; no files were written.")
-        print(
-            "STOP: present the Decision summary and exact install plan above, not only "
-            "file paths, and request separate installation approval from the user. Do "
-            "not apply it in the same turn as role/target selection."
+        manifest = json.loads(
+            (Path(args.bundle).expanduser().resolve() / "manifest.json").read_text(
+                encoding="utf-8"
+            )
         )
+        if manifest.get("selection_confirmation") == "caller_attested":
+            print(
+                "STOP: present the Decision summary and exact install plan above, not only "
+                "file paths, and request separate installation approval from the user. Do "
+                "not apply it in the same turn as role/target selection."
+            )
+        else:
+            print(
+                "STOP: this is an unconfirmed proposal. Present the Decision summary, ask "
+                "the user to choose or change roles and targets, then regenerate with "
+                "--confirm-selection before any apply."
+            )
         return 0
     result = apply_adapter_install(args.bundle, args.repo)
     print(f"Installed {len(result.created)} file(s); {len(result.unchanged)} already unchanged.")

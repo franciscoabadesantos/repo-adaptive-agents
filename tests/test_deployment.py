@@ -40,7 +40,7 @@ def _files(root: Path) -> dict[str, bytes]:
 
 
 class InstallPlanTests(unittest.TestCase):
-    def test_unconfirmed_bundle_cannot_be_previewed_or_installed(self):
+    def test_unconfirmed_bundle_can_be_previewed_but_not_installed(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             bundle = root / "bundle"
@@ -53,8 +53,10 @@ class InstallPlanTests(unittest.TestCase):
             destination = root / "repo"
             destination.mkdir()
 
-            with self.assertRaisesRegex(AdapterInstallError, "explicit user selection"):
-                plan_adapter_install(bundle, destination)
+            plan = plan_adapter_install(bundle, destination)
+            self.assertEqual(len(plan.additions), 1)
+            with self.assertRaisesRegex(AdapterInstallError, "regenerated after explicit user selection"):
+                apply_adapter_install(bundle, destination)
             self.assertEqual(_files(destination), {})
 
     def test_preview_reports_additions_without_writing(self):
@@ -209,6 +211,7 @@ class InstallCliTests(unittest.TestCase):
             self.assertIn("Decision summary:", preview)
             self.assertIn("Selected targets: skill", preview)
             self.assertIn("Other available targets: codex, claude, copilot", preview)
+            self.assertIn("Selection status: caller attested prior user selection", preview)
             self.assertIn("repo_explorer (Repository Explorer)", preview)
             self.assertIn("capabilities=repo_analysis", preview)
             self.assertIn("Evidence: repo_analysis:", preview)
@@ -240,6 +243,42 @@ class InstallCliTests(unittest.TestCase):
             self.assertEqual(code, 0, error)
             self.assertIn("Installed 1 file(s)", applied)
             self.assertIn(".agents/skills/repo-explorer/SKILL.md", _files(destination))
+
+    def test_cli_previews_unconfirmed_proposal_and_blocks_apply(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = root / "bundle"
+            write_adapter_bundle(
+                FIXTURES / "team-fullstack",
+                ["skill"],
+                ["repo_explorer"],
+                bundle,
+            )
+            destination = root / "repo"
+            destination.mkdir()
+
+            code, preview, error = self._run([
+                "install-adapters", str(bundle), str(destination)
+            ])
+            self.assertEqual(code, 0, error)
+            self.assertIn(
+                "Selection status: proposal only; prior user selection is not recorded",
+                preview,
+            )
+            self.assertIn("regenerate with --confirm-selection", preview)
+            self.assertEqual(_files(destination), {})
+
+            code, output, error = self._run([
+                "install-adapters",
+                str(bundle),
+                str(destination),
+                "--apply",
+                "--confirm-install",
+            ])
+            self.assertEqual(code, 2)
+            self.assertIn("Decision summary:", output)
+            self.assertIn("regenerated after explicit user selection", error)
+            self.assertEqual(_files(destination), {})
 
     def test_preview_labels_preference_based_adapter_without_profiler_match(self):
         with tempfile.TemporaryDirectory() as temporary:
