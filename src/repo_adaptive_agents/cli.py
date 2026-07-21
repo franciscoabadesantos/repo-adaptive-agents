@@ -249,6 +249,16 @@ def _run_adapter_options(args) -> int:
         "repository_contracts": to_jsonable(infrastructure.repository_contracts),
         "recommended_capabilities": to_jsonable(infrastructure.capabilities),
         "available_targets": list(TARGETS),
+        "target_details": {
+            "skill": {
+                "kind": "portable_artifact",
+                "path": ".agents/skills/<role>/SKILL.md",
+                "note": "Optional portable role procedure; not a harness and not required by other targets.",
+            },
+            "codex": {"kind": "harness_adapter"},
+            "claude": {"kind": "harness_adapter"},
+            "copilot": {"kind": "harness_adapter"},
+        },
         "matched_adapters": [to_jsonable(item) for item in matched],
         "optional_adapters": [to_jsonable(item) for item in optional],
         "unmapped_available_roles": list(unmapped),
@@ -261,7 +271,7 @@ def _run_adapter_options(args) -> int:
         "questions": [
             {
                 "id": "harness_targets",
-                "question": "Which harness targets should be installed?",
+                "question": "Which adapter targets should be installed? The skill target is an optional portable artifact, not a harness.",
                 "options": list(TARGETS),
             },
             {

@@ -123,7 +123,10 @@ class MultiCliRenderTests(unittest.TestCase):
             self.assertEqual(data["name"], "independent_reviewer")
             self.assertEqual(data["sandbox_mode"], "read-only")
             self.assertNotIn("model", data)  # runtime-specific; intentionally left unset
-            self.assertIn(".agents/skills/independent-review/SKILL.md", data["developer_instructions"])
+            self.assertNotIn(".agents/skills/", data["developer_instructions"])
+            self.assertNotIn("Complementary context", data["developer_instructions"])
+            self.assertIn("Procedure:", data["developer_instructions"])
+            self.assertIn("Evidence requirements:", data["developer_instructions"])
 
     def test_claude_and_copilot_frontmatter_are_parseable(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -136,6 +139,20 @@ class MultiCliRenderTests(unittest.TestCase):
                 self.assertIsNotNone(meta)
                 self.assertEqual(meta["name"], "independent-review")
                 self.assertTrue(meta["description"])
+
+    def test_harness_only_wrappers_do_not_depend_on_portable_skill(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self._render(
+                Path(temporary),
+                targets=["codex", "claude", "copilot"],
+            )
+            self.assertFalse((output / "portable").exists())
+            for relative in (
+                "codex/.codex/agents/independent_reviewer.toml",
+                "claude/.claude/agents/independent-review.md",
+                "copilot/.github/agents/independent-review.agent.md",
+            ):
+                self.assertNotIn(".agents/skills/", (output / relative).read_text())
 
     def test_skill_md_has_required_sections(self):
         with tempfile.TemporaryDirectory() as temporary:

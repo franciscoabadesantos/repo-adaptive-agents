@@ -89,6 +89,10 @@ use schema version 3 and are always labelled `tool_proposal`; regenerate older b
 installation. The exact installation preview is the single decision packet approved by the
 user.
 
+Version 0.4.1 makes every harness wrapper self-contained. The backward-compatible `skill`
+target is now described explicitly as an optional portable artifact rather than a harness;
+Codex, Claude, and Copilot targets never depend on it being installed.
+
 ## Domain model
 
 `RepoProfile` separates `primary_project_types` from secondary characteristics and keeps
@@ -209,9 +213,13 @@ Each output is classified by portability:
   `model_reasoning_effort`) that do not carry across tools.
 
 Supported targets in the pilot are `skill`, `codex`, `claude`, and `copilot` (also printed by
-`repo-adaptive-agents targets`; roles by `repo-adaptive-agents roles`). Each has an isolated
-renderer, so the three CLIs are never treated as having identical semantics. The roles are
-listed deterministically by `repo-adaptive-agents roles`.
+`repo-adaptive-agents targets`; roles by `repo-adaptive-agents roles`). The stable CLI target
+name `skill` means an optional portable Agent Skill artifact under `.agents/skills/`; it is
+not an IDE or harness. Codex, Claude, and Copilot wrappers are self-contained and do not
+depend on that artifact, so select `skill` only when the destination intentionally consumes
+or versions portable skills. Each target has an isolated renderer, so the three CLIs are
+never treated as having identical semantics. The roles are listed deterministically by
+`repo-adaptive-agents roles`.
 
 Render a proposal (this generates files; it never applies them):
 

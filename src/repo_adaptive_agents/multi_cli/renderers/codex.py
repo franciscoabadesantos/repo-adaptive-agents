@@ -1,9 +1,9 @@
 """Codex agent renderer (`.codex/agents/<id>.toml`).
 
 Codex resolves an agent from a TOML file. There is no native reference to a SKILL.md, so
-this wrapper is self-contained: it preserves the critical constraints inline and points to
-the skill path only as complementary context. Runtime knobs with no canonical equivalent
-(notably ``model``) are intentionally left unset so the Codex config can supply them.
+this wrapper is self-contained and preserves the critical constraints inline. Runtime knobs
+with no canonical equivalent (notably ``model``) are intentionally left unset so the Codex
+config can supply them.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from .common import (
     scope_metadata,
 )
 
-VERSION = "1.0"
+VERSION = "1.1"
 TARGET = "codex"
 PORTABILITY = "target_specific"
 
@@ -65,12 +65,6 @@ def _developer_instructions(role: CanonicalRole, scope: InvocationScope | None) 
     lines.extend(f"- {rule}" for rule in role.critical_constraints())
     lines.extend(["", "Evidence requirements:"])
     lines.extend(f"- {item}" for item in role.evidence_requirements)
-    lines.extend(
-        [
-            "",
-            f"Complementary context (read-only): .agents/skills/{role.slug}/SKILL.md",
-        ]
-    )
     return "\n".join(lines)
 
 
@@ -118,7 +112,6 @@ def render(role: CanonicalRole, scope: InvocationScope | None = None) -> Rendere
             "runtime_preferences.reasoning_intensity": "model_reasoning_effort",
             "constraints.read_only": "sandbox_mode",
             "purpose+capabilities+procedure+constraints+evidence_requirements": "developer_instructions",
-            "slug": "developer_instructions skill path reference",
             "registration": "config.fragments TOML fragment",
             **({"invocation_scope": "developer_instructions scope block"} if scope else {}),
         },

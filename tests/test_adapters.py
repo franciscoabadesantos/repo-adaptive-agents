@@ -245,6 +245,9 @@ class AdapterCliTests(unittest.TestCase):
         self.assertIn("repository_contracts", payload)
         self.assertIn("recommended_capabilities", payload)
         self.assertEqual(payload["available_targets"], ["skill", "codex", "claude", "copilot"])
+        self.assertEqual(payload["target_details"]["skill"]["kind"], "portable_artifact")
+        self.assertIn("not a harness", payload["target_details"]["skill"]["note"])
+        self.assertEqual(payload["target_details"]["codex"]["kind"], "harness_adapter")
         self.assertEqual(
             [item["role_id"] for item in payload["matched_adapters"]],
             ["repo_explorer", "api_contract_agent", "browser_qa"],
@@ -257,6 +260,10 @@ class AdapterCliTests(unittest.TestCase):
             {item["id"] for item in payload["questions"]},
             {"harness_targets", "adapter_roles"},
         )
+        target_question = next(
+            item for item in payload["questions"] if item["id"] == "harness_targets"
+        )
+        self.assertIn("optional portable artifact", target_question["question"])
         self.assertIn("Present the repository summary", payload["next_action"])
 
     def test_adapter_options_is_a_complete_decision_packet_for_prefect(self):
