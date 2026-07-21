@@ -96,6 +96,11 @@ Codex, Claude, and Copilot targets never depend on it being installed.
 Version 0.4.2 makes destination comparisons symlink-safe, cross-validates adapter decision
 metadata against rendered role manifests, and uses adapter-target terminology consistently.
 
+Version 0.4.3 stops turning the `ml_reproducibility` capability into a synthetic
+`ml_reviewer` role. Domain knowledge without a canonical provider remains an explicit
+capability gap; the generic `independent_reviewer` is still available for read-only review
+isolation, but is not presented as ML expertise.
+
 ## Domain model
 
 `RepoProfile` separates `primary_project_types` from secondary characteristics and keeps
@@ -176,7 +181,8 @@ The tests use the original stack fixtures plus operational/component regressions
   browser QA agent;
 - `backend-api`: FastAPI, API contract review, security review, and Jira authorization
   question because the fixture references Jira without a connector;
-- `python-ml`: pandas/scikit-learn, ML reproducibility review, and no browser QA agent;
+- `python-ml`: pandas/scikit-learn, an explicit unmapped ML reproducibility capability,
+  and no synthetic ML or browser QA agent;
 - `pipeline-operational`: Python operational pipeline, scheduled self-hosted CI, Cloudflare
   API, Oracle side effects, and no real test suite;
 - `python-library`: packaging metadata plus importable package and tests;

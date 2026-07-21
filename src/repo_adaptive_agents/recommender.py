@@ -155,7 +155,6 @@ def recommend_infrastructure(profile: RepoProfile, request: str = "") -> Infrast
         "api_contract_review": AgentPlan("api_reviewer", "API reviewer", "Review API contracts and compatibility.", ["api_contract_review"], "Available for API-shaped components."),
         "proxy_service_review": AgentPlan("proxy_reviewer", "Proxy reviewer", "Review the separate Node proxy boundary.", ["proxy_service_review"], "Available for a nested proxy service component."),
         "worker_runtime_review": AgentPlan("worker_reviewer", "Worker reviewer", "Review edge runtime and Wrangler configuration.", ["worker_runtime_review"], "Available for Cloudflare Workers components."),
-        "ml_reproducibility": AgentPlan("ml_reviewer", "ML reviewer", "Review experiment and model reproducibility.", ["ml_reproducibility"], "Available for strong data/ML signals."),
         "infrastructure_safety": AgentPlan("infrastructure_reviewer", "Infrastructure reviewer", "Review infrastructure change safety.", ["infrastructure_safety"], "Available when infrastructure is detected."),
         "deployment_review": AgentPlan("deployment_reviewer", "Deployment reviewer", "Review concrete deployment targets and release paths.", ["deployment_review"], "Available when the profiler identifies a deployment target."),
         "security_review": AgentPlan("security_reviewer", "Security reviewer", "Review trust boundaries and secret handling.", ["security_review"], "Available for service, edge, infrastructure, or operational boundaries."),

@@ -230,10 +230,15 @@ def _run_adapter_options(args) -> int:
     unmapped_roles = [
         role for role in infrastructure.available_roles if role.name in unmapped_names
     ]
-    unmapped_capability_ids = {
+    matched_capability_ids = {
         capability
-        for role in unmapped_roles
-        for capability in role.capabilities
+        for adapter in matched
+        for capability in adapter.matched_capabilities
+    }
+    unmapped_capability_ids = {
+        capability.capability_id
+        for capability in infrastructure.capabilities
+        if capability.capability_id not in matched_capability_ids
     }
     payload = {
         "status": "requires_install_decision",
@@ -268,6 +273,16 @@ def _run_adapter_options(args) -> int:
             for capability in infrastructure.capabilities
             if capability.capability_id in unmapped_capability_ids
         ],
+        "capability_provider_policy": {
+            "unmapped_meaning": (
+                "No canonical adapter or bundled knowledge provider covers this "
+                "recommended capability."
+            ),
+            "generic_reviewer_boundary": (
+                "The optional independent_reviewer supplies read-only review isolation, "
+                "but does not by itself supply missing domain expertise."
+            ),
+        },
         "questions": [
             {
                 "id": "adapter_targets",
@@ -282,8 +297,9 @@ def _run_adapter_options(args) -> int:
         ],
         "next_action": (
             "Present the repository summary, recommended capabilities, matched adapters, "
-            "and unmapped capabilities. The user may choose roles and targets before a "
-            "proposal, or review them in the exact installation preview."
+            "and explicit capability-provider gaps. Do not invent a domain role for an "
+            "unmapped capability. The user may choose roles and targets before a proposal, "
+            "or review them in the exact installation preview."
         ),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
