@@ -7,9 +7,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-import tomllib
-
-from repo_adaptive_agents.generator import proposal_diff, write_proposal
+from repo_adaptive_agents.generator import write_proposal
 from repo_adaptive_agents.generator import ProposalError
 from repo_adaptive_agents.cli import main
 from repo_adaptive_agents.models import to_jsonable
@@ -45,6 +43,98 @@ class MvpTests(unittest.TestCase):
         self.assertIn("api_reviewer", {agent.name for agent in recommend_team(api).agents})
         self.assertIn("data_ml", ml.project_types)
         self.assertIn("ml_reviewer", {agent.name for agent in recommend_team(ml).agents})
+
+    def test_frontend_workflow_preserves_native_commands_and_browser_lifecycle(self):
+        profile = profile_repository(ROOT / "frontend-next")
+
+        self.assertEqual(profile.workflow.package_managers, {"package.json": "npm"})
+        self.assertEqual(profile.workflow.development_commands, ["npm run dev"])
+        self.assertEqual(profile.workflow.build_commands, ["npm run build"])
+        self.assertTrue(
+            {
+                "npm run lint",
+                "npm run typecheck",
+                "npm run verify",
+                "npm run qa:browser",
+                "npm run qa:frontend",
+                "npm test",
+                "npm run test:e2e",
+            }.issubset(profile.workflow.validation_commands)
+        )
+        self.assertIn("verify", profile.workflow.scripts["package.json"])
+
+        self.assertTrue(profile.browser_qa.present)
+        self.assertEqual(profile.browser_qa.frameworks, ["Playwright"])
+        self.assertEqual(profile.browser_qa.config_files, ["playwright.config.ts"])
+        self.assertEqual(profile.browser_qa.commands, ["npm run qa:browser", "npm run test:e2e"])
+        self.assertTrue(profile.browser_qa.manages_server)
+        self.assertEqual(
+            profile.browser_qa.server_commands,
+            ["npm run dev -- --hostname 127.0.0.1 --port 3100"],
+        )
+        self.assertIn("browser_server_lifecycle", {item.signal for item in profile.browser_qa.evidence})
+
+        self.assertEqual(profile.tests.commands, ["npm test"])
+        self.assertNotIn("pytest", profile.tests.commands)
+        self.assertIn("Playwright", profile.tests.frameworks)
+        self.assertIn("vercel", profile.deployment.tools)
+        self.assertIn("Vercel", profile.deployment.targets)
+
+        plan_payload = to_jsonable(recommend_team(profile))
+        self.assertIn("repository_contracts", plan_payload)
+        self.assertIn("available_roles", plan_payload)
+        self.assertNotIn("agents", plan_payload)
+        self.assertIn("npm run verify", plan_payload["repository_contracts"]["validation_commands"])
+        self.assertTrue(plan_payload["repository_contracts"]["browser_qa_manages_server"])
+        self.assertTrue(any("not a mandatory execution pipeline" in item for item in plan_payload["assumptions"]))
+
+    def test_playwright_server_detection_ignores_comments_and_unrelated_commands(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write(
+                root,
+                "package.json",
+                '{"packageManager":"npm@10","scripts":{"test:e2e":"playwright test"},'
+                '"devDependencies":{"@playwright/test":"1"}}',
+            )
+            self._write(root, "package-lock.json", "{}")
+            self._write(
+                root,
+                "playwright.config.ts",
+                "// webServer: { command: 'npm run commented' }\n"
+                "export default { metadata: { command: 'not-a-server' } }\n",
+            )
+
+            profile = profile_repository(root)
+
+            self.assertFalse(profile.browser_qa.manages_server)
+            self.assertEqual(profile.browser_qa.server_commands, [])
+
+            self._write(
+                root,
+                "playwright.config.ts",
+                "export default {\n"
+                "  webServer: { command: 'npm run dev', url: 'http://127.0.0.1:3000' },\n"
+                "  metadata: { command: 'not-a-server' },\n"
+                "}\n",
+            )
+            profile = profile_repository(root)
+            self.assertTrue(profile.browser_qa.manages_server)
+            self.assertEqual(profile.browser_qa.server_commands, ["npm run dev"])
+
+    def test_package_manifest_without_manager_does_not_invent_executable_commands(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write(root, "package.json", '{"scripts":{"test":"vitest run"}}')
+            self._write(root, "tests/value.test.ts", "test('value', () => {})")
+
+            profile = profile_repository(root)
+
+            self.assertEqual(profile.workflow.package_managers, {"package.json": "unknown"})
+            self.assertEqual(profile.workflow.scripts["package.json"], {"test": "vitest run"})
+            self.assertEqual(profile.workflow.validation_commands, [])
+            self.assertTrue(profile.tests.present)
+            self.assertEqual(profile.tests.commands, [])
 
     def test_next_fullstack_ai_is_not_classified_as_ml(self):
         profile = profile_repository(ROOT / "next-fullstack-ai")
@@ -100,20 +190,23 @@ class MvpTests(unittest.TestCase):
         self.assertEqual(jira.status, "requires_authorization")
         self.assertTrue(any(question.id == "authorize_jira" for question in plan.questions))
 
-    def test_proposal_is_valid_toml_and_does_not_require_existing_codex(self):
+    def test_proposal_contains_only_portable_json_contracts(self):
         profile = profile_repository(ROOT / "frontend-next")
         plan = recommend_team(profile)
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "proposal"
             files = write_proposal(profile, plan, output)
-            self.assertGreaterEqual(len(files), 4)
-            tomllib.loads((output / "config.toml").read_text())
-            for path in (output / "agents").glob("*.toml"):
-                tomllib.loads(path.read_text())
+            self.assertEqual(
+                {path.relative_to(output).as_posix() for path in files},
+                {"profile.json", "infrastructure-plan.json"},
+            )
             payload = json.loads((output / "profile.json").read_text())
-            json.loads((output / "team-plan.json").read_text())
+            infrastructure_plan = json.loads((output / "infrastructure-plan.json").read_text())
+            self.assertIn("available_roles", infrastructure_plan)
+            self.assertNotIn("agents", infrastructure_plan)
             self.assertEqual(payload["name"], "frontend-next")
-            self.assertIn("[agents.repo_mapper]", proposal_diff(output, Path(temporary) / "missing-codex"))
+            self.assertFalse((output / "config.toml").exists())
+            self.assertFalse((output / "agents").exists())
 
     def test_serialization_is_json_compatible(self):
         profile = profile_repository(ROOT / "python-ml")
@@ -195,7 +288,7 @@ class MvpTests(unittest.TestCase):
                 write_proposal(profile, plan, repo)
             with self.assertRaisesRegex(ProposalError, "inside the analyzed repository"):
                 write_proposal(profile, plan, repo / "proposal")
-            with self.assertRaisesRegex(ProposalError, r"\.codex"):
+            with self.assertRaisesRegex(ProposalError, "inside the analyzed repository"):
                 write_proposal(profile, plan, repo / ".codex")
 
     def test_existing_proposal_is_never_overwritten(self):
@@ -303,20 +396,44 @@ class MvpTests(unittest.TestCase):
             self.assertTrue(stderr.getvalue().startswith("error: "))
             self.assertNotIn("Traceback", stderr.getvalue())
 
-    def test_proposal_diff_includes_json_and_toml_additions(self):
-        profile = profile_repository(ROOT / "frontend-next")
-        plan = recommend_team(profile)
+    def test_plan_cli_emits_infrastructure_contracts_and_available_roles(self):
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            exit_code = main(["plan", str(ROOT / "frontend-next")])
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertIn("repository_contracts", payload)
+        self.assertIn("available_roles", payload)
+        self.assertNotIn("agents", payload)
+        self.assertIn("npm run verify", payload["repository_contracts"]["validation_commands"])
+
+    def test_propose_cli_does_not_select_or_generate_a_harness(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "proposal"
-            write_proposal(profile, plan, output)
-            existing = Path(temporary) / "existing-codex"
-            existing.mkdir()
-            (existing / "config.toml").write_text("model = 'old'\n", encoding="utf-8")
-            diff = proposal_diff(output, existing)
-            self.assertIn("profile.json", diff)
-            self.assertIn("team-plan.json", diff)
-            self.assertIn("config.toml", diff)
-            self.assertIn("change/conflict: config.toml", diff)
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main([
+                    "propose",
+                    str(ROOT / "frontend-next"),
+                    "--output",
+                    str(output),
+                ])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                {path.name for path in output.iterdir()},
+                {"profile.json", "infrastructure-plan.json"},
+            )
+            self.assertIn("No harness adapter was selected or generated.", stdout.getvalue())
+            self.assertNotIn(".codex", stdout.getvalue())
+
+    def test_propose_cli_requires_an_explicit_output(self):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+            main(["propose", str(ROOT / "frontend-next")])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--output", stderr.getvalue())
 
     def test_custom_virtualenv_and_installed_package_content_are_ignored(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -478,11 +595,13 @@ class MvpTests(unittest.TestCase):
             self._write(root, "src/profiler/cli.py", "def main():\n    return 0\n")
             self._write(root, "tests/fixtures/worker/package.json", '{"dependencies":{"next":"1","express":"1"}}')
             self._write(root, "tests/fixtures/worker/wrangler.toml", "main='src/index.ts'\n")
+            self._write(root, "tests/fixtures/worker/playwright.config.ts", "export default { webServer: {} }\n")
             self._write(root, "tests/fixtures/ml/train.py", "import torch\n")
             profile = profile_repository(root)
             self.assertEqual(profile.primary_project_types, ["application", "cli_tool"])
             self.assertFalse({"frontend", "api", "cloudflare_worker", "data_ml"}.intersection(profile.project_types))
             self.assertEqual([component.name for component in profile.components], ["root"])
+            self.assertFalse(profile.browser_qa.present)
 
     def test_maven_messaging_bridge_prioritizes_runtime_services(self):
         profile = profile_repository(ROOT / "maven-messaging-bridge")

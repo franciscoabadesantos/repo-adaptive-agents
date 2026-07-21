@@ -8,10 +8,11 @@ from .models import (
     AgentPlan,
     CapabilityRecommendation,
     Evidence,
+    InfrastructurePlan,
     IntegrationRecommendation,
     RecommendationStatus,
     RepoProfile,
-    TeamPlan,
+    RepositoryContracts,
     UserQuestion,
 )
 
@@ -57,7 +58,22 @@ def _add(
     items.append(CapabilityRecommendation(capability_id, status, definition.availability, reason, _unique_evidence(evidence)[:4]))
 
 
-def recommend_team(profile: RepoProfile, request: str = "") -> TeamPlan:
+def _repository_contracts(profile: RepoProfile) -> RepositoryContracts:
+    return RepositoryContracts(
+        package_managers=dict(profile.workflow.package_managers),
+        development_commands=list(profile.workflow.development_commands),
+        build_commands=list(profile.workflow.build_commands),
+        validation_commands=list(profile.workflow.validation_commands),
+        test_commands=list(profile.tests.commands),
+        browser_qa_commands=list(profile.browser_qa.commands),
+        browser_qa_manages_server=profile.browser_qa.manages_server,
+        browser_qa_server_commands=list(profile.browser_qa.server_commands),
+        deployment_tools=list(profile.deployment.tools),
+        deployment_targets=list(profile.deployment.targets),
+    )
+
+
+def recommend_infrastructure(profile: RepoProfile, request: str = "") -> InfrastructurePlan:
     request_lower = request.lower()
     capabilities: list[CapabilityRecommendation] = []
     _add(capabilities, "repo_analysis", "Useful for every repository to preserve an evidence-backed map.", profile.evidence[:3] + profile.architecture.evidence[:2])
@@ -126,45 +142,45 @@ def recommend_team(profile: RepoProfile, request: str = "") -> TeamPlan:
     if {"api", "cloudflare_worker", "proxy_service", "infrastructure", "operations", "pipeline", "security_tooling", "certificate_automation", "dns_iac"}.intersection(profile.project_types):
         _add(capabilities, "security_review", "The repository exposes service, edge, infrastructure, certificate, DNS, or operational trust boundaries.", _relevant_evidence(profile, {"api_signal", "cloudflare_deployment", "cloudflare_api", "oracle_operation", "self_hosted_runner", "infrastructure_signal", "acme_protocol_signal", "certificate_lifecycle_signal", "sensitive_operations", "dns_configuration"}))
 
-    agents: list[AgentPlan] = [AgentPlan("repo_mapper", "Repository mapper", "Maintain the evidence-backed repository profile.", ["repo_analysis"], "Always needed to ground the proposed team in local facts.")]
-    agents.append(AgentPlan("test_engineer", "Test engineer", "Assess and run the safest available test strategy.", ["test_strategy"], "Testing is relevant even when the repository currently lacks a real suite."))
+    available_roles: list[AgentPlan] = [AgentPlan("repo_mapper", "Repository mapper", "Maintain the evidence-backed repository profile.", ["repo_analysis"], "Available to ground future work in local facts when repository mapping adds value.")]
+    available_roles.append(AgentPlan("test_engineer", "Test engineer", "Assess and run the safest available test strategy.", ["test_strategy"], "Available when test strategy or independent test evidence is needed."))
     capability_ids = {item.capability_id for item in capabilities}
     if "dependency_audit" in capability_ids:
-        agents.append(AgentPlan("dependency_guardian", "Dependency guardian", "Review dependency and supply-chain changes.", ["dependency_audit"], "The repository contains dependency manifests."))
+        available_roles.append(AgentPlan("dependency_guardian", "Dependency guardian", "Review dependency and supply-chain changes.", ["dependency_audit"], "Available because the repository contains dependency manifests."))
     agent_by_capability = {
-        "pipeline_review": AgentPlan("pipeline_reviewer", "Pipeline reviewer", "Review operational pipeline stages and side effects.", ["pipeline_review"], "Selected only for pipeline-shaped repositories."),
-        "ci_cd_review": AgentPlan("ci_cd_reviewer", "CI/CD reviewer", "Review workflow triggers, runners, permissions, and commands.", ["ci_cd_review"], "Selected when CI/CD workflows are detected."),
-        "operations_review": AgentPlan("operations_reviewer", "Operations reviewer", "Review runtime integrations and operational safety.", ["operations_review"], "Selected for automation with operational side effects."),
-        "browser_qa": AgentPlan("browser_qa", "Browser QA", "Review user-facing browser flows.", ["browser_qa"], "Only selected for browser-facing projects."),
-        "api_contract_review": AgentPlan("api_reviewer", "API reviewer", "Review API contracts and compatibility.", ["api_contract_review"], "Selected for API-shaped components."),
-        "proxy_service_review": AgentPlan("proxy_reviewer", "Proxy reviewer", "Review the separate Node proxy boundary.", ["proxy_service_review"], "Selected for a nested proxy service component."),
-        "worker_runtime_review": AgentPlan("worker_reviewer", "Worker reviewer", "Review edge runtime and Wrangler configuration.", ["worker_runtime_review"], "Only selected for Cloudflare Workers components."),
-        "ml_reproducibility": AgentPlan("ml_reviewer", "ML reviewer", "Review experiment and model reproducibility.", ["ml_reproducibility"], "Only selected for strong data/ML signals."),
-        "infrastructure_safety": AgentPlan("infrastructure_reviewer", "Infrastructure reviewer", "Review infrastructure change safety.", ["infrastructure_safety"], "Only selected when infrastructure is detected."),
-        "deployment_review": AgentPlan("deployment_reviewer", "Deployment reviewer", "Review concrete deployment targets and release paths.", ["deployment_review"], "Selected when the profiler identifies a deployment target."),
-        "security_review": AgentPlan("security_reviewer", "Security reviewer", "Review trust boundaries and secret handling.", ["security_review"], "Selected for service, edge, infrastructure, or operational boundaries."),
-        "application_review": AgentPlan("application_reviewer", "Application reviewer", "Review executable lifecycle and interaction behavior.", ["application_review"], "Selected for executable application repositories."),
-        "computer_vision_review": AgentPlan("computer_vision_reviewer", "Computer vision reviewer", "Review detection and geometric vision pipelines.", ["computer_vision_review"], "Selected for computer-vision runtime behavior."),
-        "image_processing_review": AgentPlan("image_processing_reviewer", "Image processing reviewer", "Review image transformations and artifacts.", ["image_processing_review"], "Selected for image-processing repositories."),
-        "ml_inference_review": AgentPlan("ml_inference_reviewer", "ML inference reviewer", "Review model loading and inference behavior.", ["ml_inference_review", "ml_reproducibility", "model_evaluation"], "Selected for local ML inference."),
-        "shell_review": AgentPlan("shell_reviewer", "Shell reviewer", "Review shell safety and portability.", ["shell_review"], "Selected for shell-based tools."),
-        "acme_protocol_review": AgentPlan("certificate_reviewer", "Certificate reviewer", "Review ACME and certificate lifecycle safety.", ["acme_protocol_review", "certificate_lifecycle_review"], "Selected for certificate automation."),
-        "integration_review": AgentPlan("integration_reviewer", "Integration reviewer", "Review external provider and tool boundaries.", ["integration_review"], "Selected for integration services and operational hooks."),
-        "mcp_protocol_review": AgentPlan("mcp_reviewer", "MCP reviewer", "Review MCP lifecycle, transport, and protocol behavior.", ["mcp_protocol_review"], "Selected for MCP servers."),
-        "tool_contract_review": AgentPlan("tool_contract_reviewer", "Tool contract reviewer", "Review MCP tool schemas and compatibility.", ["tool_contract_review"], "Selected for registered tool contracts."),
-        "photographic_domain_review": AgentPlan("photographic_reviewer", "Photographic reviewer", "Review photographic processing semantics.", ["photographic_domain_review", "visual_evaluation"], "Selected for photographic tools."),
-        "container_review": AgentPlan("container_reviewer", "Container reviewer", "Review secondary container packaging.", ["container_review"], "Selected when container support exists."),
-        "dns_configuration_review": AgentPlan("dns_reviewer", "DNS configuration reviewer", "Review DNS plans, providers, and apply safety.", ["dns_configuration_review"], "Selected for DNS-as-code repositories."),
-        "java_spring_review": AgentPlan("java_spring_reviewer", "Java and Spring reviewer", "Review Spring Boot service structure and runtime behavior.", ["java_spring_review"], "Selected for executable Spring Boot components."),
-        "messaging_architecture_review": AgentPlan("messaging_reviewer", "Messaging architecture reviewer", "Review message flow, service boundaries, and failure handling.", ["messaging_architecture_review"], "Selected for producer/consumer messaging applications."),
-        "rabbitmq_review": AgentPlan("rabbitmq_reviewer", "RabbitMQ reviewer", "Review RabbitMQ topology, delivery semantics, and broker configuration.", ["rabbitmq_review"], "Selected when RabbitMQ runtime integration is detected."),
+        "pipeline_review": AgentPlan("pipeline_reviewer", "Pipeline reviewer", "Review operational pipeline stages and side effects.", ["pipeline_review"], "Available for pipeline-shaped repositories."),
+        "ci_cd_review": AgentPlan("ci_cd_reviewer", "CI/CD reviewer", "Review workflow triggers, runners, permissions, and commands.", ["ci_cd_review"], "Available when CI/CD workflows are detected."),
+        "operations_review": AgentPlan("operations_reviewer", "Operations reviewer", "Review runtime integrations and operational safety.", ["operations_review"], "Available for automation with operational side effects."),
+        "browser_qa": AgentPlan("browser_qa", "Browser QA", "Review user-facing browser flows.", ["browser_qa"], "Available for browser-facing projects when independent runtime evidence adds value."),
+        "api_contract_review": AgentPlan("api_reviewer", "API reviewer", "Review API contracts and compatibility.", ["api_contract_review"], "Available for API-shaped components."),
+        "proxy_service_review": AgentPlan("proxy_reviewer", "Proxy reviewer", "Review the separate Node proxy boundary.", ["proxy_service_review"], "Available for a nested proxy service component."),
+        "worker_runtime_review": AgentPlan("worker_reviewer", "Worker reviewer", "Review edge runtime and Wrangler configuration.", ["worker_runtime_review"], "Available for Cloudflare Workers components."),
+        "ml_reproducibility": AgentPlan("ml_reviewer", "ML reviewer", "Review experiment and model reproducibility.", ["ml_reproducibility"], "Available for strong data/ML signals."),
+        "infrastructure_safety": AgentPlan("infrastructure_reviewer", "Infrastructure reviewer", "Review infrastructure change safety.", ["infrastructure_safety"], "Available when infrastructure is detected."),
+        "deployment_review": AgentPlan("deployment_reviewer", "Deployment reviewer", "Review concrete deployment targets and release paths.", ["deployment_review"], "Available when the profiler identifies a deployment target."),
+        "security_review": AgentPlan("security_reviewer", "Security reviewer", "Review trust boundaries and secret handling.", ["security_review"], "Available for service, edge, infrastructure, or operational boundaries."),
+        "application_review": AgentPlan("application_reviewer", "Application reviewer", "Review executable lifecycle and interaction behavior.", ["application_review"], "Available for executable application repositories."),
+        "computer_vision_review": AgentPlan("computer_vision_reviewer", "Computer vision reviewer", "Review detection and geometric vision pipelines.", ["computer_vision_review"], "Available for computer-vision runtime behavior."),
+        "image_processing_review": AgentPlan("image_processing_reviewer", "Image processing reviewer", "Review image transformations and artifacts.", ["image_processing_review"], "Available for image-processing repositories."),
+        "ml_inference_review": AgentPlan("ml_inference_reviewer", "ML inference reviewer", "Review model loading and inference behavior.", ["ml_inference_review", "ml_reproducibility", "model_evaluation"], "Available for local ML inference."),
+        "shell_review": AgentPlan("shell_reviewer", "Shell reviewer", "Review shell safety and portability.", ["shell_review"], "Available for shell-based tools."),
+        "acme_protocol_review": AgentPlan("certificate_reviewer", "Certificate reviewer", "Review ACME and certificate lifecycle safety.", ["acme_protocol_review", "certificate_lifecycle_review"], "Available for certificate automation."),
+        "integration_review": AgentPlan("integration_reviewer", "Integration reviewer", "Review external provider and tool boundaries.", ["integration_review"], "Available for integration services and operational hooks."),
+        "mcp_protocol_review": AgentPlan("mcp_reviewer", "MCP reviewer", "Review MCP lifecycle, transport, and protocol behavior.", ["mcp_protocol_review"], "Available for MCP servers."),
+        "tool_contract_review": AgentPlan("tool_contract_reviewer", "Tool contract reviewer", "Review MCP tool schemas and compatibility.", ["tool_contract_review"], "Available for registered tool contracts."),
+        "photographic_domain_review": AgentPlan("photographic_reviewer", "Photographic reviewer", "Review photographic processing semantics.", ["photographic_domain_review", "visual_evaluation"], "Available for photographic tools."),
+        "container_review": AgentPlan("container_reviewer", "Container reviewer", "Review secondary container packaging.", ["container_review"], "Available when container support exists."),
+        "dns_configuration_review": AgentPlan("dns_reviewer", "DNS configuration reviewer", "Review DNS plans, providers, and apply safety.", ["dns_configuration_review"], "Available for DNS-as-code repositories."),
+        "java_spring_review": AgentPlan("java_spring_reviewer", "Java and Spring reviewer", "Review Spring Boot service structure and runtime behavior.", ["java_spring_review"], "Available for executable Spring Boot components."),
+        "messaging_architecture_review": AgentPlan("messaging_reviewer", "Messaging architecture reviewer", "Review message flow, service boundaries, and failure handling.", ["messaging_architecture_review"], "Available for producer/consumer messaging applications."),
+        "rabbitmq_review": AgentPlan("rabbitmq_reviewer", "RabbitMQ reviewer", "Review RabbitMQ topology, delivery semantics, and broker configuration.", ["rabbitmq_review"], "Available when RabbitMQ runtime integration is detected."),
     }
     for recommendation in capabilities:
         if recommendation.capability_id == "ml_reproducibility" and "data_ml" not in profile.project_types:
             continue
         agent = agent_by_capability.get(recommendation.capability_id)
         if agent:
-            agents.append(agent)
+            available_roles.append(agent)
 
     integrations: list[IntegrationRecommendation] = []
     questions: list[UserQuestion] = []
@@ -184,7 +200,24 @@ def recommend_team(profile: RepoProfile, request: str = "") -> TeamPlan:
     if not profile.tests.present:
         questions.append(UserQuestion("test_baseline", "Should the proposal include a test-baseline task for this repository?", "No real test suite or recognized test command was detected.", ["Yes, add baseline", "No, defer tests"]))
     if len(profile.deployment.targets) > 1:
-        questions.append(UserQuestion("deployment_scope", "Which deployment target should receive priority in the team plan?", "More than one concrete deployment target was detected.", profile.deployment.targets))
+        questions.append(UserQuestion("deployment_scope", "Which deployment target should receive priority in the infrastructure plan?", "More than one concrete deployment target was detected.", profile.deployment.targets))
 
-    assumptions = ["All generated agents are read-only by default and cannot deploy, commit, push, or call external systems.", "Existing local .codex customizations should be compared before applying a proposal."]
-    return TeamPlan(capabilities, agents, integrations, questions, assumptions)
+    assumptions = [
+        "Available roles are repository capabilities, not a mandatory execution pipeline; select them proportionally per task.",
+        "Running a repository QA command does not require creating a corresponding QA agent.",
+        "Generated review roles are read-only by default and cannot deploy, commit, push, or call external systems.",
+        "Existing harness-specific customizations should be compared before applying a proposal.",
+    ]
+    return InfrastructurePlan(
+        repository_contracts=_repository_contracts(profile),
+        capabilities=capabilities,
+        available_roles=available_roles,
+        integrations=integrations,
+        questions=questions,
+        assumptions=assumptions,
+    )
+
+
+def recommend_team(profile: RepoProfile, request: str = "") -> InfrastructurePlan:
+    """Compatibility alias for the original MVP API."""
+    return recommend_infrastructure(profile, request)

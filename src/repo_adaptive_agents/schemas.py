@@ -8,7 +8,7 @@ REPO_PROFILE_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "RepoProfile",
     "type": "object",
-    "required": ["path", "name", "project_types", "primary_project_types", "secondary_project_types", "languages", "frameworks", "manifests", "components", "architecture", "tests", "deployment", "risks", "warnings"],
+    "required": ["path", "name", "project_types", "primary_project_types", "secondary_project_types", "languages", "frameworks", "manifests", "components", "architecture", "workflow", "tests", "browser_qa", "deployment", "risks", "warnings"],
     "properties": {
         "path": {"type": "string"}, "name": {"type": "string"},
         "project_types": {"type": "array", "items": {"type": "string"}},
@@ -19,7 +19,9 @@ REPO_PROFILE_SCHEMA = {
         "manifests": {"type": "array", "items": {"type": "string"}},
         "components": {"type": "array", "items": {"$ref": "#/$defs/component"}},
         "architecture": {"$ref": "#/$defs/evidence_group"},
+        "workflow": {"$ref": "#/$defs/evidence_group"},
         "tests": {"$ref": "#/$defs/evidence_group"},
+        "browser_qa": {"$ref": "#/$defs/evidence_group"},
         "deployment": {"$ref": "#/$defs/evidence_group"},
         "risks": {"type": "array", "items": {"type": "string"}},
         "warnings": {"type": "array", "items": {"type": "string"}},
@@ -45,14 +47,18 @@ REPO_PROFILE_SCHEMA = {
     },
 }
 
-TEAM_PLAN_SCHEMA = {
+INFRASTRUCTURE_PLAN_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "TeamPlan",
+    "title": "InfrastructurePlan",
     "type": "object",
-    "required": ["capabilities", "agents", "integrations", "questions", "assumptions"],
+    "required": ["repository_contracts", "capabilities", "available_roles", "integrations", "questions", "assumptions"],
     "properties": {
-        "capabilities": {"type": "array"}, "agents": {"type": "array"},
+        "repository_contracts": {"type": "object"},
+        "capabilities": {"type": "array"}, "available_roles": {"type": "array"},
         "integrations": {"type": "array"}, "questions": {"type": "array"},
         "assumptions": {"type": "array", "items": {"type": "string"}},
     },
 }
+
+# Backward-compatible export name for consumers of the original MVP schema module.
+TEAM_PLAN_SCHEMA = INFRASTRUCTURE_PLAN_SCHEMA

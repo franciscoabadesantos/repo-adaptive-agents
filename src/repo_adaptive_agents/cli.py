@@ -7,23 +7,26 @@ import json
 import sys
 from pathlib import Path
 
-from .generator import ProposalError, proposal_diff, write_proposal
+from .generator import ProposalError, write_proposal
 from .models import to_jsonable
 from .multi_cli import (
+    AdapterInstallError,
+    AdapterSelectionError,
     ROLES,
     MultiCliError,
     TARGETS,
-    TeamError,
+    apply_adapter_install,
     build_scope,
     compare_proposal,
+    plan_adapter_install,
     role_ids,
+    validate_adapter_bundle,
     validate_proposal,
-    validate_team_proposal,
-    write_team_proposal,
+    write_adapter_bundle,
 )
 from .multi_cli import write_proposal as write_role_proposal
 from .profiler import profile_repository
-from .recommender import recommend_team
+from .recommender import recommend_infrastructure
 
 
 def _parse_targets(raw: str | None) -> list[str] | None:
@@ -37,7 +40,7 @@ def _parse_targets(raw: str | None) -> list[str] | None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Profile a repository and propose tailored Codex and multi-CLI agent teams."
+        description="Profile a repository and propose tailored, repository-local agentic infrastructure."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("profile", "plan"):
@@ -45,11 +48,17 @@ def _parser() -> argparse.ArgumentParser:
         sub.add_argument("repo", help="Local repository path")
         sub.add_argument("--request", default="", help="Optional user request to shape recommendations")
         sub.add_argument("--evidence-path-limit", type=int, default=25, help="Maximum paths shown per evidence item")
-    propose = subparsers.add_parser("propose")
+    propose = subparsers.add_parser(
+        "propose",
+        help="Write a portable profile and infrastructure plan without choosing a harness",
+    )
     propose.add_argument("repo", help="Local repository path")
-    propose.add_argument("--output", default=".codex-proposal", help="Proposal directory; defaults away from existing .codex")
+    propose.add_argument(
+        "--output",
+        required=True,
+        help="Portable proposal directory; must be outside the analyzed repository",
+    )
     propose.add_argument("--request", default="", help="Optional user request to shape recommendations")
-    propose.add_argument("--existing", default=None, help="Existing .codex directory to diff against")
     propose.add_argument("--evidence-path-limit", type=int, default=25, help="Maximum paths shown per evidence item")
 
     render = subparsers.add_parser(
@@ -86,25 +95,50 @@ def _parser() -> argparse.ArgumentParser:
         help="[write roles] Non-empty description of the approved brief/scope",
     )
 
-    team = subparsers.add_parser(
-        "propose-team",
-        help="[experimental] Profile a repo and render a recommended read-only multi-CLI team (proposal only)",
+    adapters = subparsers.add_parser(
+        "propose-adapters",
+        help="[experimental] Render explicitly selected role adapters for a repository",
         description=(
-            "[EXPERIMENTAL] Profile a repository, recommend a canonical read-only team with "
-            "explicit deterministic rules, and render every selected role to the requested "
-            "targets. Generates a proposal only: it never applies files, runs agents, writes "
-            "to HOME, or touches the analyzed repository. implementation_agent is never "
-            "selected automatically. "
+            "[EXPERIMENTAL] Profile a repository and render only the canonical read-only "
+            "roles and harness targets selected explicitly by the user. Capability matches "
+            "are recorded as evidence, but no execution order, concurrency, consolidator, "
+            "or mandatory team is generated. The command never applies or runs adapters. "
             f"Read-only roles: {', '.join(r for r in role_ids() if r != 'implementation_agent')}. "
             f"Targets: {', '.join(TARGETS)}."
         ),
     )
-    team.add_argument("repo", help="Local repository path to profile")
-    team.add_argument("--targets", default=None, help=f"Comma-separated subset of: {', '.join(TARGETS)} (default: all)")
-    team.add_argument("--output", required=True, help="Proposal directory (must not exist and be outside this repo)")
-    team.add_argument("--include-role", action="append", default=[], metavar="ROLE", help="Repeatable read-only role to force into the team")
-    team.add_argument("--exclude-role", action="append", default=[], metavar="ROLE", help="Repeatable role to drop from the team")
-    team.add_argument("--compare-to", default=None, help="Destination repo to compare against, strictly read-only")
+    adapters.add_argument("repo", help="Local repository path to profile")
+    adapters.add_argument(
+        "--targets",
+        required=True,
+        help=f"Required comma-separated subset of: {', '.join(TARGETS)}",
+    )
+    adapters.add_argument(
+        "--role",
+        action="append",
+        required=True,
+        metavar="ROLE",
+        help="Repeat for each explicit read-only adapter role",
+    )
+    adapters.add_argument("--output", required=True, help="Proposal directory (must not exist and be outside this repo)")
+    adapters.add_argument("--compare-to", default=None, help="Destination repo to compare against, strictly read-only")
+
+    install = subparsers.add_parser(
+        "install-adapters",
+        help="Preview or explicitly install a validated adapter bundle into a local repository",
+        description=(
+            "Plan installation of a generated adapter bundle into a local repository. "
+            "Preview is the default and writes nothing. --apply creates additions only; "
+            "any differing file, symlink, or invalid parent blocks the entire operation."
+        ),
+    )
+    install.add_argument("bundle", help="Validated adapter bundle directory")
+    install.add_argument("repo", help="Destination local repository directory")
+    install.add_argument(
+        "--apply",
+        action="store_true",
+        help="Explicitly create planned additions; existing files are never overwritten",
+    )
 
     subparsers.add_parser("roles", help="[experimental] List available canonical roles")
     subparsers.add_parser("targets", help="[experimental] List supported render targets")
@@ -145,28 +179,41 @@ def _run_render_role(args) -> int:
     return 0
 
 
-def _run_propose_team(args) -> int:
+def _run_propose_adapters(args) -> int:
     targets = _parse_targets(args.targets)
-    written, plan, _ = write_team_proposal(
+    written, plan, _ = write_adapter_bundle(
         args.repo,
         targets,
+        args.role,
         args.output,
-        include_roles=args.include_role,
-        exclude_roles=args.exclude_role,
         compare_to=args.compare_to,
         protected_root=Path.cwd(),
     )
-    issues = validate_team_proposal(args.output)
+    issues = validate_adapter_bundle(args.output)
     if issues:
-        raise MultiCliError("Generated team proposal failed validation: " + "; ".join(issues))
-    print(f"Wrote {len(written)} team proposal files to {args.output}")
-    print("Selected roles: " + (", ".join(plan.selected_ids) or "(none)"))
-    if plan.consolidator:
-        print(f"Consolidator: {plan.consolidator}")
-    for warning in plan.warnings:
-        print(f"warning: {warning}")
+        raise MultiCliError("Generated adapter bundle failed validation: " + "; ".join(issues))
+    print(f"Wrote {len(written)} adapter bundle files to {args.output}")
+    print("Selected adapters: " + ", ".join(plan.selected_ids))
+    print("No execution order or agent invocation was generated.")
     if args.compare_to:
         print(f"Compared (read-only) against {args.compare_to}; see manifest.json 'compare'.")
+    return 0
+
+
+def _run_install_adapters(args) -> int:
+    plan = plan_adapter_install(args.bundle, args.repo)
+    print(
+        f"Install plan: {len(plan.additions)} addition(s), "
+        f"{len(plan.unchanged)} unchanged, {len(plan.conflicts)} conflict(s)"
+    )
+    for entry in plan.entries:
+        detail = f" — {entry.reason}" if entry.reason else ""
+        print(f"{entry.status}: {entry.destination_path}{detail}")
+    if not args.apply:
+        print("Preview only; no files were written. Use --apply to install additions.")
+        return 0
+    result = apply_adapter_install(args.bundle, args.repo)
+    print(f"Installed {len(result.created)} file(s); {len(result.unchanged)} already unchanged.")
     return 0
 
 
@@ -181,24 +228,24 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "render-role":
             return _run_render_role(args)
-        if args.command == "propose-team":
-            return _run_propose_team(args)
+        if args.command == "propose-adapters":
+            return _run_propose_adapters(args)
+        if args.command == "install-adapters":
+            return _run_install_adapters(args)
 
         profile = profile_repository(args.repo, evidence_path_limit=args.evidence_path_limit)
         if args.command == "profile":
             print(json.dumps(to_jsonable(profile), indent=2, sort_keys=True))
             return 0
-        plan = recommend_team(profile, args.request)
+        plan = recommend_infrastructure(profile, args.request)
         if args.command == "plan":
             print(json.dumps(to_jsonable(plan), indent=2, sort_keys=True))
             return 0
         files = write_proposal(profile, plan, args.output)
-        existing = args.existing or f"{args.repo.rstrip('/')}/.codex"
         print(f"Wrote {len(files)} proposal files to {args.output}")
-        print("\nDiff against existing .codex:")
-        print(proposal_diff(args.output, existing) or "(no generated changes)")
+        print("No harness adapter was selected or generated.")
         return 0
-    except (OSError, ProposalError, MultiCliError, TeamError, ValueError) as error:
+    except (OSError, ProposalError, AdapterInstallError, AdapterSelectionError, MultiCliError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 

@@ -1,6 +1,17 @@
 {
   "name": "shop-ui",
-  "scripts": {"dev": "next dev", "build": "next build", "test": "vitest run"},
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run lint && npm run typecheck && npm test",
+    "qa:browser": "node scripts/preflight.mjs && playwright test",
+    "qa:frontend": "npm run verify && npm run build && npm run qa:browser",
+    "test": "vitest run",
+    "test:e2e": "npm run qa:browser --"
+  },
   "dependencies": {"next": "15.0.0", "react": "19.0.0", "react-dom": "19.0.0"},
-  "devDependencies": {"vitest": "2.0.0"}
+  "devDependencies": {"@playwright/test": "1.59.0", "typescript": "5.9.0", "vitest": "2.0.0"}
 }

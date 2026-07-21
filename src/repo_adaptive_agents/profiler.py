@@ -14,12 +14,14 @@ from typing import Any
 from .models import (
     ArchitectureProfile,
     Availability,
+    BrowserQAProfile,
     ComponentProfile,
     DeploymentProfile,
     Evidence,
     IntegrationProfile,
     RepoProfile,
     TestProfile,
+    WorkflowProfile,
 )
 
 IGNORED_DIRS = {
@@ -44,6 +46,12 @@ DOCUMENTATION_DIRS = {"docs", "doc", "documentation", "templates"}
 FIXTURE_DIRS = {"fixtures", "fixture", "testdata", "test-data", "samples"}
 DEFAULT_EVIDENCE_PATH_LIMIT = 25
 _EVIDENCE_PATH_LIMIT: ContextVar[int] = ContextVar("evidence_path_limit", default=DEFAULT_EVIDENCE_PATH_LIMIT)
+PACKAGE_MANAGER_LOCKS = (
+    ("pnpm", ("pnpm-lock.yaml",)),
+    ("yarn", ("yarn.lock",)),
+    ("bun", ("bun.lock", "bun.lockb")),
+    ("npm", ("package-lock.json", "npm-shrinkwrap.json")),
+)
 
 
 @dataclass(frozen=True)
@@ -191,6 +199,173 @@ def _unique(values: list[str]) -> list[str]:
 
 def _unique_evidence(values: list[Evidence]) -> list[Evidence]:
     return list(dict.fromkeys(values))
+
+
+def _package_manager(
+    manifest: str,
+    manifest_data: dict[str, Any],
+    repository_paths: set[str],
+) -> tuple[str, str]:
+    """Return ``(manager, evidence_path)`` without assuming npm from package.json alone."""
+    declared = manifest_data.get("packageManager")
+    if isinstance(declared, str):
+        manager = declared.split("@", 1)[0].strip().lower()
+        if manager in {"npm", "pnpm", "yarn", "bun"}:
+            return manager, manifest
+
+    directory = Path(manifest).parent
+    while True:
+        prefix = "" if str(directory) == "." else directory.as_posix() + "/"
+        for manager, lock_names in PACKAGE_MANAGER_LOCKS:
+            for lock_name in lock_names:
+                candidate = prefix + lock_name
+                if candidate in repository_paths:
+                    return manager, candidate
+        if str(directory) == ".":
+            break
+        directory = directory.parent
+    return "unknown", manifest
+
+
+def _package_script_command(manager: str, manifest: str, script: str) -> str | None:
+    if manager == "unknown":
+        return None
+    if manager == "npm" and script in {"test", "start"}:
+        command = f"npm {script}"
+    elif manager == "yarn":
+        command = f"yarn {script}"
+    else:
+        command = f"{manager} run {script}"
+    parent = Path(manifest).parent.as_posix()
+    return command if parent == "." else f"cd {parent} && {command}"
+
+
+def _script_categories(name: str, body: str) -> set[str]:
+    lowered = name.lower()
+    categories: set[str] = set()
+    if lowered in {"dev", "develop", "serve"} or lowered.startswith("dev:"):
+        categories.add("development")
+    if lowered in {"build", "compile"} or lowered.startswith("build:"):
+        categories.add("build")
+    if (
+        lowered in {"test", "verify", "validate", "check", "lint", "typecheck"}
+        or lowered.startswith(("test:", "verify:", "validate:", "check:", "lint:", "qa:"))
+    ):
+        categories.add("validation")
+    if "playwright" in body.lower() or "browser" in lowered or "e2e" in lowered:
+        categories.update(("validation", "browser_qa"))
+    return categories
+
+
+def _mask_javascript_comments_and_strings(source: str) -> str:
+    """Keep JavaScript structure while hiding comments and string contents."""
+    masked = list(source)
+    index = 0
+    while index < len(source):
+        if source.startswith("//", index):
+            while index < len(source) and source[index] != "\n":
+                masked[index] = " "
+                index += 1
+            continue
+        if source.startswith("/*", index):
+            masked[index] = masked[index + 1] = " "
+            index += 2
+            while index < len(source) and not source.startswith("*/", index):
+                if source[index] != "\n":
+                    masked[index] = " "
+                index += 1
+            if index < len(source):
+                masked[index] = masked[index + 1] = " "
+                index += 2
+            continue
+        if source[index] in {"'", '"', "`"}:
+            quote = source[index]
+            index += 1
+            while index < len(source):
+                if source[index] == "\\":
+                    masked[index] = " "
+                    index += 1
+                    if index < len(source):
+                        if source[index] != "\n":
+                            masked[index] = " "
+                        index += 1
+                    continue
+                if source[index] == quote:
+                    index += 1
+                    break
+                if source[index] != "\n":
+                    masked[index] = " "
+                index += 1
+            continue
+        index += 1
+    return "".join(masked)
+
+
+def _javascript_property_container(
+    source: str,
+    property_name: str,
+) -> tuple[str, str] | None:
+    """Return an object/array property value and its masked structural twin."""
+    masked = _mask_javascript_comments_and_strings(source)
+    match = re.search(rf"\b{re.escape(property_name)}\s*:", masked)
+    if not match:
+        return None
+    start = match.end()
+    while start < len(masked) and masked[start].isspace():
+        start += 1
+    if start >= len(masked) or masked[start] not in "[{":
+        return None
+
+    pairs = {"[": "]", "{": "}"}
+    stack = [masked[start]]
+    index = start + 1
+    while index < len(masked):
+        character = masked[index]
+        if character in pairs:
+            stack.append(character)
+        elif character in "]}":
+            if not stack or pairs[stack[-1]] != character:
+                return None
+            stack.pop()
+            if not stack:
+                end = index + 1
+                return source[start:end], masked[start:end]
+        index += 1
+    return None
+
+
+def _quoted_javascript_value(source: str, start: int) -> str | None:
+    while start < len(source) and source[start].isspace():
+        start += 1
+    if start >= len(source) or source[start] not in {"'", '"'}:
+        return None
+    quote = source[start]
+    value: list[str] = []
+    index = start + 1
+    while index < len(source):
+        if source[index] == "\\" and index + 1 < len(source):
+            value.extend((source[index], source[index + 1]))
+            index += 2
+            continue
+        if source[index] == quote:
+            return "".join(value)
+        value.append(source[index])
+        index += 1
+    return None
+
+
+def _playwright_server_commands(config_text: str) -> list[str] | None:
+    """Return literal commands from a real ``webServer`` object, or ``None`` if absent."""
+    section = _javascript_property_container(config_text, "webServer")
+    if section is None:
+        return None
+    source, masked = section
+    commands: list[str] = []
+    for match in re.finditer(r"\bcommand\s*:", masked):
+        command = _quoted_javascript_value(source, match.end())
+        if command is not None:
+            commands.append(command)
+    return _unique(commands)
 
 
 def _under(path: str, prefix: str) -> bool:
@@ -924,6 +1099,121 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         all_evidence.append(_evidence("external_model_artifact_missing", model_reference_paths, f"Referenced model artifacts are not present in the repository: {', '.join(missing_model_names)}"))
         warnings.append(f"External model artifacts referenced but not versioned: {', '.join(missing_model_names)}")
 
+    package_json_manifests = [
+        manifest for manifest in manifests if Path(manifest).name == "package.json"
+    ]
+    package_managers: dict[str, str] = {}
+    package_scripts: dict[str, dict[str, str]] = {}
+    workflow_evidence: list[Evidence] = []
+    development_commands: list[str] = []
+    build_commands: list[str] = []
+    validation_commands: list[str] = []
+    browser_commands: list[str] = []
+    repository_path_set = set(rel_paths)
+    for manifest in package_json_manifests:
+        data = manifest_data.get(manifest, {})
+        manager, manager_evidence_path = _package_manager(manifest, data, repository_path_set)
+        package_managers[manifest] = manager
+        if manager != "unknown":
+            workflow_evidence.append(
+                _evidence(
+                    "package_manager",
+                    [manager_evidence_path],
+                    f"{manager} selected by an explicit packageManager field or lockfile",
+                )
+            )
+        raw_scripts = data.get("scripts")
+        scripts = {
+            str(name): command
+            for name, command in sorted(raw_scripts.items())
+            if isinstance(name, str) and isinstance(command, str)
+        } if isinstance(raw_scripts, dict) else {}
+        if not scripts:
+            continue
+        package_scripts[manifest] = scripts
+        workflow_evidence.append(
+            _evidence("package_scripts", [manifest], "Repository package scripts detected")
+        )
+        for name, body in scripts.items():
+            command = _package_script_command(manager, manifest, name)
+            if command is None:
+                continue
+            categories = _script_categories(name, body)
+            if "development" in categories:
+                development_commands.append(command)
+            if "build" in categories:
+                build_commands.append(command)
+            if "validation" in categories:
+                validation_commands.append(command)
+            if "browser_qa" in categories:
+                browser_commands.append(command)
+
+    workflow = WorkflowProfile(
+        package_managers=dict(sorted(package_managers.items())),
+        scripts={manifest: package_scripts[manifest] for manifest in sorted(package_scripts)},
+        development_commands=_unique(development_commands),
+        build_commands=_unique(build_commands),
+        validation_commands=_unique(validation_commands),
+        evidence=_unique_evidence(workflow_evidence),
+    )
+
+    playwright_config_paths = sorted(
+        path for path in rel_paths
+        if Path(path).name.startswith("playwright.config") and not _is_fixture_path(path)
+    )
+    playwright_package_manifests: list[str] = []
+    for manifest in package_json_manifests:
+        data = manifest_data.get(manifest, {})
+        dependencies = data.get("dependencies") if isinstance(data.get("dependencies"), dict) else {}
+        dev_dependencies = data.get("devDependencies") if isinstance(data.get("devDependencies"), dict) else {}
+        if {"playwright", "playwright-core", "@playwright/test"}.intersection(
+            set(dependencies) | set(dev_dependencies)
+        ):
+            playwright_package_manifests.append(manifest)
+    playwright_script_manifests = [
+        manifest
+        for manifest, scripts in package_scripts.items()
+        if any("playwright" in body.lower() for body in scripts.values())
+    ]
+    browser_qa_evidence: list[Evidence] = []
+    if playwright_config_paths:
+        browser_qa_evidence.append(
+            _evidence("playwright_config", playwright_config_paths, "Playwright configuration detected")
+        )
+    if playwright_package_manifests or playwright_script_manifests:
+        browser_qa_evidence.append(
+            _evidence(
+                "browser_qa_tooling",
+                _unique(playwright_package_manifests + playwright_script_manifests),
+                "Playwright dependency or package script detected",
+            )
+        )
+    server_commands: list[str] = []
+    managed_server_configs: list[str] = []
+    for config_path in playwright_config_paths:
+        config_text = contents.get(config_path, _read(by_rel[config_path]))
+        detected_server_commands = _playwright_server_commands(config_text)
+        if detected_server_commands is not None:
+            managed_server_configs.append(config_path)
+            server_commands.extend(detected_server_commands)
+    if managed_server_configs:
+        browser_qa_evidence.append(
+            _evidence(
+                "browser_server_lifecycle",
+                managed_server_configs,
+                "Playwright webServer owns browser-test server startup and shutdown",
+            )
+        )
+    browser_qa = BrowserQAProfile(
+        present=bool(playwright_config_paths or playwright_package_manifests or playwright_script_manifests),
+        frameworks=["Playwright"] if playwright_config_paths or playwright_package_manifests or playwright_script_manifests else [],
+        config_files=playwright_config_paths,
+        commands=_unique(browser_commands),
+        manages_server=bool(managed_server_configs),
+        server_commands=_unique(server_commands),
+        evidence=_unique_evidence(browser_qa_evidence),
+    )
+
     test_dir_paths = [path for path in rel_paths if any(part.lower() in {"tests", "test", "__tests__"} for part in Path(path).parts)]
     test_file_paths = [path for path in rel_paths if re.search(r"\.(test|spec)\.[^.]+$", path, re.IGNORECASE)]
     operational_test_like = [path for path in rel_paths if Path(path).name.lower().startswith("test_") and (path.startswith("scripts/") or path.startswith("bin/"))]
@@ -954,19 +1244,47 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
     if shellcheck_paths:
         test_frameworks.append("ShellCheck")
         test_evidence.append(_evidence("shellcheck_config", shellcheck_paths, "ShellCheck usage or configuration detected"))
-    test_config_paths = [path for path in rel_paths if Path(path).name in {"pytest.ini", "tox.ini", "unittest.cfg"} or Path(path).name.startswith(("vitest.config", "jest.config", "playwright.config"))]
+    python_test_config_paths = [
+        path for path in rel_paths
+        if Path(path).name in {"pytest.ini", "tox.ini", "unittest.cfg"} and not _is_fixture_path(path)
+    ]
+    javascript_test_config_paths = [
+        path for path in rel_paths
+        if Path(path).name.startswith(("vitest.config", "jest.config", "playwright.config"))
+        and not _is_fixture_path(path)
+    ]
     package_test_manifests = [manifest for manifest, data in manifest_data.items() if Path(manifest).name == "package.json" and isinstance(data.get("scripts"), dict) and "test" in data["scripts"]]
     py_test_configs = [manifest for manifest, data in manifest_data.items() if Path(manifest).name == "pyproject.toml" and ("[tool.pytest" in _read(by_rel[manifest]) or "pytest" in _read(by_rel[manifest]).lower() and real_test_paths)]
     maven_manifests = [manifest for manifest in manifests if Path(manifest).name == "pom.xml"]
     maven_wrappers = sorted(path for path in rel_paths if Path(path).name == "mvnw" and not _is_fixture_path(path))
     if package_test_manifests:
         test_frameworks.append("package test script")
-        test_commands.extend("npm test" for _ in package_test_manifests)
+        test_commands.extend(
+            command
+            for manifest in package_test_manifests
+            if (command := _package_script_command(package_managers.get(manifest, "unknown"), manifest, "test"))
+        )
         test_evidence.append(_evidence("test_config", package_test_manifests, "Package manifest exposes a test script"))
-    if test_config_paths or py_test_configs:
-        test_frameworks.append("pytest" if any(Path(path).name in {"pytest.ini", "tox.ini"} or "pytest" in _read(by_rel[path]).lower() for path in test_config_paths + py_test_configs) else "test configuration")
-        test_commands.append("pytest")
-        test_evidence.append(_evidence("test_config", _unique(test_config_paths + py_test_configs), "Recognized test-runner configuration detected"))
+    if javascript_test_config_paths:
+        configured = []
+        if any(Path(path).name.startswith("vitest.config") for path in javascript_test_config_paths):
+            configured.append("Vitest")
+        if any(Path(path).name.startswith("jest.config") for path in javascript_test_config_paths):
+            configured.append("Jest")
+        if any(Path(path).name.startswith("playwright.config") for path in javascript_test_config_paths):
+            configured.append("Playwright")
+        test_frameworks.extend(configured or ["JavaScript test configuration"])
+        test_evidence.append(
+            _evidence("test_config", javascript_test_config_paths, "Recognized JavaScript test-runner configuration detected")
+        )
+    if python_test_config_paths or py_test_configs:
+        uses_pytest = any(
+            Path(path).name in {"pytest.ini", "tox.ini"} or "pytest" in _read(by_rel[path]).lower()
+            for path in python_test_config_paths + py_test_configs
+        )
+        test_frameworks.append("pytest" if uses_pytest else "unittest")
+        test_commands.append("pytest" if uses_pytest else "python -m unittest")
+        test_evidence.append(_evidence("test_config", _unique(python_test_config_paths + py_test_configs), "Recognized Python test-runner configuration detected"))
     if maven_manifests:
         if maven_wrappers:
             wrapper = min(maven_wrappers, key=lambda path: (len(Path(path).parts), path))
@@ -1000,6 +1318,16 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
     if any("cloudflare_worker" in component.project_types for component in components):
         deploy_tools.append("wrangler")
         deploy_evidence.append(_evidence("cloudflare_deployment", [path for path in rel_paths if Path(path).name.startswith("wrangler")], "Wrangler configuration identifies Cloudflare Workers deployment"))
+    vercel_paths = [
+        path for path in rel_paths
+        if Path(path).name == "vercel.json" and not _is_fixture_path(path) and not _is_test_path(path)
+    ]
+    if vercel_paths:
+        deploy_tools.append("vercel")
+        deploy_targets.append("Vercel")
+        deploy_evidence.append(
+            _evidence("vercel_deployment", vercel_paths, "Vercel deployment configuration detected")
+        )
     if workflow_paths:
         deploy_tools.append("github-actions")
         deploy_evidence.append(_evidence("ci_cd_workflow", workflow_paths, "GitHub Actions workflows detected"))
@@ -1185,7 +1513,8 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
     project_types = _unique(primary_project_types + secondary_project_types)
     profile = RepoProfile(
         path=str(root), name=root.name, project_types=project_types, primary_project_types=primary_project_types, secondary_project_types=_unique(secondary_project_types), languages=_unique(all_languages), frameworks=_unique(all_frameworks),
-        manifests=manifests, components=components, architecture=architecture, tests=tests, deployment=deployment,
+        manifests=manifests, components=components, architecture=architecture, workflow=workflow, tests=tests,
+        browser_qa=browser_qa, deployment=deployment,
         integrations=integrations, risks=risks, evidence=all_evidence, warnings=_unique(warnings),
     )
     _EVIDENCE_PATH_LIMIT.reset(evidence_limit_token)

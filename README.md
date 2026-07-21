@@ -1,8 +1,8 @@
 # repo-adaptive-agents
 
-Deterministic bootstrapper that analyzes a local repository and proposes tailored Codex
-and multi-CLI agent teams. The MVP is Python 3.11+ and uses only the standard library at
-runtime.
+Deterministic bootstrapper that analyzes a local repository and proposes tailored,
+repository-local agentic infrastructure plus portable role adapters. The MVP is Python
+3.11+ and uses only the standard library at runtime.
 
 ## Architecture
 
@@ -10,15 +10,16 @@ The implementation is intentionally split into small, inspectable layers:
 
 1. `profiler.py` walks a repository while ignoring generated/dependency directories,
    parses root and nested manifests/workflows, and emits a `RepoProfile` with scoped
-   evidence paths and `ComponentProfile` entries.
+   evidence paths, `ComponentProfile` entries, repository-native commands, browser-QA
+   lifecycle facts, and deployment signals.
 2. `catalog.py` defines capabilities independently from agents. Built-in capabilities
    are available; Jira, Confluence, and Dify entries are catalogued as optional but have
    no adapters in this MVP.
 3. `recommender.py` applies explainable rules from project types and signals to produce
-   a `TeamPlan`, including capability status, minimal agents, assumptions, and questions.
-4. `generator.py` renders `config.toml`, agent TOMLs, and JSON reports. It writes to a
-   proposal directory and computes a diff against an existing `.codex/` without changing
-   that existing configuration.
+   an `InfrastructurePlan`, including repository contracts, capabilities, available roles,
+   assumptions, and questions. Available roles are not a mandatory execution pipeline.
+4. `generator.py` writes the portable profile and infrastructure plan only. It does not
+   choose a harness, model, concurrency, sandbox, role execution order, or agent topology.
 5. `cli.py` exposes profile, plan, and propose commands.
 
 The data contract is represented by dataclasses in `models.py`; portable JSON Schema
@@ -51,27 +52,35 @@ After the editable development install, the same suite can be run with:
 python -m pytest
 ```
 
-Inspect a profile or team plan without writing files:
+Inspect a profile or infrastructure plan without writing files:
 
 ```sh
 PYTHONPATH=src python3 -m repo_adaptive_agents.cli profile /path/to/repository
 PYTHONPATH=src python3 -m repo_adaptive_agents.cli plan /path/to/repository
 ```
 
-Generate a proposal and show its TOML diff against `/path/to/repository/.codex/`:
+Generate a portable proposal:
 
 ```sh
 PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose /path/to/repository \
   --output /tmp/repo-adaptive-proposal
 ```
 
-The default output directory is `.codex-proposal`, deliberately separate from an
-existing `.codex/`. `--existing` can point at another baseline. The generated directory
-contains:
+`--output` is required. Proposal output must be outside the analyzed repository and must
+not already exist. The generated directory contains:
 
-- `config.toml` and `agents/*.toml` — the proposed Codex configuration;
 - `profile.json` — detected facts and evidence;
-- `team-plan.json` — capabilities, agents, integrations, questions, and assumptions.
+- `infrastructure-plan.json` — repository contracts, capabilities, available roles,
+  integrations, questions, and assumptions.
+
+This core command intentionally generates no Codex, Claude, Copilot, model, concurrency,
+sandbox, or execution-plan configuration. Harness adapters remain available through the
+explicit experimental `render-role` and `propose-adapters` commands described below.
+
+Version 0.3 changes the core proposal contract: `propose` now requires an explicit output,
+writes `infrastructure-plan.json` instead of `team-plan.json`, and no longer generates Codex
+TOML. The former experimental `propose-team` command is replaced by the explicit
+`propose-adapters` flow.
 
 ## Domain model
 
@@ -87,16 +96,25 @@ entrypoints, deployment targets, and
 evidence. Nested manifests such as `server/proxy/package.json` therefore do not leak
 their Express dependency into the root Worker component.
 
+`workflow` records package managers only when an explicit `packageManager` field or
+repository lockfile proves them, preserves package scripts by manifest, and classifies
+executable development, build, and validation commands without inventing a package manager.
+`browser_qa` separately records browser-test tooling, its repository-native commands, and
+whether Playwright `webServer` owns server startup and shutdown. Detection is static: the
+profiler never launches a server or browser.
+
 Evidence paths are sorted and capped deterministically. Every evidence item includes
 `total_count` and `omitted_count`, and `profile_repository(..., evidence_path_limit=N)`
 or the CLI option `--evidence-path-limit N` can select a different reporting limit
 without changing the underlying detection.
 
-`TeamPlan` contains capability recommendations first. Each recommendation has a
+`InfrastructurePlan` carries the repository-native contracts needed by installed tooling and
+contains capability recommendations first. Each recommendation has a
 selection status (`recommended`, `optional`, `unavailable`, or
 `requires_authorization`) and an availability (`available`, `unavailable`, or
-`requires_authorization`). Agents reference capability IDs and carry a rationale, so a
-reviewer can trace why an agent was selected. `UserQuestion` records decisions that
+`requires_authorization`). Available roles reference capability IDs and carry a rationale,
+so a reviewer can trace why a role is useful without implying it must run on every task.
+`UserQuestion` records decisions that
 cannot be inferred safely.
 
 ML classification requires strong signals: recognized ML frameworks, notebooks,
@@ -125,14 +143,15 @@ such as `.venv-certbot`, directories with `pyvenv.cfg`, and `site-packages` or
 cannot create runtime components or project identities.
 
 Proposal output must be outside the analyzed repository and must not already exist. The
-generator validates all generated TOML/JSON in a temporary sibling directory and then
-renames it atomically; it never merges or overwrites an existing `.codex/` tree.
+generator validates generated JSON in a temporary sibling directory and then renames it
+atomically; it never writes harness configuration into the analyzed repository.
 
 ## Fixtures and observed differentiation
 
 The tests use the original stack fixtures plus operational/component regressions:
 
-- `frontend-next`: Next.js/React, browser QA, dependency review, and test engineer;
+- `frontend-next`: Next.js/React, npm workflow commands, Playwright-owned server lifecycle,
+  Vercel deployment, browser QA, dependency review, and test engineer;
 - `cloudflare-worker`: Wrangler/Hono, worker runtime review, security review, and no
   browser QA agent;
 - `backend-api`: FastAPI, API contract review, security review, and Jira authorization
@@ -145,14 +164,14 @@ The tests use the original stack fixtures plus operational/component regressions
 - `worker-with-actions`: Wrangler plus GitHub Actions but one deployment target;
 - `operational-test-script`: `scripts/test_ports.py` without a test runner or suite.
 
-The tests assert both the detected project type and that the recommended agent sets
-actually differ between fixtures. They also parse every generated TOML file and verify
-JSON serialization.
+The tests assert both the detected project type and that the available role sets
+actually differ between fixtures. They verify the portable JSON contracts and parse every
+TOML emitted by the opt-in adapter tests.
 
 ## Experimental multi-CLI role rendering
 
-> **Experimental pilot.** This subsystem is separate from the deterministic profiler above
-> and covers seven roles in three groups:
+> **Experimental, opt-in adapter layer.** This subsystem is separate from the portable
+> `profile`/`plan`/`propose` core and covers seven roles in three groups:
 >
 > - **General read-only review/exploration:** `independent_reviewer`, `repo_explorer`,
 >   `api_contract_agent`, `accessibility_performance_reviewer`.
@@ -284,59 +303,73 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli render-role implementation_ag
   per-target `sandbox`, `write_scope`, `destructive_actions`, `validation_required`, and
   `path_validation` metadata.
 
-What this pilot deliberately does **not** do: apply changes, write
-into a target repo, sync with HOME, install or detect CLIs, alter `.codex/config.toml`,
-generate `CLAUDE.md` or `.github/copilot-instructions.md`, or make any network call. The
-Copilot output is a **custom agent**, not inline-autocomplete configuration and not a
-replacement for `copilot-instructions`; the manifest states this explicitly.
+The rendering commands deliberately do not apply changes, sync with HOME, install or detect
+CLIs, alter `.codex/config.toml`, generate `CLAUDE.md` or
+`.github/copilot-instructions.md`, or make network calls. The separate local installer
+described below can create reviewed adapter files only after explicit `--apply`.
 
-### End-to-end team proposal: `propose-team`
+### Explicit adapter bundle: `propose-adapters`
 
-`propose-team` profiles a repository, recommends a **read-only** team with explicit
-deterministic rules, and renders every selected role to the requested targets — one
-sub-proposal per role plus an aggregated manifest.
+`propose-adapters` profiles a repository and renders only the read-only roles and harnesses
+chosen explicitly by the user. Exact capability IDs connect the portable
+`InfrastructurePlan` to compatible canonical roles; they explain eligibility but never
+select, schedule, or invoke an agent.
 
 ```sh
-PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-team ./my-repo \
+PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-adapters ./my-repo \
   --targets skill,codex,claude,copilot \
-  --output /tmp/my-team
+  --role repo_explorer \
+  --role browser_qa \
+  --output /tmp/my-adapters
 ```
 
-Roles are chosen by **explicit, deterministic rules** over the existing profiler's signals
-(no LLM, no scoring, no learning):
+Both `--targets` and at least one `--role` are required. A user may explicitly choose a
+read-only role without a deterministic capability match (for example, design judgment);
+the manifest records empty match evidence rather than pretending the profiler inferred it.
+`implementation_agent` remains available only through `render-role` with an explicit write
+scope. `--compare-to DIR` performs a strictly read-only comparison with a destination.
 
-- `repo_explorer` — any non-empty repository;
-- `api_contract_agent` — an API surface detected by the profiler (HTTP/RPC/event/schema);
-- `browser_qa` and `accessibility_performance_reviewer` — a detected frontend web project
-  (the accessibility role never claims that a browser, Lighthouse, or performance tool was
-  run — those remain runtime checks it flags as required);
-- `design_director` — strong structural design signals only (a `.storybook` directory, a
-  `tailwind.config.*`, a `design-tokens` directory, or a design-token file), never vague
-  README wording;
-- `independent_reviewer` — added as the **consolidator** when more than one specialized
-  role is selected;
-- `implementation_agent` — **never** selected automatically; it is always listed under
-  `excluded_roles` because it requires an explicit brief and write scope. `propose-team`
-  rejects it in `--include-role`.
-
-`--include-role` (read-only roles only) forces a role in; `--exclude-role` drops one; their
-order never changes the output. `--compare-to DIR` performs a strictly read-only comparison
-of the rendered roles against a destination repo and records additions/changes/unchanged in
-the manifest. The output layout:
+The output layout is:
 
 ```
 OUTPUT/
-  manifest.json            # aggregated: profile summary, selected/excluded roles with
-  team/AGENTS.fragment.md   # reasons+evidence+confidence, execution plan, per-role hashes
+  manifest.json            # explicit selections, matches, targets, hashes, and assumptions
+  profile.json
+  infrastructure-plan.json
   roles/<role-id>/          # a full per-role proposal (manifest.json + portable/codex/…)
 ```
 
-The **execution plan** is data only — no agent is run: `repo_explorer` first, specialized
-read-only roles in a parallel group, and `independent_reviewer` consolidating last when
-selected. Enforcement differs by target exactly as for `render-role` (Codex sandbox vs.
-advisory Skill/Claude/Copilot), and browser/design tooling is never executed. Generation is
-atomic, byte-for-byte deterministic (no timestamps), writes only under `--output`, and never
-touches the analyzed repository, `.codex/config.toml`, or HOME.
+The bundle contains no execution plan, parallel groups, consolidator, concurrency, or model
+choice. No independent reviewer is added automatically. Enforcement differs by target
+exactly as for `render-role` (Codex sandbox versus advisory Skill/Claude/Copilot), and no
+adapter or browser is executed. Generation is atomic and byte-for-byte deterministic.
+
+### Safe local installation: `install-adapters`
+
+Installation is a separate step. Preview is the default and is strictly read-only:
+
+```sh
+PYTHONPATH=src python3 -m repo_adaptive_agents.cli install-adapters \
+  /tmp/my-adapters /path/to/repository
+```
+
+After reviewing the additions, installation requires an explicit flag:
+
+```sh
+PYTHONPATH=src python3 -m repo_adaptive_agents.cli install-adapters \
+  /tmp/my-adapters /path/to/repository --apply
+```
+
+The installer validates the complete bundle, maps only target adapter files, and excludes
+bundle manifests, profile reports, and shared fragments. Existing identical files are left
+unchanged. A differing file, directory collision, destination symlink, unsafe parent, or
+source symlink is a conflict and blocks the whole operation before writing. There is no
+force or overwrite mode. If creation fails partway through, rollback is limited to files
+and empty directories created by that invocation.
+
+The command installs locally only. It does not merge Codex registration fragments into
+`.codex/config.toml`, write to HOME, install a CLI, commit, push, deploy remotely, or run an
+agent.
 
 ### Security note
 
@@ -349,15 +382,15 @@ before copying any file into a real repository.
 ## Explicit MVP limits
 
 This version does not call Jira, Confluence, Dify, MCP servers, browsers, LLMs, or remote
-deployment systems. It does not read credential values, install integrations, mutate an
-existing `.codex/`, commit, push, deploy, create a PR, or provide a UI. Manifest parsing
+deployment systems. It does not read credential values, install integrations, overwrite
+existing repository files, commit, push, deploy remotely, create a PR, or provide a UI. Manifest parsing
 and framework detection are intentionally conservative; unusual build systems and
 custom conventions may be reported as `unknown` and should be reviewed before use.
 
 ## Next steps
 
 1. Add a versioned profile/plan schema validator and fixture cases for more languages.
-2. Add a safe merge planner that preserves existing `.codex` files and reports conflicts.
+2. Add a machine-readable install-plan output if automation consumers require it.
 3. Add explicit organization/team policy input with precedence over local preferences.
-4. Add opt-in adapters behind authorization boundaries, starting with read-only context.
+4. Expand canonical adapter coverage only where portable capability contracts exist.
 5. Add a reviewable interactive workflow after the deterministic CLI contract stabilizes.

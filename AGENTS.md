@@ -6,9 +6,10 @@ Work only inside this repository unless the user explicitly authorizes another p
 
 ## Product direction
 
-This repository builds a repo-adaptive agent bootstrapper. It must analyze different
-types of repositories, recommend useful capabilities and agents, identify optional
-integrations, ask for missing decisions, and generate auditable `.codex/` proposals.
+This repository builds a repo-adaptive agent-infrastructure bootstrapper. It must analyze
+different types of repositories, preserve their native contracts, recommend useful
+capabilities and optional roles, identify optional integrations, ask for missing decisions,
+and generate portable, auditable proposals. Harness-specific adapters are opt-in outputs.
 
 Do not assume that repositories are frontend applications. Support different stacks,
 architectures, workflows, risks, and organizational preferences.
@@ -33,10 +34,11 @@ The first MVP should:
 - analyze a local repository;
 - create a structured repository profile;
 - detect stack, architecture, tests, deploy tooling, and integrations;
-- recommend capabilities and agents;
+- recommend capabilities and optional roles;
 - identify useful but unavailable external capabilities;
-- generate a proposed `.codex/` tree;
-- show changes without committing or pushing.
+- generate a portable repository profile and infrastructure plan;
+- optionally render explicit, auditable harness adapters;
+- preview and explicitly install new adapter files without overwriting repository state.
 
 The first MVP should not:
 - integrate with Jira, Confluence, Dify, or Cloudflare APIs;

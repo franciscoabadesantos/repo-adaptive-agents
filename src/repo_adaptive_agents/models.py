@@ -1,4 +1,4 @@
-"""Domain model for repository profiling and team proposals."""
+"""Domain model for repository profiling and infrastructure proposals."""
 
 from __future__ import annotations
 
@@ -36,6 +36,31 @@ class TestProfile:
     present: bool = False
     frameworks: list[str] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)
+    evidence: list[Evidence] = field(default_factory=list)
+
+
+@dataclass
+class WorkflowProfile:
+    """Repository-native commands discovered from package manifests and lockfiles."""
+
+    package_managers: dict[str, str] = field(default_factory=dict)
+    scripts: dict[str, dict[str, str]] = field(default_factory=dict)
+    development_commands: list[str] = field(default_factory=list)
+    build_commands: list[str] = field(default_factory=list)
+    validation_commands: list[str] = field(default_factory=list)
+    evidence: list[Evidence] = field(default_factory=list)
+
+
+@dataclass
+class BrowserQAProfile:
+    """Browser-test tooling and server lifecycle facts; no browser is executed."""
+
+    present: bool = False
+    frameworks: list[str] = field(default_factory=list)
+    config_files: list[str] = field(default_factory=list)
+    commands: list[str] = field(default_factory=list)
+    manages_server: bool = False
+    server_commands: list[str] = field(default_factory=list)
     evidence: list[Evidence] = field(default_factory=list)
 
 
@@ -95,7 +120,9 @@ class RepoProfile:
     manifests: list[str]
     components: list[ComponentProfile]
     architecture: ArchitectureProfile
+    workflow: WorkflowProfile
     tests: TestProfile
+    browser_qa: BrowserQAProfile
     deployment: DeploymentProfile
     integrations: list[IntegrationProfile]
     risks: list[str]
@@ -147,12 +174,36 @@ class IntegrationRecommendation:
 
 
 @dataclass
-class TeamPlan:
+class RepositoryContracts:
+    package_managers: dict[str, str]
+    development_commands: list[str]
+    build_commands: list[str]
+    validation_commands: list[str]
+    test_commands: list[str]
+    browser_qa_commands: list[str]
+    browser_qa_manages_server: bool
+    browser_qa_server_commands: list[str]
+    deployment_tools: list[str]
+    deployment_targets: list[str]
+
+
+@dataclass
+class InfrastructurePlan:
+    repository_contracts: RepositoryContracts
     capabilities: list[CapabilityRecommendation]
-    agents: list[AgentPlan]
+    available_roles: list[AgentPlan]
     integrations: list[IntegrationRecommendation]
     questions: list[UserQuestion]
     assumptions: list[str]
+
+    @property
+    def agents(self) -> list[AgentPlan]:
+        """Backward-compatible Python accessor; serialized plans use available_roles."""
+        return self.available_roles
+
+
+# Backward-compatible import for callers of the original MVP API.
+TeamPlan = InfrastructurePlan
 
 
 def to_jsonable(value: Any) -> Any:

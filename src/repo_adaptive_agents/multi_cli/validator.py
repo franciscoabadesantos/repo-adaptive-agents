@@ -225,52 +225,71 @@ def validate_proposal(proposal_dir: str | Path) -> list[str]:
     return issues
 
 
-def _declared_team_files(manifest: dict) -> list[dict]:
+def _declared_adapter_files(manifest: dict) -> list[dict]:
     declared: list[dict] = []
+    declared.extend(manifest.get("artifacts", []))
     for section in manifest.get("roles", {}).values():
         declared.append(section.get("manifest", {}))
         declared.extend(section.get("files", []))
         declared.extend(section.get("artifacts", {}).values())
-    declared.extend(manifest.get("team", {}).get("files", []))
     return [entry for entry in declared if entry]
 
 
-def validate_team_proposal(output_dir: str | Path) -> list[str]:
-    """Validate an aggregated team proposal and each per-role sub-proposal.
+def _contains_symlink(root: Path, relative: str) -> bool:
+    cursor = root
+    for part in Path(relative).parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            return True
+    return False
+
+
+def validate_adapter_bundle(output_dir: str | Path) -> list[str]:
+    """Validate an adapter bundle and each per-role sub-proposal.
 
     Checks the aggregated manifest's declared files exist with matching hashes and relative
     paths, then runs the single-role validator on every ``roles/<role-id>/`` subtree.
     """
     output = Path(output_dir).expanduser().resolve()
     manifest_path = output / "manifest.json"
+    if manifest_path.is_symlink():
+        return ["adapter manifest: manifest.json is a symlink"]
     if not manifest_path.is_file():
-        return ["team manifest: missing manifest.json"]
+        return ["adapter manifest: missing manifest.json"]
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
-        return [f"team manifest: invalid JSON ({error})"]
+        return [f"adapter manifest: invalid JSON ({error})"]
 
     issues: list[str] = []
-    if manifest.get("kind") != "team":
-        issues.append("team manifest: kind is not 'team'")
+    if manifest.get("kind") != "adapter_bundle":
+        issues.append("adapter manifest: kind is not 'adapter_bundle'")
+    if "execution_plan" in manifest:
+        issues.append("adapter manifest: execution_plan is not allowed")
 
-    for entry in _declared_team_files(manifest):
+    for entry in _declared_adapter_files(manifest):
         relative = entry.get("path", "")
         if not relative or relative.startswith("/") or ".." in Path(relative).parts:
-            issues.append(f"team manifest: non-relative or unsafe path {relative!r}")
+            issues.append(f"adapter manifest: non-relative or unsafe path {relative!r}")
+            continue
+        if _contains_symlink(output, relative):
+            issues.append(f"adapter manifest: declared path contains a symlink {relative}")
             continue
         file_path = output / relative
         if not file_path.is_file():
-            issues.append(f"team manifest: declared file missing {relative}")
+            issues.append(f"adapter manifest: declared file missing {relative}")
             continue
         if _sha256(file_path.read_text(encoding="utf-8")) != entry.get("sha256"):
-            issues.append(f"team manifest: hash mismatch for {relative}")
+            issues.append(f"adapter manifest: hash mismatch for {relative}")
 
     for section in manifest.get("compare", {}).values() if isinstance(manifest.get("compare"), dict) else []:
         for path in section:
             if isinstance(path, str) and path.startswith("/"):
-                issues.append(f"team manifest: absolute path in compare result {path!r}")
+                issues.append(f"adapter manifest: absolute path in compare result {path!r}")
 
     for role_id in manifest.get("roles", {}):
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", role_id):
+            issues.append(f"adapter manifest: unsafe role id {role_id!r}")
+            continue
         issues.extend(f"roles/{role_id}: {issue}" for issue in validate_proposal(output / "roles" / role_id))
     return issues
