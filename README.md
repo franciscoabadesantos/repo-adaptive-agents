@@ -93,6 +93,9 @@ Version 0.4.1 makes every harness wrapper self-contained. The backward-compatibl
 target is now described explicitly as an optional portable artifact rather than a harness;
 Codex, Claude, and Copilot targets never depend on it being installed.
 
+Version 0.4.2 makes destination comparisons symlink-safe, cross-validates adapter decision
+metadata against rendered role manifests, and uses adapter-target terminology consistently.
+
 ## Domain model
 
 `RepoProfile` separates `primary_project_types` from secondary characteristics and keeps
@@ -341,10 +344,10 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli adapter-options ./my-repo
 It emits a self-contained decision packet: repository identity and technologies,
 repository-native contracts, recommended capabilities, deterministically matched adapters,
 preference-based options, capabilities and plan roles without canonical adapters, every
-supported harness target, and two explicit user questions. Consumers should present these
+supported adapter target, and two explicit user questions. Consumers should present these
 facts and coverage gaps before asking for roles and targets. It writes nothing.
 
-`propose-adapters` profiles a repository and renders only the read-only roles and harnesses
+`propose-adapters` profiles a repository and renders only the read-only roles and adapter targets
 supplied by the caller. The result is always a tool proposal: roles and targets remain
 recommendations until the user approves the exact installation preview. Exact capability IDs connect the portable
 `InfrastructurePlan` to compatible canonical roles; they explain eligibility but never
@@ -403,7 +406,7 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli install-adapters \
 ```
 
 The preview is a decision packet, not just a file list. It reports detected repository
-facts, selected and alternative harness targets, each selected adapter's purpose and match
+facts, selected and alternative adapter targets, each selected adapter's purpose and match
 evidence, other matched and preference-based adapters, repository roles without a canonical
 adapter, the functional effect, and the exact additions/conflicts. This output is generated
 from the validated bundle so approval does not depend on an agent supplying a complete

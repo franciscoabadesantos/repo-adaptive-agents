@@ -101,7 +101,7 @@ def _parser() -> argparse.ArgumentParser:
         help="[experimental] Render explicitly selected role adapters for a repository",
         description=(
             "[EXPERIMENTAL] Profile a repository and render only the canonical read-only "
-            "roles and harness targets supplied by the caller as a tool proposal. Capability matches "
+            "roles and adapter targets supplied by the caller as a tool proposal. Capability matches "
             "are recorded as evidence, but no execution order, concurrency, consolidator, "
             "or mandatory team is generated. The command never applies or runs adapters. "
             f"Read-only roles: {', '.join(r for r in role_ids() if r != 'implementation_agent')}. "
@@ -126,7 +126,7 @@ def _parser() -> argparse.ArgumentParser:
 
     adapter_options = subparsers.add_parser(
         "adapter-options",
-        help="Report matched adapters, preference-based options, and harness targets without writing",
+        help="Report matched adapters, preference-based options, and adapter targets without writing",
     )
     adapter_options.add_argument("repo", help="Local repository path to profile")
     adapter_options.add_argument("--request", default="", help="Optional user request to shape recommendations")
@@ -270,7 +270,7 @@ def _run_adapter_options(args) -> int:
         ],
         "questions": [
             {
-                "id": "harness_targets",
+                "id": "adapter_targets",
                 "question": "Which adapter targets should be installed? The skill target is an optional portable artifact, not a harness.",
                 "options": list(TARGETS),
             },
@@ -391,7 +391,7 @@ def _adapter_decision_lines(bundle_dir: str | Path) -> list[str]:
     )
     lines.append(
         "  Functional effect: add repository-local, read-only role definitions for the "
-        "selected harnesses. No agent is invoked, no application command changes, no CLI "
+        "selected adapter targets. No agent is invoked, no application command changes, no CLI "
         "is installed, and registration fragments are not merged automatically."
     )
     return lines

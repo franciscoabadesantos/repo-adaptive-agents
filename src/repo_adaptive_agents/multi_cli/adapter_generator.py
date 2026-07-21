@@ -12,6 +12,7 @@ from .adapters import AdapterPlan, select_adapters
 from .generator import (
     GENERATOR_VERSION,
     MultiCliError,
+    _destination_path_conflict,
     _repo_relative,
     _sha256,
     render_role,
@@ -80,7 +81,9 @@ def _compare_to_destination(files: dict[str, str], compare_to: str | Path) -> di
         if repo_relative is None:
             continue
         target_file = destination / repo_relative
-        if target_file.is_file():
+        if _destination_path_conflict(destination, repo_relative):
+            changes.add(repo_relative)
+        elif target_file.is_file():
             if target_file.read_text(encoding="utf-8") == files[proposal_relative]:
                 unchanged.add(repo_relative)
             else:

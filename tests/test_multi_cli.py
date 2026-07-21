@@ -429,6 +429,23 @@ class MultiCliCompareTests(unittest.TestCase):
             self.assertEqual(report.changes, [".codex/agents/independent_reviewer.toml"])
             self.assertEqual(report.additions, [".codex/config.fragments/independent_reviewer.toml"])
 
+    def test_compare_to_does_not_follow_destination_symlink(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "out"
+            write_proposal(ROLE, ["codex"], output)
+            destination = root / "dest"
+            (destination / ".codex/agents").mkdir(parents=True)
+            outside = root / "outside.txt"
+            outside.write_text("REVIEW_SENTINEL_OUTSIDE_REPOSITORY\n", encoding="utf-8")
+            (destination / ".codex/agents/independent_reviewer.toml").symlink_to(outside)
+
+            report = compare_proposal(output, destination)
+
+            self.assertEqual(report.changes, [".codex/agents/independent_reviewer.toml"])
+            self.assertNotIn("REVIEW_SENTINEL_OUTSIDE_REPOSITORY", report.diff)
+            self.assertIn("comparison unavailable: destination path is a symlink", report.diff)
+
 
 class MultiCliRoleBatchTests(unittest.TestCase):
     def test_role_registry_is_exact_and_deterministic(self):

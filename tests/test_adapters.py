@@ -150,6 +150,31 @@ class AdapterBundleTests(unittest.TestCase):
             )
             self.assertEqual(_tree_bytes(destination), before)
 
+    def test_compare_does_not_follow_destination_symlink(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "destination"
+            destination.mkdir()
+            outside = root / "outside"
+            (outside / "agents").mkdir(parents=True)
+            (outside / "agents/repo_explorer.toml").write_bytes(b"\xff")
+            (destination / ".codex").symlink_to(outside, target_is_directory=True)
+            output = root / "bundle"
+
+            write_adapter_bundle(
+                FIXTURES / "team-fullstack",
+                ["codex"],
+                ["repo_explorer"],
+                output,
+                compare_to=destination,
+            )
+
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertIn(
+                ".codex/agents/repo_explorer.toml",
+                manifest["compare"]["changes"],
+            )
+
     def test_output_guards_preserve_existing_and_protected_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
             existing = Path(temporary) / "bundle"
@@ -194,6 +219,29 @@ class AdapterBundleTests(unittest.TestCase):
             self.assertIn(
                 "adapter manifest: execution_plan is not allowed",
                 validate_adapter_bundle(output),
+            )
+
+    def test_validator_rejects_requested_target_role_manifest_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "bundle"
+            write_adapter_bundle(
+                FIXTURES / "team-fullstack",
+                ["codex"],
+                ["repo_explorer"],
+                output,
+            )
+            manifest_path = output / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["requested_targets"] = ["skill"]
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            issues = validate_adapter_bundle(output)
+
+            self.assertTrue(
+                any("targets do not match requested_targets" in issue for issue in issues)
             )
 
 
@@ -258,10 +306,10 @@ class AdapterCliTests(unittest.TestCase):
         )
         self.assertEqual(
             {item["id"] for item in payload["questions"]},
-            {"harness_targets", "adapter_roles"},
+            {"adapter_targets", "adapter_roles"},
         )
         target_question = next(
-            item for item in payload["questions"] if item["id"] == "harness_targets"
+            item for item in payload["questions"] if item["id"] == "adapter_targets"
         )
         self.assertIn("optional portable artifact", target_question["question"])
         self.assertIn("Present the repository summary", payload["next_action"])

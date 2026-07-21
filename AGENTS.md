@@ -26,12 +26,11 @@ architectures, workflows, risks, and organizational preferences.
 - Never store credentials, tokens, secrets, or personal preferences in the repository.
 - Distinguish shared repository configuration, team policy, and local user preferences.
 - Ask before introducing external integrations or permanent repo-level agents.
-- Treat role/target selection and installation as separate approvals. After an adapter
-  install preview, stop and ask the user before applying the exact plan; never infer that
-  approval from an earlier role/target selection.
-- An agent-selected bundle is an unconfirmed proposal, not a user choice. It may be
-  previewed for discussion but must be regenerated after explicit user selection before
-  installation.
+- Treat every generated bundle as an unconfirmed tool proposal. The exact installation
+  preview is the decision packet for its proposed roles, targets, and file additions.
+- After presenting that preview, stop and ask the user before applying it. Approval of an
+  earlier role/target discussion is insufficient, but approval of the exact preview accepts
+  both its selection and its file plan; regeneration is required only when that plan changes.
 - Do not hide validation failures by weakening checks.
 
 ## MVP boundaries

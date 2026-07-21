@@ -227,11 +227,22 @@ def validate_proposal(proposal_dir: str | Path) -> list[str]:
 
 def _declared_adapter_files(manifest: dict) -> list[dict]:
     declared: list[dict] = []
-    declared.extend(manifest.get("artifacts", []))
-    for section in manifest.get("roles", {}).values():
-        declared.append(section.get("manifest", {}))
-        declared.extend(section.get("files", []))
-        declared.extend(section.get("artifacts", {}).values())
+    artifacts = manifest.get("artifacts")
+    if isinstance(artifacts, list):
+        declared.extend(artifacts)
+    roles = manifest.get("roles")
+    for section in roles.values() if isinstance(roles, dict) else []:
+        if not isinstance(section, dict):
+            continue
+        manifest_entry = section.get("manifest")
+        if isinstance(manifest_entry, dict):
+            declared.append(manifest_entry)
+        files = section.get("files")
+        if isinstance(files, list):
+            declared.extend(files)
+        role_artifacts = section.get("artifacts")
+        if isinstance(role_artifacts, dict):
+            declared.extend(role_artifacts.values())
     return [entry for entry in declared if entry]
 
 
@@ -242,6 +253,118 @@ def _contains_symlink(root: Path, relative: str) -> bool:
         if cursor.is_symlink():
             return True
     return False
+
+
+def _validate_adapter_semantics(output: Path, manifest: dict) -> list[str]:
+    """Cross-check decision metadata against every rendered role proposal."""
+    issues: list[str] = []
+    requested = manifest.get("requested_targets")
+    if not isinstance(requested, list) or not requested:
+        issues.append("adapter manifest: requested_targets must be a non-empty list")
+        requested_targets: list[str] = []
+    else:
+        requested_targets = [item for item in requested if isinstance(item, str)]
+        if len(requested_targets) != len(requested):
+            issues.append("adapter manifest: requested_targets must contain only strings")
+        if len(set(requested_targets)) != len(requested_targets):
+            issues.append("adapter manifest: requested_targets contains duplicates")
+        unknown_targets = sorted(set(requested_targets).difference(_TARGET_VALIDATORS))
+        if unknown_targets:
+            issues.append(f"adapter manifest: unknown requested targets {unknown_targets}")
+
+    roles = manifest.get("roles")
+    if not isinstance(roles, dict) or not roles:
+        issues.append("adapter manifest: roles must be a non-empty object")
+        return issues
+
+    selected = manifest.get("selected_adapters")
+    if not isinstance(selected, list):
+        issues.append("adapter manifest: selected_adapters must be a list")
+        selected = []
+    selected_by_role: dict[str, dict] = {}
+    for item in selected:
+        if not isinstance(item, dict) or not isinstance(item.get("role_id"), str):
+            issues.append("adapter manifest: selected_adapters contains an invalid entry")
+            continue
+        role_id = item["role_id"]
+        if item.get("selection_source") != "tool_proposal":
+            issues.append(
+                f"adapter manifest: selected adapter {role_id!r} has an invalid selection_source"
+            )
+        if role_id in selected_by_role:
+            issues.append(f"adapter manifest: duplicate selected adapter {role_id!r}")
+            continue
+        selected_by_role[role_id] = item
+    if set(selected_by_role) != set(roles):
+        issues.append("adapter manifest: selected_adapters role ids do not match roles keys")
+
+    for role_id, section in roles.items():
+        if not isinstance(role_id, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", role_id):
+            continue
+        if not isinstance(section, dict):
+            issues.append(f"adapter manifest: role section {role_id!r} is not an object")
+            continue
+        if section.get("selection") != selected_by_role.get(role_id):
+            issues.append(
+                f"adapter manifest: role {role_id!r} selection does not match selected_adapters"
+            )
+
+        prefix = f"roles/{role_id}/"
+        expected_manifest_path = prefix + "manifest.json"
+        manifest_entry = section.get("manifest")
+        if not isinstance(manifest_entry, dict) or manifest_entry.get("path") != expected_manifest_path:
+            issues.append(f"adapter manifest: role {role_id!r} has an invalid manifest path")
+            continue
+        role_manifest_path = output / expected_manifest_path
+        if _contains_symlink(output, expected_manifest_path) or not role_manifest_path.is_file():
+            continue
+        try:
+            role_manifest = json.loads(role_manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        if role_manifest.get("canonical_role_id") != role_id:
+            issues.append(
+                f"adapter manifest: role {role_id!r} canonical_role_id does not match"
+            )
+        if role_manifest.get("targets_requested") != requested_targets:
+            issues.append(
+                f"adapter manifest: role {role_id!r} targets do not match requested_targets"
+            )
+        target_sections = role_manifest.get("targets")
+        if not isinstance(target_sections, dict) or set(target_sections) != set(requested_targets):
+            issues.append(
+                f"adapter manifest: role {role_id!r} rendered targets do not match requested_targets"
+            )
+
+        expected_files = {expected_manifest_path}
+        shared = role_manifest.get("shared")
+        if isinstance(shared, dict):
+            for entry in shared.get("files", []):
+                if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                    expected_files.add(prefix + entry["path"])
+        if isinstance(target_sections, dict):
+            for target in target_sections.values():
+                if not isinstance(target, dict):
+                    continue
+                for entry in target.get("files", []):
+                    if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                        expected_files.add(prefix + entry["path"])
+        section_files = section.get("files")
+        actual_files = (
+            {
+                entry["path"]
+                for entry in section_files
+                if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+            }
+            if isinstance(section_files, list)
+            else set()
+        )
+        if actual_files != expected_files:
+            issues.append(
+                f"adapter manifest: role {role_id!r} files do not match its role manifest"
+            )
+    return issues
 
 
 def validate_adapter_bundle(output_dir: str | Path) -> list[str]:
@@ -270,6 +393,7 @@ def validate_adapter_bundle(output_dir: str | Path) -> list[str]:
         issues.append("adapter manifest: unsupported schema_version")
     if manifest.get("selection_status") != "tool_proposal":
         issues.append("adapter manifest: invalid or missing selection_status")
+    issues.extend(_validate_adapter_semantics(output, manifest))
 
     for entry in _declared_adapter_files(manifest):
         relative = entry.get("path", "")
@@ -291,9 +415,14 @@ def validate_adapter_bundle(output_dir: str | Path) -> list[str]:
             if isinstance(path, str) and path.startswith("/"):
                 issues.append(f"adapter manifest: absolute path in compare result {path!r}")
 
-    for role_id in manifest.get("roles", {}):
+    roles = manifest.get("roles")
+    for role_id in roles if isinstance(roles, dict) else {}:
         if not re.fullmatch(r"[a-z][a-z0-9_]*", role_id):
             issues.append(f"adapter manifest: unsafe role id {role_id!r}")
             continue
-        issues.extend(f"roles/{role_id}: {issue}" for issue in validate_proposal(output / "roles" / role_id))
+        try:
+            role_issues = validate_proposal(output / "roles" / role_id)
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
+            role_issues = [f"proposal validation failed ({type(error).__name__})"]
+        issues.extend(f"roles/{role_id}: {issue}" for issue in role_issues)
     return issues

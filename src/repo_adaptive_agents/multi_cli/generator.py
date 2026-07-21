@@ -266,6 +266,22 @@ def _repo_relative(proposal_relative: str) -> str | None:
     return Path(*parts[1:]).as_posix()
 
 
+def _destination_path_conflict(destination: Path, relative: str) -> str | None:
+    """Return a lexical destination conflict without following repository symlinks."""
+    cursor = destination
+    parts = Path(relative).parts
+    for index, part in enumerate(parts):
+        cursor = cursor / part
+        shown = Path(*parts[: index + 1]).as_posix()
+        if cursor.is_symlink():
+            return f"destination path is a symlink: {shown}"
+        if index < len(parts) - 1 and cursor.exists() and not cursor.is_dir():
+            return f"destination parent is not a directory: {shown}"
+    if cursor.exists() and not cursor.is_file():
+        return f"destination is not a regular file: {relative}"
+    return None
+
+
 def compare_proposal(proposal_dir: str | Path, compare_to: str | Path) -> CompareReport:
     """Compare a written proposal against a destination directory, strictly read-only."""
     proposal = Path(proposal_dir).expanduser().resolve()
@@ -284,6 +300,13 @@ def compare_proposal(proposal_dir: str | Path, compare_to: str | Path) -> Compar
             continue
         target_file = destination / repo_relative
         new_lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        conflict = _destination_path_conflict(destination, repo_relative)
+        if conflict:
+            changes.append(repo_relative)
+            diff_chunks.append(
+                f"# change/conflict: {repo_relative}\n# comparison unavailable: {conflict}\n"
+            )
+            continue
         if target_file.is_file():
             old_lines = target_file.read_text(encoding="utf-8").splitlines(keepends=True)
             if old_lines == new_lines:
