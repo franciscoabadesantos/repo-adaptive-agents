@@ -42,7 +42,9 @@ class MvpTests(unittest.TestCase):
         self.assertIn("api", api.project_types)
         self.assertIn("api_reviewer", {agent.name for agent in recommend_team(api).agents})
         self.assertIn("data_ml", ml.project_types)
-        self.assertIn("ml_reviewer", {agent.name for agent in recommend_team(ml).agents})
+        ml_plan = recommend_team(ml)
+        self.assertIn("ml_reproducibility", {item.capability_id for item in ml_plan.capabilities})
+        self.assertNotIn("ml_reviewer", {agent.name for agent in ml_plan.agents})
 
     def test_frontend_workflow_preserves_native_commands_and_browser_lifecycle(self):
         profile = profile_repository(ROOT / "frontend-next")
@@ -184,6 +186,7 @@ class MvpTests(unittest.TestCase):
 
         self.assertEqual({item.signal for item in ml.evidence}, {"ml_signal"})
         self.assertTrue(any("pyproject.toml" in path for item in ml.evidence for path in item.paths))
+        self.assertNotIn("ml_reviewer", {agent.name for agent in plan.agents})
 
     def test_external_reference_requires_authorization(self):
         profile = profile_repository(ROOT / "backend-api")

@@ -342,6 +342,34 @@ class AdapterCliTests(unittest.TestCase):
         self.assertIn("pipeline_reviewer", payload["unmapped_available_roles"])
         self.assertTrue(any(item["name"] == "pipeline_reviewer" for item in payload["unmapped_roles"]))
 
+    def test_ml_expertise_is_an_explicit_provider_gap_not_a_synthetic_role(self):
+        code, stdout, stderr = self._run([
+            "adapter-options",
+            str(FIXTURES / "python-ml"),
+        ])
+
+        self.assertEqual(code, 0, stderr)
+        payload = json.loads(stdout)
+        capability_ids = {
+            item["capability_id"] for item in payload["recommended_capabilities"]
+        }
+        self.assertIn("ml_reproducibility", capability_ids)
+        self.assertNotIn("ml_reviewer", payload["unmapped_available_roles"])
+        self.assertFalse(
+            any(item["name"] == "ml_reviewer" for item in payload["unmapped_roles"])
+        )
+        unmapped_ids = {
+            item["capability_id"] for item in payload["unmapped_capabilities"]
+        }
+        self.assertIn("ml_reproducibility", unmapped_ids)
+        self.assertIn(
+            "does not by itself supply missing domain expertise",
+            payload["capability_provider_policy"]["generic_reviewer_boundary"],
+        )
+        self.assertIn("independent_reviewer", [
+            item["role_id"] for item in payload["optional_adapters"]
+        ])
+
     def test_cli_always_writes_tool_proposal_without_claiming_user_selection(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "bundle"
