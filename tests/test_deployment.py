@@ -269,13 +269,14 @@ class InstallCliTests(unittest.TestCase):
                     ],
                 },
                 provider_resolution={
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "kind": "provider_resolution",
                     "decisions": [
                         {
                             "capability_id": "test_strategy",
                             "outcome": "leave_unresolved",
                             "provider_id": None,
+                            "decomposition": [],
                             "rationale": "User chose to preserve the unresolved gap.",
                         }
                     ],

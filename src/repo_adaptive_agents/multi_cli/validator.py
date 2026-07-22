@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ..providers import (
     ProviderResolutionError,
+    decomposed_capabilities,
     parse_provider_research,
     parse_provider_resolution,
 )
@@ -267,6 +268,10 @@ def _validate_adapter_semantics(output: Path, manifest: dict) -> list[str]:
     provider_research = manifest.get("provider_research")
     provider_resolution = manifest.get("provider_resolution")
     provider_proposals = manifest.get("provider_gap_proposals")
+    decomposed_research = manifest.get("decomposed_provider_research")
+    decomposed_resolution = manifest.get("decomposed_provider_resolution")
+    decomposed_proposals = manifest.get("decomposed_provider_gap_proposals")
+    canonical_provider_resolution = None
     if not isinstance(provider_proposals, list):
         issues.append("adapter manifest: provider_gap_proposals must be a list")
         provider_proposals = []
@@ -318,6 +323,7 @@ def _validate_adapter_semantics(output: Path, manifest: dict) -> list[str]:
                 issues.append("adapter manifest: provider_research is not canonical")
             if normalized != provider_resolution:
                 issues.append("adapter manifest: provider_resolution is not canonical")
+            canonical_provider_resolution = normalized
             if provider_proposals != expected_proposals:
                 issues.append(
                     "adapter manifest: provider_gap_proposals do not match provider_resolution"
@@ -326,6 +332,73 @@ def _validate_adapter_semantics(output: Path, manifest: dict) -> list[str]:
         issues.append("adapter manifest: provider_resolution must be an object or null")
     if provider_research is not None and not isinstance(provider_research, dict):
         issues.append("adapter manifest: provider_research must be an object or null")
+    decomposition = (
+        decomposed_capabilities(canonical_provider_resolution)
+        if isinstance(canonical_provider_resolution, dict)
+        else ()
+    )
+    if not isinstance(decomposed_proposals, list):
+        issues.append(
+            "adapter manifest: decomposed_provider_gap_proposals must be a list"
+        )
+        decomposed_proposals = []
+    if decomposition:
+        decomposed_ids = [item["capability_id"] for item in decomposition]
+        if not isinstance(decomposed_research, dict) or not isinstance(
+            decomposed_resolution, dict
+        ):
+            issues.append(
+                "adapter manifest: decomposed capabilities require research and resolution"
+            )
+        else:
+            try:
+                normalized_decomposed_research = parse_provider_research(
+                    decomposed_research,
+                    decomposed_ids,
+                )
+                normalized_decomposed_resolution, child_proposals = (
+                    parse_provider_resolution(
+                        decomposed_resolution,
+                        decomposed_ids,
+                        normalized_decomposed_research,
+                        require_catalog_for_selection=False,
+                        allow_decomposition=False,
+                    )
+                )
+            except ProviderResolutionError as error:
+                issues.append(
+                    "adapter manifest: invalid decomposed provider resolution "
+                    f"({error})"
+                )
+            else:
+                expected_child_proposals = [
+                    {
+                        "capability_id": proposal.capability_id,
+                        "outcome": proposal.outcome,
+                        "provider_id": proposal.provider_id,
+                    }
+                    for proposal in child_proposals
+                ]
+                if normalized_decomposed_research != decomposed_research:
+                    issues.append(
+                        "adapter manifest: decomposed_provider_research is not canonical"
+                    )
+                if normalized_decomposed_resolution != decomposed_resolution:
+                    issues.append(
+                        "adapter manifest: decomposed_provider_resolution is not canonical"
+                    )
+                if decomposed_proposals != expected_child_proposals:
+                    issues.append(
+                        "adapter manifest: decomposed provider proposals do not match resolution"
+                    )
+    elif (
+        decomposed_research is not None
+        or decomposed_resolution is not None
+        or decomposed_proposals
+    ):
+        issues.append(
+            "adapter manifest: decomposed provider artifacts require a decomposition"
+        )
     requested = manifest.get("requested_targets")
     if not isinstance(requested, list) or not requested:
         issues.append("adapter manifest: requested_targets must be a non-empty list")
@@ -457,7 +530,7 @@ def validate_adapter_bundle(output_dir: str | Path) -> list[str]:
         issues.append("adapter manifest: kind is not 'adapter_bundle'")
     if "execution_plan" in manifest:
         issues.append("adapter manifest: execution_plan is not allowed")
-    if manifest.get("schema_version") != 7:
+    if manifest.get("schema_version") != 8:
         issues.append("adapter manifest: unsupported schema_version")
     if manifest.get("selection_status") != "tool_proposal":
         issues.append("adapter manifest: invalid or missing selection_status")

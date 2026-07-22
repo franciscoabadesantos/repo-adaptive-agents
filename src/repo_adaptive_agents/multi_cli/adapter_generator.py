@@ -20,7 +20,7 @@ from .generator import (
     write_files_atomically,
 )
 
-ADAPTER_BUNDLE_SCHEMA_VERSION = 7
+ADAPTER_BUNDLE_SCHEMA_VERSION = 8
 
 
 def _profile_summary(profile: RepoProfile) -> dict:
@@ -106,6 +106,9 @@ def render_adapter_bundle(
     provider_research: dict | None = None,
     provider_resolution: dict | None = None,
     provider_gap_proposals: list[dict] | None = None,
+    decomposed_provider_research: dict | None = None,
+    decomposed_provider_resolution: dict | None = None,
+    decomposed_provider_gap_proposals: list[dict] | None = None,
 ) -> tuple[dict[str, str], dict, AdapterPlan]:
     """Profile a repository and render only the adapters explicitly requested."""
     profile = profile_repository(repo_path)
@@ -142,6 +145,9 @@ def render_adapter_bundle(
         "provider_research": provider_research,
         "provider_resolution": provider_resolution,
         "provider_gap_proposals": provider_gap_proposals or [],
+        "decomposed_provider_research": decomposed_provider_research,
+        "decomposed_provider_resolution": decomposed_provider_resolution,
+        "decomposed_provider_gap_proposals": decomposed_provider_gap_proposals or [],
         "selected_adapters": [
             _selection_dict(item) for item in adapter_plan.selected_adapters
         ],
@@ -171,6 +177,9 @@ def write_adapter_bundle(
     provider_research: dict | None = None,
     provider_resolution: dict | None = None,
     provider_gap_proposals: list[dict] | None = None,
+    decomposed_provider_research: dict | None = None,
+    decomposed_provider_resolution: dict | None = None,
+    decomposed_provider_gap_proposals: list[dict] | None = None,
 ) -> tuple[list[Path], AdapterPlan, dict]:
     repo = Path(repo_path).expanduser().resolve()
     if not repo.is_dir():
@@ -186,6 +195,9 @@ def write_adapter_bundle(
         provider_research=provider_research,
         provider_resolution=provider_resolution,
         provider_gap_proposals=provider_gap_proposals,
+        decomposed_provider_research=decomposed_provider_research,
+        decomposed_provider_resolution=decomposed_provider_resolution,
+        decomposed_provider_gap_proposals=decomposed_provider_gap_proposals,
     )
     written = write_files_atomically(output_dir, files, protected_root=protected_root)
     return written, plan, manifest

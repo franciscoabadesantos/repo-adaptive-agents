@@ -35,6 +35,10 @@ architectures, workflows, risks, and organizational preferences.
   rerun the repository-aware adapter query.
   Lack of permission to download or install a provider is not evidence that public research
   is unavailable. Do not bypass the gate with raw outcomes or invented roles.
+- `decompose_capability` must declare two to six narrower, evidence-backed capabilities in
+  `provider_resolution`. Research and resolve those subcapabilities in separate artifacts;
+  keep roles and targets hidden until that second decision phase is complete. Do not recurse
+  into another decomposition automatically.
 - Treat `adapter-options <repo>` as the only adoption-time role/target query; global renderer
   catalogs are implementation details, not repository recommendations.
 - After provider decisions unlock `adapter-options`, present its role and target choices and

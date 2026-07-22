@@ -145,6 +145,12 @@ prose. Each search links named results to structured candidates. Users may expli
 a `partial_only` candidate without converting that choice into a false claim of full
 capability coverage. Adapter bundle schema version 7 preserves this distinction.
 
+Version 0.11 makes `decompose_capability` operational. The parent resolution declares two to
+six narrower capabilities with repository evidence. Those subcapabilities receive a separate
+research and user-decision phase, and roles/targets remain hidden until it is complete.
+Nested decomposition is rejected. Adapter bundle schema version 8 preserves the complete
+parent and decomposed decision chain.
+
 ## Knowledge provider resolution
 
 Inspect capability gaps using the empty built-in catalog:
@@ -501,13 +507,14 @@ capability. Stop for the user's response. Record those decisions separately:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "kind": "provider_resolution",
   "decisions": [
     {
       "capability_id": "ml_reproducibility",
       "outcome": "leave_unresolved",
       "provider_id": null,
+      "decomposition": [],
       "rationale": "The user chose to keep this gap explicit for now."
     }
   ]
@@ -522,6 +529,16 @@ nothing. `select_partial_provider` may reference a `partial_only` research candi
 claiming the full capability is resolved; its exact coverage and remaining gaps stay in the
 decision packet.
 
+When the user chooses `decompose_capability`, that decision must contain `decomposition` with
+two to six objects containing `capability_id`, `title`, `objective`, `repository_reason`, and
+non-empty repository `evidence`. Rerunning `adapter-options` then returns
+`requires_decomposed_provider_research` and a research brief for those narrower capabilities.
+Pass the resulting artifacts through `--decomposed-provider-research` and, after the user
+reviews that research, `--decomposed-provider-resolution`. The second resolution rejects
+nested decomposition. Adapter roles and targets remain hidden until both phases are complete.
+A reviewed provider catalog remains strict: only the exact subcapability IDs declared by the
+validated parent resolution are accepted in addition to the global capability registry.
+
 `propose-adapters` profiles a repository and renders only the read-only roles and adapter targets
 supplied by the caller. The result is always a tool proposal: roles and targets remain
 recommendations until the user approves the exact installation preview. Exact capability IDs connect the portable
@@ -535,14 +552,17 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-adapters ./my-repo \
   --role browser_qa \
   --provider-research /tmp/my-provider-research.json \
   --provider-resolution /tmp/my-provider-resolution.json \
+  --decomposed-provider-research /tmp/my-decomposed-provider-research.json \
+  --decomposed-provider-resolution /tmp/my-decomposed-provider-resolution.json \
   --output /tmp/my-adapters
 ```
 
 `propose-adapters` applies the same gate and fails before creating its output directory when
 the research or subsequent resolution is missing, malformed, or incomplete. Adapter bundle
-`manifest.json` schema version 7 embeds both artifacts and the derived outcomes; installation
-previews display their research status, candidate count, and rationale before roles and file
-additions.
+`manifest.json` schema version 8 embeds the parent and decomposed artifacts and their derived
+outcomes; installation previews display their research status, candidate count, and rationale
+before roles and file additions. The decomposed flags are required only when the parent
+resolution contains `decompose_capability`.
 
 The agent-led adoption flow uses two explicit decision boundaries:
 
@@ -552,8 +572,10 @@ The agent-led adoption flow uses two explicit decision boundaries:
 2. rerun `adapter-options` with only the research artifact, present candidates, evidence,
    limitations, and recommendations, then stop for the user's provider decisions;
 3. write `provider_resolution` from that response and rerun `adapter-options` with both
-   artifacts. Only then let the user choose roles and targets;
-4. render a proposal, preview installation, show the provider-resolution outcomes, proposed
+   artifacts. If it contains a decomposition, research each declared subcapability, present
+   that research, stop for the user's decisions, and record the separate decomposed
+   resolution. Only after any required second phase may the user choose roles and targets;
+4. render a proposal, preview installation, show both provider-resolution stages, proposed
    roles/targets, and exact additions, then stop for approval. Approval of that exact preview
    accepts both the selection and the file plan;
 5. only after that approval, run

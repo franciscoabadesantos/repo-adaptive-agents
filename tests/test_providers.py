@@ -88,6 +88,7 @@ def _decision(capability_id: str, **overrides) -> dict:
         "capability_id": capability_id,
         "outcome": "leave_unresolved",
         "provider_id": None,
+        "decomposition": [],
         "rationale": "User chose to keep the capability gap explicit.",
     }
     item.update(overrides)
@@ -96,10 +97,29 @@ def _decision(capability_id: str, **overrides) -> dict:
 
 def _resolution(*items: dict) -> dict:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "kind": "provider_resolution",
         "decisions": list(items),
     }
+
+
+def _ml_decomposition() -> list[dict]:
+    return [
+        {
+            "capability_id": "ml_temporal_leakage",
+            "title": "Temporal leakage review",
+            "objective": "Review PIT, purge, embargo, and label timing controls.",
+            "repository_reason": "The repository trains time-series models.",
+            "evidence": ["tests/test_label_contract_no_leakage.py"],
+        },
+        {
+            "capability_id": "ml_experiment_provenance",
+            "title": "Experiment provenance",
+            "objective": "Review seeds, environments, datasets, and run metadata.",
+            "repository_reason": "Research runs persist metrics and artifacts.",
+            "evidence": ["ml_lab/training/runner.py"],
+        },
+    ]
 
 
 def _completed_research(capability_id: str, **overrides) -> dict:
@@ -151,6 +171,30 @@ class ProviderCatalogTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ProviderCatalogError, "unknown capabilities"):
                 load_provider_catalog(path)
+
+    def test_explicit_decomposed_capability_can_be_scoped_into_catalog_validation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "providers.json"
+            path.write_text(
+                json.dumps(_catalog([_ml_provider(
+                    capabilities=["ml_temporal_leakage"],
+                )])),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ProviderCatalogError,
+                "unknown capabilities",
+            ):
+                load_provider_catalog(path)
+
+            providers = load_provider_catalog(
+                path,
+                ["ml_temporal_leakage"],
+            )
+            self.assertEqual(
+                providers[0].capabilities,
+                ("ml_temporal_leakage",),
+            )
 
     def test_boolean_schema_version_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -228,7 +272,11 @@ class ProviderResolutionTests(unittest.TestCase):
         normalized, proposals = parse_provider_resolution(
             _resolution(
                 _decision("dependency_audit", outcome="create_local_knowledge"),
-                _decision("ml_reproducibility", outcome="decompose_capability"),
+                _decision(
+                    "ml_reproducibility",
+                    outcome="decompose_capability",
+                    decomposition=_ml_decomposition(),
+                ),
             ),
             ["ml_reproducibility", "dependency_audit"],
             research,
@@ -245,6 +293,62 @@ class ProviderResolutionTests(unittest.TestCase):
                 ("dependency_audit", "create_local_knowledge"),
             ],
         )
+
+    def test_decomposition_requires_concrete_evidence_backed_subcapabilities(self):
+        research = parse_provider_research(
+            _research(_research_item("ml_reproducibility")),
+            ["ml_reproducibility"],
+        )
+        with self.assertRaisesRegex(
+            ProviderResolutionError,
+            "requires a concrete decomposition",
+        ):
+            parse_provider_resolution(
+                _resolution(_decision(
+                    "ml_reproducibility",
+                    outcome="decompose_capability",
+                )),
+                ["ml_reproducibility"],
+                research,
+            )
+
+    def test_nested_decomposition_is_rejected(self):
+        research = parse_provider_research(
+            _research(_research_item("ml_reproducibility")),
+            ["ml_reproducibility"],
+        )
+        with self.assertRaisesRegex(
+            ProviderResolutionError,
+            "nested decomposition is not supported",
+        ):
+            parse_provider_resolution(
+                _resolution(_decision(
+                    "ml_reproducibility",
+                    outcome="decompose_capability",
+                    decomposition=_ml_decomposition(),
+                )),
+                ["ml_reproducibility"],
+                research,
+                allow_decomposition=False,
+            )
+
+    def test_decomposition_is_rejected_for_other_outcomes(self):
+        research = parse_provider_research(
+            _research(_research_item("ml_reproducibility")),
+            ["ml_reproducibility"],
+        )
+        with self.assertRaisesRegex(
+            ProviderResolutionError,
+            "only allowed with decompose_capability",
+        ):
+            parse_provider_resolution(
+                _resolution(_decision(
+                    "ml_reproducibility",
+                    decomposition=_ml_decomposition(),
+                )),
+                ["ml_reproducibility"],
+                research,
+            )
 
     def test_provider_selection_requires_matching_catalog_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -457,7 +561,11 @@ class ProviderOptionsCliTests(unittest.TestCase):
             research["decision_contract"]["kind"],
             "provider_resolution",
         )
-        self.assertEqual(research["decision_contract"]["schema_version"], 2)
+        self.assertEqual(research["decision_contract"]["schema_version"], 3)
+        self.assertIn(
+            "decomposition",
+            research["decision_contract"]["required_decision_fields"],
+        )
         self.assertIn(
             "select_partial_provider",
             {item["id"] for item in research["decision_options"]},

@@ -70,13 +70,14 @@ def _provider_resolution_args(fixture: str, root: Path) -> list[str]:
     resolution = root / f"{fixture}-provider-resolution.json"
     resolution.write_text(
         json.dumps({
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "provider_resolution",
             "decisions": [
                 {
                     "capability_id": capability_id,
                     "outcome": "leave_unresolved",
                     "provider_id": None,
+                    "decomposition": [],
                     "rationale": "Test fixture decision after reviewing provider research.",
                 }
                 for capability_id in gaps
@@ -90,6 +91,84 @@ def _provider_resolution_args(fixture: str, root: Path) -> list[str]:
         "--provider-resolution",
         str(resolution),
     ]
+
+
+def _decomposed_provider_args(root: Path) -> tuple[list[str], list[str], list[str]]:
+    parent_args = _provider_resolution_args("python-ml", root)
+    parent_resolution_path = Path(parent_args[3])
+    parent_resolution = json.loads(parent_resolution_path.read_text(encoding="utf-8"))
+    ml_decision = next(
+        item
+        for item in parent_resolution["decisions"]
+        if item["capability_id"] == "ml_reproducibility"
+    )
+    ml_decision.update({
+        "outcome": "decompose_capability",
+        "decomposition": [
+            {
+                "capability_id": "ml_temporal_leakage",
+                "title": "Temporal leakage review",
+                "objective": "Review PIT, purge, embargo, and label timing controls.",
+                "repository_reason": "The fixture represents time-series ML.",
+                "evidence": ["tests/test_pipeline.py"],
+            },
+            {
+                "capability_id": "ml_experiment_provenance",
+                "title": "Experiment provenance",
+                "objective": "Review seeds, environments, datasets, and artifacts.",
+                "repository_reason": "The fixture trains and evaluates models.",
+                "evidence": ["train.py"],
+            },
+        ],
+        "rationale": "Research narrower ML capabilities independently.",
+    })
+    parent_resolution_path.write_text(
+        json.dumps(parent_resolution),
+        encoding="utf-8",
+    )
+    child_ids = [
+        "ml_temporal_leakage",
+        "ml_experiment_provenance",
+    ]
+    child_research_path = root / "decomposed-provider-research.json"
+    child_research_path.write_text(json.dumps({
+        "schema_version": 2,
+        "kind": "provider_research",
+        "capabilities": [
+            {
+                "capability_id": capability_id,
+                "research_status": "unavailable",
+                "searches": [],
+                "candidates": [],
+                "evidence": ["Test runtime has no public network access."],
+                "limitation": "Public provider research is unavailable in this test.",
+                "recommended_outcome": "leave_unresolved",
+                "recommended_provider_id": None,
+                "rationale": "Keep the narrower capability explicit.",
+            }
+            for capability_id in child_ids
+        ],
+    }), encoding="utf-8")
+    child_resolution_path = root / "decomposed-provider-resolution.json"
+    child_resolution_path.write_text(json.dumps({
+        "schema_version": 3,
+        "kind": "provider_resolution",
+        "decisions": [
+            {
+                "capability_id": capability_id,
+                "outcome": "leave_unresolved",
+                "provider_id": None,
+                "decomposition": [],
+                "rationale": "User kept the narrower capability explicit.",
+            }
+            for capability_id in child_ids
+        ],
+    }), encoding="utf-8")
+    return (
+        parent_args,
+        ["--decomposed-provider-research", str(child_research_path)],
+        ["--decomposed-provider-resolution", str(child_resolution_path)],
+    )
 
 
 class AdapterSelectionTests(unittest.TestCase):
@@ -146,7 +225,7 @@ class AdapterBundleTests(unittest.TestCase):
             )
             self.assertEqual(validate_adapter_bundle(output), [])
             self.assertEqual(manifest["kind"], "adapter_bundle")
-            self.assertEqual(manifest["schema_version"], 7)
+            self.assertEqual(manifest["schema_version"], 8)
             self.assertIsNone(manifest["provider_research"])
             self.assertIsNone(manifest["provider_resolution"])
             self.assertEqual(manifest["provider_gap_proposals"], [])
@@ -400,6 +479,104 @@ class AdapterCliTests(unittest.TestCase):
         self.assertEqual(payload["provider_research"]["kind"], "provider_research")
         self.assertEqual(payload["provider_resolution"]["kind"], "provider_resolution")
         self.assertIn("user-resolved provider gaps", payload["next_action"])
+
+    def test_decomposition_requires_research_and_separate_user_decisions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent_args, child_research_args, child_resolution_args = (
+                _decomposed_provider_args(root)
+            )
+            code, stdout, stderr = self._run([
+                "adapter-options",
+                str(FIXTURES / "python-ml"),
+                *parent_args,
+            ])
+            self.assertEqual(code, 0, stderr)
+            payload = json.loads(stdout)
+            self.assertEqual(
+                payload["status"],
+                "requires_decomposed_provider_research",
+            )
+            self.assertNotIn("available_targets", payload)
+            self.assertEqual(
+                {
+                    item["capability_id"]
+                    for item in payload["decomposed_capabilities"]
+                },
+                {"ml_temporal_leakage", "ml_experiment_provenance"},
+            )
+            self.assertEqual(
+                payload["provider_discovery"]["scope"],
+                "decomposed_capabilities",
+            )
+
+            code, stdout, stderr = self._run([
+                "adapter-options",
+                str(FIXTURES / "python-ml"),
+                *parent_args,
+                *child_research_args,
+            ])
+            self.assertEqual(code, 0, stderr)
+            payload = json.loads(stdout)
+            self.assertEqual(
+                payload["status"],
+                "requires_decomposed_provider_decision",
+            )
+            self.assertTrue(payload["provider_decision_questions"])
+            self.assertTrue(all(
+                item["decision_scope"] == "decomposed_capability"
+                for item in payload["provider_decision_questions"]
+            ))
+            self.assertTrue(all(
+                "decompose_capability" not in item["options"]
+                for item in payload["provider_decision_questions"]
+            ))
+
+            code, stdout, stderr = self._run([
+                "adapter-options",
+                str(FIXTURES / "python-ml"),
+                *parent_args,
+                *child_research_args,
+                *child_resolution_args,
+            ])
+            self.assertEqual(code, 0, stderr)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["status"], "requires_adapter_selection")
+            self.assertEqual(
+                len(payload["decomposed_provider_gap_proposals"]),
+                2,
+            )
+
+    def test_propose_adapters_preserves_resolved_decomposition_chain(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent_args, child_research_args, child_resolution_args = (
+                _decomposed_provider_args(root)
+            )
+            output = root / "bundle"
+            code, stdout, stderr = self._run([
+                "propose-adapters",
+                str(FIXTURES / "python-ml"),
+                "--targets", "codex",
+                "--role", "repo_explorer",
+                "--output", str(output),
+                *parent_args,
+                *child_research_args,
+                *child_resolution_args,
+            ])
+            self.assertEqual(code, 0, stderr)
+            self.assertIn("tool proposal", stdout)
+            self.assertEqual(validate_adapter_bundle(output), [])
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(manifest["schema_version"], 8)
+            self.assertEqual(
+                manifest["decomposed_provider_research"]["kind"],
+                "provider_research",
+            )
+            self.assertEqual(
+                manifest["decomposed_provider_resolution"]["kind"],
+                "provider_resolution",
+            )
 
     def test_provider_research_requires_a_separate_user_decision_phase(self):
         with tempfile.TemporaryDirectory() as temporary:

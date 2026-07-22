@@ -17,7 +17,7 @@ PROVIDER_KINDS = ("skill", "plugin", "manual")
 PROVIDER_REVIEW_STATUSES = ("candidate", "approved")
 PROVIDER_TARGETS = ("skill", "codex", "claude", "copilot")
 PROVIDER_RESEARCH_SCHEMA_VERSION = 2
-PROVIDER_RESOLUTION_SCHEMA_VERSION = 2
+PROVIDER_RESOLUTION_SCHEMA_VERSION = 3
 PROVIDER_RESEARCH_STATUSES = ("completed", "unavailable")
 PROVIDER_CANDIDATE_RECOMMENDATIONS = ("suitable", "partial_only", "reject")
 PROVIDER_SEARCH_KINDS = (
@@ -35,6 +35,8 @@ PROVIDER_SELECTION_OUTCOMES = ("select_provider", "select_partial_provider")
 BUILTIN_PROVIDERS: tuple["ProviderDefinition", ...] = ()
 _PROVIDER_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
 _MAX_CATALOG_BYTES = 1_000_000
+_MIN_DECOMPOSED_CAPABILITIES = 2
+_MAX_DECOMPOSED_CAPABILITIES = 6
 
 
 class ProviderCatalogError(ValueError):
@@ -177,7 +179,15 @@ def build_provider_research_brief(
                 "capability_id",
                 "outcome",
                 "provider_id",
+                "decomposition",
                 "rationale",
+            ],
+            "decomposition_fields": [
+                "capability_id",
+                "title",
+                "objective",
+                "repository_reason",
+                "evidence",
             ],
         },
         "research_rules": [
@@ -208,10 +218,111 @@ def build_provider_research_brief(
             },
             {
                 "id": "decompose_capability",
-                "description": "Decompose the capability and research narrower providers.",
+                "description": (
+                    "Declare two to six narrower capabilities with repository evidence, "
+                    "then research and resolve them before adapter selection."
+                ),
             },
         ],
     }
+
+
+def _parse_decomposition(value: object, parent_capability_id: str) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise ProviderResolutionError(
+            f"provider resolution {parent_capability_id!r}: decomposition must be an array"
+        )
+    if not value:
+        return []
+    if not _MIN_DECOMPOSED_CAPABILITIES <= len(value) <= _MAX_DECOMPOSED_CAPABILITIES:
+        raise ProviderResolutionError(
+            f"provider resolution {parent_capability_id!r}: decomposition must contain "
+            f"{_MIN_DECOMPOSED_CAPABILITIES} to {_MAX_DECOMPOSED_CAPABILITIES} capabilities"
+        )
+    expected_fields = {
+        "capability_id",
+        "title",
+        "objective",
+        "repository_reason",
+        "evidence",
+    }
+    normalized: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != expected_fields:
+            raise ProviderResolutionError(
+                f"provider resolution {parent_capability_id!r}: decomposition fields must be exactly "
+                + ", ".join(sorted(expected_fields))
+            )
+        capability_id = _resolution_string(
+            item["capability_id"], "decomposition capability_id", parent_capability_id
+        )
+        if not _PROVIDER_ID.fullmatch(capability_id):
+            raise ProviderResolutionError(
+                f"provider resolution {parent_capability_id!r}: invalid decomposed capability_id {capability_id!r}"
+            )
+        if capability_id == parent_capability_id or capability_id in CAPABILITIES:
+            raise ProviderResolutionError(
+                f"provider resolution {parent_capability_id!r}: decomposed capability_id must be a new narrower id: {capability_id}"
+            )
+        if capability_id in seen:
+            raise ProviderResolutionError(
+                f"provider resolution {parent_capability_id!r}: duplicate decomposed capability_id: {capability_id}"
+            )
+        seen.add(capability_id)
+        normalized.append({
+            "capability_id": capability_id,
+            "title": _resolution_string(item["title"], "decomposition title", parent_capability_id),
+            "objective": _resolution_string(
+                item["objective"], "decomposition objective", parent_capability_id
+            ),
+            "repository_reason": _resolution_string(
+                item["repository_reason"],
+                "decomposition repository_reason",
+                parent_capability_id,
+            ),
+            "evidence": _resolution_strings(
+                item["evidence"],
+                "decomposition evidence",
+                parent_capability_id,
+                allow_empty=False,
+            ),
+        })
+    return normalized
+
+
+def decomposed_capabilities(
+    resolution: dict[str, object],
+) -> tuple[dict[str, object], ...]:
+    """Return the canonical flattened decomposition declared by user decisions."""
+    flattened: list[dict[str, object]] = []
+    for decision in resolution.get("decisions", []):
+        if decision.get("outcome") == "decompose_capability":
+            flattened.extend(
+                {
+                    **item,
+                    "parent_capability_id": decision["capability_id"],
+                }
+                for item in decision.get("decomposition", [])
+            )
+    return tuple(flattened)
+
+
+def build_decomposed_provider_research_brief(
+    resolution: dict[str, object],
+) -> dict[str, object]:
+    """Build the next provider-research stage for approved decomposed capabilities."""
+    capabilities = decomposed_capabilities(resolution)
+    brief = build_provider_research_brief(())
+    brief["status"] = "research_recommended" if capabilities else "not_required"
+    brief["scope"] = "decomposed_capabilities"
+    brief["capabilities"] = [dict(item) for item in capabilities]
+    brief["research_rules"] = [
+        *brief["research_rules"],
+        "Research each decomposed capability independently; do not collapse it back into the broader parent capability.",
+        "Nested decomposition is not supported in this stage; leave an over-broad subcapability unresolved and refine the original decomposition instead.",
+    ]
+    return brief
 
 
 def _resolution_string(value: object, field: str, capability_id: str) -> str:
@@ -552,6 +663,7 @@ def parse_provider_resolution(
     providers: Iterable[ProviderDefinition] = (),
     *,
     require_catalog_for_selection: bool = True,
+    allow_decomposition: bool = True,
 ) -> tuple[dict[str, object], tuple[ProviderGapProposal, ...]]:
     """Validate decisions made after the user reviewed provider research."""
     ordered_capabilities = tuple(dict.fromkeys(capability_ids))
@@ -583,7 +695,14 @@ def parse_provider_resolution(
 
     normalized_by_id: dict[str, dict[str, object]] = {}
     proposals: dict[str, ProviderGapProposal] = {}
-    expected_fields = {"capability_id", "outcome", "provider_id", "rationale"}
+    expected_fields = {
+        "capability_id",
+        "outcome",
+        "provider_id",
+        "decomposition",
+        "rationale",
+    }
+    decomposed_ids: set[str] = set()
     for raw in payload["decisions"]:
         if not isinstance(raw, dict) or set(raw) != expected_fields:
             raise ProviderResolutionError(
@@ -603,6 +722,31 @@ def parse_provider_resolution(
         if outcome not in (*PROVIDER_GAP_OUTCOMES, *PROVIDER_SELECTION_OUTCOMES):
             raise ProviderResolutionError(
                 f"provider resolution {capability_id!r}: invalid outcome"
+            )
+        decomposition = _parse_decomposition(raw["decomposition"], capability_id)
+        if outcome == "decompose_capability":
+            if not allow_decomposition:
+                raise ProviderResolutionError(
+                    f"provider resolution {capability_id!r}: nested decomposition is not supported"
+                )
+            if not decomposition:
+                raise ProviderResolutionError(
+                    f"provider resolution {capability_id!r}: decompose_capability requires a concrete decomposition"
+                )
+            duplicate_ids = sorted(
+                {item["capability_id"] for item in decomposition}.intersection(
+                    decomposed_ids
+                )
+            )
+            if duplicate_ids:
+                raise ProviderResolutionError(
+                    "decomposed capability ids must be globally unique: "
+                    + ", ".join(duplicate_ids)
+                )
+            decomposed_ids.update(item["capability_id"] for item in decomposition)
+        elif decomposition:
+            raise ProviderResolutionError(
+                f"provider resolution {capability_id!r}: decomposition is only allowed with decompose_capability"
             )
         provider_id = raw["provider_id"]
         if outcome in PROVIDER_SELECTION_OUTCOMES:
@@ -658,6 +802,7 @@ def parse_provider_resolution(
             "capability_id": capability_id,
             "outcome": outcome,
             "provider_id": provider_id,
+            "decomposition": decomposition,
             "rationale": _resolution_string(raw["rationale"], "rationale", capability_id),
         }
         proposals[capability_id] = ProviderGapProposal(capability_id, outcome, provider_id)
@@ -699,6 +844,9 @@ def load_provider_resolution(
     capability_ids: Iterable[str],
     research: dict[str, object],
     providers: Iterable[ProviderDefinition] = (),
+    *,
+    allow_decomposition: bool = True,
+    require_catalog_for_selection: bool = True,
 ) -> tuple[dict[str, object], tuple[ProviderGapProposal, ...]]:
     """Load decisions made after a provider-research proposal was reviewed."""
     resolution_path = Path(path).expanduser()
@@ -714,7 +862,14 @@ def load_provider_resolution(
         payload = json.loads(resolution_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ProviderResolutionError(f"invalid provider resolution: {error}") from error
-    return parse_provider_resolution(payload, capability_ids, research, providers)
+    return parse_provider_resolution(
+        payload,
+        capability_ids,
+        research,
+        providers,
+        allow_decomposition=allow_decomposition,
+        require_catalog_for_selection=require_catalog_for_selection,
+    )
 
 
 def _required_string(item: dict, field: str, provider_id: str) -> str:
@@ -744,7 +899,10 @@ def _string_tuple(item: dict, field: str, provider_id: str) -> tuple[str, ...]:
     return normalized
 
 
-def _parse_provider(item: object) -> ProviderDefinition:
+def _parse_provider(
+    item: object,
+    additional_capability_ids: Iterable[str] = (),
+) -> ProviderDefinition:
     if not isinstance(item, dict):
         raise ProviderCatalogError("each provider must be an object")
     expected = {
@@ -775,7 +933,8 @@ def _parse_provider(item: object) -> ProviderDefinition:
             f"provider {provider_id!r}: id must match {_PROVIDER_ID.pattern}"
         )
     capabilities = _string_tuple(item, "capabilities", provider_id)
-    unknown_capabilities = sorted(set(capabilities).difference(CAPABILITIES))
+    known_capabilities = set(CAPABILITIES).union(additional_capability_ids)
+    unknown_capabilities = sorted(set(capabilities).difference(known_capabilities))
     if unknown_capabilities:
         raise ProviderCatalogError(
             f"provider {provider_id!r}: unknown capabilities: "
@@ -812,7 +971,10 @@ def _parse_provider(item: object) -> ProviderDefinition:
     )
 
 
-def load_provider_catalog(path: str | Path | None = None) -> tuple[ProviderDefinition, ...]:
+def load_provider_catalog(
+    path: str | Path | None = None,
+    additional_capability_ids: Iterable[str] = (),
+) -> tuple[ProviderDefinition, ...]:
     """Load a local metadata catalog without accessing provider sources or the network."""
     if path is None:
         return BUILTIN_PROVIDERS
@@ -842,7 +1004,25 @@ def load_provider_catalog(path: str | Path | None = None) -> tuple[ProviderDefin
     raw_providers = payload.get("providers")
     if not isinstance(raw_providers, list):
         raise ProviderCatalogError("provider catalog providers must be an array")
-    providers = tuple(sorted((_parse_provider(item) for item in raw_providers), key=lambda item: item.id))
+    additional_ids = tuple(dict.fromkeys(additional_capability_ids))
+    invalid_additional_ids = [
+        capability_id
+        for capability_id in additional_ids
+        if not isinstance(capability_id, str)
+        or not _PROVIDER_ID.fullmatch(capability_id)
+    ]
+    if invalid_additional_ids:
+        raise ProviderCatalogError(
+            "invalid additional capability ids: "
+            + ", ".join(str(item) for item in invalid_additional_ids)
+        )
+    providers = tuple(sorted(
+        (
+            _parse_provider(item, additional_ids)
+            for item in raw_providers
+        ),
+        key=lambda item: item.id,
+    ))
     ids = [provider.id for provider in providers]
     if len(set(ids)) != len(ids):
         raise ProviderCatalogError("provider ids must be unique")
