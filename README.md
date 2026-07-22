@@ -107,6 +107,13 @@ Version 0.5 adds read-only provider resolution. `provider-options` can match exp
 capability gaps against a local, versioned metadata catalog without network access,
 downloading provider content, or installing anything.
 
+Version 0.6 adds the missing handoff from deterministic gap detection to optional
+agent-assisted provider discovery. `adapter-options` and `provider-options` now emit a
+`provider_discovery` brief for capabilities that remain unresolved. The CLI still performs
+no network access: the brief tells a Main agent how to compare public candidates, disclose
+partial coverage and platform coupling, and return the decision to the user without
+downloading, executing, installing, or silently cataloguing a provider.
+
 ## Knowledge provider resolution
 
 Inspect capability gaps using the empty built-in catalog:
@@ -148,6 +155,25 @@ The catalog records provenance and compatibility, not permission to install. The
 does not access `source`, and this MVP intentionally has no provider download or install
 command. Unmatched capabilities remain explicit rather than causing a new domain agent to
 be invented.
+
+For every unmatched capability, `provider_discovery` supplies:
+
+- the capability objective, repository reason, and local evidence;
+- the candidate fields that research must report, including coverage gaps, permissions,
+  external requirements, license, revision, trust signals, and platform coupling;
+- at most three materially different candidates per capability, with an explicit
+  `suitable`, `partial_only`, or `reject` recommendation; reporting no match is valid;
+- rules to use primary sources, protect private repository context, and reject inflated
+  capability matches;
+- explicit user choices: review a candidate, leave the gap unresolved, create local
+  knowledge, or decompose an over-broad capability and research narrower providers.
+
+The Main agent may perform this read-only research when public network access is permitted;
+a dedicated research agent is optional. Research results are advisory and must return to
+the user before any provider proposal or installation workflow is introduced.
+Catalog entries marked `candidate` remain in this research brief until their coverage has
+been reviewed; only an `approved` provider suppresses repeat discovery for the capabilities
+it matches.
 
 ## Domain model
 

@@ -27,7 +27,12 @@ from .multi_cli import (
 )
 from .multi_cli import write_proposal as write_role_proposal
 from .profiler import profile_repository
-from .providers import load_provider_catalog, resolve_providers
+from .providers import (
+    build_provider_research_brief,
+    capabilities_requiring_research,
+    load_provider_catalog,
+    resolve_providers,
+)
 from .recommender import recommend_infrastructure
 
 
@@ -254,6 +259,11 @@ def _run_adapter_options(args) -> int:
         for capability in infrastructure.capabilities
         if capability.capability_id not in matched_capability_ids
     }
+    unmapped_capabilities = [
+        capability
+        for capability in infrastructure.capabilities
+        if capability.capability_id in unmapped_capability_ids
+    ]
     payload = {
         "status": "requires_install_decision",
         "repository_summary": {
@@ -282,11 +292,10 @@ def _run_adapter_options(args) -> int:
         "optional_adapters": [to_jsonable(item) for item in optional],
         "unmapped_available_roles": list(unmapped),
         "unmapped_roles": to_jsonable(unmapped_roles),
-        "unmapped_capabilities": [
-            to_jsonable(capability)
-            for capability in infrastructure.capabilities
-            if capability.capability_id in unmapped_capability_ids
-        ],
+        "unmapped_capabilities": to_jsonable(unmapped_capabilities),
+        "provider_discovery": to_jsonable(
+            build_provider_research_brief(unmapped_capabilities)
+        ),
         "capability_provider_policy": {
             "unmapped_meaning": (
                 "No canonical adapter or bundled knowledge provider covers this "
@@ -312,8 +321,10 @@ def _run_adapter_options(args) -> int:
         "next_action": (
             "Present the repository summary, recommended capabilities, matched adapters, "
             "and explicit capability-provider gaps. Do not invent a domain role for an "
-            "unmapped capability. The user may choose roles and targets before a proposal, "
-            "or review them in the exact installation preview."
+            "unmapped capability. When public network research is permitted, follow the "
+            "provider_discovery brief before making a final provider recommendation, then "
+            "let the user choose among the documented options. The user may choose roles "
+            "and targets before a proposal, or review them in the exact installation preview."
         ),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -331,6 +342,7 @@ def _run_provider_options(args) -> int:
     }
     providers = load_provider_catalog(args.catalog)
     resolution = resolve_providers(infrastructure, covered_capabilities, providers)
+    research_capabilities = capabilities_requiring_research(resolution)
     payload = {
         "status": "provider_resolution",
         "repository": profile.name,
@@ -342,6 +354,9 @@ def _run_provider_options(args) -> int:
         "capability_gaps": to_jsonable(resolution.capability_gaps),
         "provider_candidates": to_jsonable(resolution.candidates),
         "unresolved_capabilities": to_jsonable(resolution.unresolved_capabilities),
+        "provider_discovery": to_jsonable(
+            build_provider_research_brief(research_capabilities)
+        ),
         "policy": {
             "metadata_only": "Provider sources were not accessed, downloaded, or executed.",
             "approval": (
@@ -355,7 +370,9 @@ def _run_provider_options(args) -> int:
         },
         "next_action": (
             "Present matching candidates with source, revision, license, review status, and "
-            "compatible targets. Leave unmatched capabilities unresolved. No installation "
+            "compatible targets. For unmatched capabilities, follow the provider_discovery "
+            "brief when public network research is permitted and present the resulting "
+            "coverage limits before asking the user to choose. No provider installation "
             "command exists in this MVP."
         ),
     }

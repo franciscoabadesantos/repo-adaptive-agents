@@ -51,6 +51,106 @@ class ProviderResolution:
     unresolved_capabilities: tuple[CapabilityRecommendation, ...]
 
 
+def capabilities_requiring_research(
+    resolution: ProviderResolution,
+) -> tuple[CapabilityRecommendation, ...]:
+    """Return unmatched gaps plus gaps covered only by unapproved candidates."""
+    unresolved_ids = {
+        capability.capability_id for capability in resolution.unresolved_capabilities
+    }
+    candidate_only_ids = {
+        capability_id
+        for candidate in resolution.candidates
+        if candidate.provider.review_status == "candidate"
+        for capability_id in candidate.matched_capabilities
+    }
+    research_ids = unresolved_ids | candidate_only_ids
+    return tuple(
+        capability
+        for capability in resolution.capability_gaps
+        if capability.capability_id in research_ids
+    )
+
+
+def build_provider_research_brief(
+    capabilities: Iterable[CapabilityRecommendation],
+) -> dict[str, object]:
+    """Build a deterministic brief for optional, agent-assisted provider research.
+
+    The brief contains repository evidence and a review contract, but it never performs
+    network access, selects a provider, or grants installation permission.
+    """
+    research_items: list[dict[str, object]] = []
+    for recommendation in capabilities:
+        definition = CAPABILITIES[recommendation.capability_id]
+        research_items.append(
+            {
+                "capability_id": recommendation.capability_id,
+                "title": definition.title,
+                "objective": definition.description,
+                "repository_reason": recommendation.reason,
+                "evidence": recommendation.evidence,
+            }
+        )
+
+    return {
+        "status": "research_recommended" if research_items else "not_required",
+        "actor": (
+            "The Main agent may perform this research; a separate research agent is optional, "
+            "not required."
+        ),
+        "network_access": "not_performed_by_cli",
+        "capabilities": research_items,
+        "result_contract": {
+            "status": "provider_research_result",
+            "max_candidates_per_capability": 3,
+            "no_match_allowed": True,
+            "required_candidate_fields": [
+                "provider_id",
+                "title",
+                "primary_source",
+                "revision",
+                "kind",
+                "compatible_targets",
+                "license",
+                "trust_signals",
+                "exact_coverage",
+                "coverage_gaps",
+                "permissions",
+                "external_requirements",
+                "platform_coupling",
+                "recommendation",
+            ],
+            "recommendation_values": ["suitable", "partial_only", "reject"],
+        },
+        "research_rules": [
+            "Use public primary sources and version-specific evidence where possible.",
+            "Search by capability and public technology names; do not disclose repository source, secrets, or proprietary context.",
+            "Classify partial coverage honestly; never map a narrower provider to a broader capability merely because it is the closest result.",
+            "Do not download, execute, install, or add a provider to a catalog during research.",
+            "If a capability is too broad for honest matching, propose a smaller capability decomposition instead of inventing expertise.",
+        ],
+        "decision_options": [
+            {
+                "id": "select_provider",
+                "description": "Review and later propose a selected provider.",
+            },
+            {
+                "id": "leave_unresolved",
+                "description": "Leave the capability unresolved.",
+            },
+            {
+                "id": "create_local_knowledge",
+                "description": "Create repository-local knowledge manually.",
+            },
+            {
+                "id": "decompose_capability",
+                "description": "Decompose the capability and research narrower providers.",
+            },
+        ],
+    }
+
+
 def _required_string(item: dict, field: str, provider_id: str) -> str:
     value = item.get(field)
     if not isinstance(value, str) or not value.strip():

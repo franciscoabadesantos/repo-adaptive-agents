@@ -95,6 +95,23 @@ class ProviderOptionsCliTests(unittest.TestCase):
             "source": "builtin-empty",
         })
         self.assertEqual(payload["provider_candidates"], [])
+        research = payload["provider_discovery"]
+        self.assertEqual(research["status"], "research_recommended")
+        self.assertEqual(research["network_access"], "not_performed_by_cli")
+        self.assertIn("Main agent", research["actor"])
+        self.assertIn(
+            "ml_reproducibility",
+            {item["capability_id"] for item in research["capabilities"]},
+        )
+        self.assertIn(
+            "exact_coverage",
+            research["result_contract"]["required_candidate_fields"],
+        )
+        self.assertEqual(research["result_contract"]["max_candidates_per_capability"], 3)
+        self.assertTrue(research["result_contract"]["no_match_allowed"])
+        self.assertTrue(
+            any("never map a narrower provider" in rule for rule in research["research_rules"])
+        )
         unresolved = {
             item["capability_id"] for item in payload["unresolved_capabilities"]
         }
@@ -126,10 +143,77 @@ class ProviderOptionsCliTests(unittest.TestCase):
             self.assertEqual(candidate["provider"]["id"], "example_ml_review")
             self.assertEqual(candidate["matched_capabilities"], ["ml_reproducibility"])
             self.assertEqual(candidate["provider"]["review_status"], "candidate")
+            self.assertIn(
+                "ml_reproducibility",
+                {
+                    item["capability_id"]
+                    for item in payload["provider_discovery"]["capabilities"]
+                },
+            )
             self.assertEqual(
                 sorted(path.relative_to(root).as_posix() for path in root.rglob("*")),
                 before,
             )
+
+    def test_approved_provider_does_not_require_repeat_research(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            catalog = Path(temporary) / "providers.json"
+            catalog.write_text(
+                json.dumps(
+                    _catalog([_ml_provider(review_status="approved")])
+                ),
+                encoding="utf-8",
+            )
+
+            code, stdout, stderr = self._run([
+                "provider-options",
+                str(FIXTURES / "python-ml"),
+                "--catalog",
+                str(catalog),
+            ])
+
+            self.assertEqual(code, 0, stderr)
+            payload = json.loads(stdout)
+            research_ids = {
+                item["capability_id"]
+                for item in payload["provider_discovery"]["capabilities"]
+            }
+            self.assertNotIn("ml_reproducibility", research_ids)
+
+    def test_narrow_provider_does_not_claim_broad_ml_gap(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            catalog = Path(temporary) / "providers.json"
+            catalog.write_text(
+                json.dumps(
+                    _catalog([
+                        _ml_provider(
+                            id="model_evaluation_only",
+                            capabilities=["model_evaluation"],
+                        )
+                    ])
+                ),
+                encoding="utf-8",
+            )
+
+            code, stdout, stderr = self._run([
+                "provider-options",
+                str(FIXTURES / "python-ml"),
+                "--catalog",
+                str(catalog),
+            ])
+
+            self.assertEqual(code, 0, stderr)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["provider_candidates"], [])
+            unresolved = {
+                item["capability_id"] for item in payload["unresolved_capabilities"]
+            }
+            self.assertIn("ml_reproducibility", unresolved)
+            research_ids = {
+                item["capability_id"]
+                for item in payload["provider_discovery"]["capabilities"]
+            }
+            self.assertIn("ml_reproducibility", research_ids)
 
     def test_invalid_catalog_returns_short_cli_error(self):
         with tempfile.TemporaryDirectory() as temporary:

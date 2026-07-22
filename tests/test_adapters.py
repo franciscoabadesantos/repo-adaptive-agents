@@ -362,6 +362,16 @@ class AdapterCliTests(unittest.TestCase):
             item["capability_id"] for item in payload["unmapped_capabilities"]
         }
         self.assertIn("ml_reproducibility", unmapped_ids)
+        research = payload["provider_discovery"]
+        self.assertEqual(research["status"], "research_recommended")
+        self.assertIn(
+            "ml_reproducibility",
+            {item["capability_id"] for item in research["capabilities"]},
+        )
+        self.assertIn(
+            "decompose_capability",
+            {item["id"] for item in research["decision_options"]},
+        )
         self.assertIn(
             "does not by itself supply missing domain expertise",
             payload["capability_provider_policy"]["generic_reviewer_boundary"],

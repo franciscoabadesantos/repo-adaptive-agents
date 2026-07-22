@@ -42,6 +42,8 @@ The first MVP should:
 - recommend capabilities and optional roles;
 - identify useful but unavailable external capabilities;
 - resolve capability gaps against optional local provider metadata without network access;
+- emit a deterministic research brief for unresolved provider gaps so an authorized agent
+  can compare public candidates without changing repository state;
 - generate a portable repository profile and infrastructure plan;
 - optionally render explicit, auditable harness adapters;
 - preview and explicitly install new adapter files without overwriting repository state.
@@ -53,6 +55,8 @@ The first MVP should not:
 - create pull requests automatically;
 - require an LLM for deterministic repository profiling;
 - download, execute, or install knowledge providers.
+- perform network research inside the deterministic CLI; external research remains an
+  optional agent action governed by the generated brief and runtime policy.
 
 ## Validation
 
