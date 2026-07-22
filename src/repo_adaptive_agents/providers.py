@@ -488,8 +488,10 @@ def _parse_provider_search(item: object, capability_id: str) -> dict[str, object
 def parse_provider_research(
     payload: object,
     capability_ids: Iterable[str],
+    *,
+    require_all: bool = True,
 ) -> dict[str, object]:
-    """Validate evidence-backed research recommendations for every capability gap."""
+    """Validate research for all gaps or a non-empty selected subset."""
     ordered_capabilities = tuple(dict.fromkeys(capability_ids))
     expected = set(ordered_capabilities)
     if not isinstance(payload, dict) or set(payload) != {
@@ -645,14 +647,22 @@ def parse_provider_research(
         }
 
     missing = [item for item in ordered_capabilities if item not in normalized_by_id]
-    if missing:
+    if require_all and missing:
         raise ProviderResolutionError(
             "missing provider research for capability gaps: " + ", ".join(missing)
+        )
+    if ordered_capabilities and not normalized_by_id:
+        raise ProviderResolutionError(
+            "provider research must cover at least one selected capability gap"
         )
     return {
         "schema_version": PROVIDER_RESEARCH_SCHEMA_VERSION,
         "kind": "provider_research",
-        "capabilities": [normalized_by_id[item] for item in ordered_capabilities],
+        "capabilities": [
+            normalized_by_id[item]
+            for item in ordered_capabilities
+            if item in normalized_by_id
+        ],
     }
 
 
@@ -823,6 +833,8 @@ def parse_provider_resolution(
 def load_provider_research(
     path: str | Path,
     capability_ids: Iterable[str],
+    *,
+    require_all: bool = True,
 ) -> dict[str, object]:
     """Load and validate a local provider-research proposal."""
     research_path = Path(path).expanduser()
@@ -836,7 +848,11 @@ def load_provider_research(
         payload = json.loads(research_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ProviderResolutionError(f"invalid provider research: {error}") from error
-    return parse_provider_research(payload, capability_ids)
+    return parse_provider_research(
+        payload,
+        capability_ids,
+        require_all=require_all,
+    )
 
 
 def load_provider_resolution(

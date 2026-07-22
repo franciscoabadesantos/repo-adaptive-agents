@@ -432,24 +432,21 @@ class AdapterCliTests(unittest.TestCase):
 
         self.assertEqual(code, 0, stderr.getvalue())
         payload = json.loads(stdout.getvalue())
-        self.assertEqual(payload["status"], "requires_provider_research")
+        self.assertEqual(payload["status"], "requires_adapter_selection")
+        self.assertEqual(payload["provider_status"], "research_optional")
         self.assertEqual(payload["repository_summary"]["primary_project_types"], ["frontend", "api"])
         self.assertIn("repository_contracts", payload)
         self.assertIn("recommended_capabilities", payload)
-        for hidden in (
-            "available_targets",
-            "target_details",
-            "matched_adapters",
-            "optional_adapters",
-            "unmapped_available_roles",
-            "unmapped_roles",
-            "deferred_questions",
-        ):
-            self.assertNotIn(hidden, payload)
-        self.assertNotIn("independent_reviewer", stdout.getvalue())
-        self.assertEqual(payload["questions"], [])
-        self.assertIn("Present only the repository facts", payload["next_action"])
-        self.assertIn("Do not recommend", payload["next_action"])
+        self.assertEqual(
+            [item["role_id"] for item in payload["matched_adapters"]],
+            ["repo_explorer", "api_contract_agent", "browser_qa"],
+        )
+        self.assertEqual(
+            {item["id"] for item in payload["questions"]},
+            {"adapter_targets", "adapter_roles"},
+        )
+        self.assertIn("optional", payload["next_action"])
+        self.assertIn("must not block base setup", payload["next_action"])
 
     def test_provider_resolution_unlocks_adapter_options(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -462,6 +459,7 @@ class AdapterCliTests(unittest.TestCase):
         self.assertEqual(code, 0, stderr)
         payload = json.loads(stdout)
         self.assertEqual(payload["status"], "requires_adapter_selection")
+        self.assertEqual(payload["provider_status"], "resolved")
         self.assertEqual(payload["available_targets"], ["skill", "codex", "claude", "copilot"])
         self.assertEqual(
             [item["role_id"] for item in payload["matched_adapters"]],
@@ -478,7 +476,61 @@ class AdapterCliTests(unittest.TestCase):
         self.assertTrue(payload["provider_gap_proposals"])
         self.assertEqual(payload["provider_research"]["kind"], "provider_research")
         self.assertEqual(payload["provider_resolution"]["kind"], "provider_resolution")
-        self.assertIn("user-resolved provider gaps", payload["next_action"])
+        self.assertIn("recorded provider outcomes", payload["next_action"])
+
+    def test_selected_provider_capability_does_not_block_other_gaps(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact_args = _provider_resolution_args("python-ml", root)
+            research_path = Path(artifact_args[1])
+            resolution_path = Path(artifact_args[3])
+            research = json.loads(research_path.read_text(encoding="utf-8"))
+            research["capabilities"] = [
+                item
+                for item in research["capabilities"]
+                if item["capability_id"] == "ml_reproducibility"
+            ]
+            research_path.write_text(json.dumps(research), encoding="utf-8")
+            resolution = json.loads(resolution_path.read_text(encoding="utf-8"))
+            resolution["decisions"] = [
+                item
+                for item in resolution["decisions"]
+                if item["capability_id"] == "ml_reproducibility"
+            ]
+            resolution_path.write_text(json.dumps(resolution), encoding="utf-8")
+
+            code, stdout, stderr = self._run([
+                "adapter-options",
+                str(FIXTURES / "python-ml"),
+                *artifact_args,
+            ])
+            self.assertEqual(code, 0, stderr)
+            payload = json.loads(stdout)
+            self.assertEqual(
+                payload["provider_status"],
+                "selected_capabilities_resolved",
+            )
+            self.assertEqual(
+                payload["provider_scope"]["researched_capability_ids"],
+                ["ml_reproducibility"],
+            )
+            self.assertTrue(
+                payload["provider_scope"]["unresearched_capability_ids"]
+            )
+
+            output = root / "subset-bundle"
+            code, stdout, stderr = self._run([
+                "propose-adapters",
+                str(FIXTURES / "python-ml"),
+                "--targets", "codex",
+                "--role", "repo_explorer",
+                "--output", str(output),
+                *artifact_args,
+            ])
+            self.assertEqual(code, 0, stderr)
+            self.assertEqual(validate_adapter_bundle(output), [])
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(len(manifest["provider_gap_proposals"]), 1)
 
     def test_decomposition_requires_research_and_separate_user_decisions(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -493,11 +545,12 @@ class AdapterCliTests(unittest.TestCase):
             ])
             self.assertEqual(code, 0, stderr)
             payload = json.loads(stdout)
+            self.assertEqual(payload["status"], "requires_adapter_selection")
             self.assertEqual(
-                payload["status"],
-                "requires_decomposed_provider_research",
+                payload["provider_status"],
+                "decomposed_research_optional",
             )
-            self.assertNotIn("available_targets", payload)
+            self.assertIn("available_targets", payload)
             self.assertEqual(
                 {
                     item["capability_id"]
@@ -518,9 +571,10 @@ class AdapterCliTests(unittest.TestCase):
             ])
             self.assertEqual(code, 0, stderr)
             payload = json.loads(stdout)
+            self.assertEqual(payload["status"], "requires_adapter_selection")
             self.assertEqual(
-                payload["status"],
-                "requires_decomposed_provider_decision",
+                payload["provider_status"],
+                "decomposed_decision_optional",
             )
             self.assertTrue(payload["provider_decision_questions"])
             self.assertTrue(all(
@@ -542,6 +596,7 @@ class AdapterCliTests(unittest.TestCase):
             self.assertEqual(code, 0, stderr)
             payload = json.loads(stdout)
             self.assertEqual(payload["status"], "requires_adapter_selection")
+            self.assertEqual(payload["provider_status"], "resolved")
             self.assertEqual(
                 len(payload["decomposed_provider_gap_proposals"]),
                 2,
@@ -592,12 +647,13 @@ class AdapterCliTests(unittest.TestCase):
 
             self.assertEqual(code, 0, stderr)
             payload = json.loads(stdout)
-            self.assertEqual(payload["status"], "requires_provider_decision")
-            self.assertEqual(payload["questions"], [])
+            self.assertEqual(payload["status"], "requires_adapter_selection")
+            self.assertEqual(payload["provider_status"], "decision_optional")
+            self.assertTrue(payload["questions"])
             self.assertTrue(payload["provider_decision_questions"])
-            self.assertNotIn("available_targets", payload)
-            self.assertNotIn("matched_adapters", payload)
-            self.assertIn("STOP", payload["next_action"])
+            self.assertIn("available_targets", payload)
+            self.assertIn("matched_adapters", payload)
+            self.assertIn("proceed with base adapters", payload["next_action"])
 
             output = Path(temporary) / "bundle"
             code, stdout, stderr = self._run([
@@ -610,7 +666,7 @@ class AdapterCliTests(unittest.TestCase):
             ])
             self.assertEqual(code, 2)
             self.assertEqual(stdout, "")
-            self.assertIn("after the user reviews provider research", stderr)
+            self.assertIn("complete the provider branch or omit", stderr)
             self.assertFalse(output.exists())
 
     def test_provider_resolution_without_research_is_rejected(self):
@@ -628,6 +684,24 @@ class AdapterCliTests(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertEqual(stdout, "")
             self.assertIn("requires --provider-research", stderr)
+
+    def test_decomposed_artifacts_without_parent_resolution_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _parent_args, child_research_args, _child_resolution_args = (
+                _decomposed_provider_args(Path(temporary))
+            )
+            code, stdout, stderr = self._run([
+                "adapter-options",
+                str(FIXTURES / "python-ml"),
+                *child_research_args,
+            ])
+
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "decomposed provider artifacts require --provider-resolution",
+                stderr,
+            )
 
     def test_provider_decision_packet_exposes_partial_candidates_and_remaining_gaps(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -806,7 +880,7 @@ class AdapterCliTests(unittest.TestCase):
                 self.assertTrue(stderr.startswith("error: "))
                 self.assertFalse(output.exists())
 
-    def test_propose_adapters_requires_resolution_for_every_provider_gap(self):
+    def test_propose_adapters_allows_base_bundle_with_visible_provider_gaps(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "bundle"
             code, stdout, stderr = self._run([
@@ -817,10 +891,14 @@ class AdapterCliTests(unittest.TestCase):
                 "--output", str(output),
             ])
 
-            self.assertEqual(code, 2)
-            self.assertEqual(stdout, "")
-            self.assertIn("provider research artifact required", stderr)
-            self.assertFalse(output.exists())
+            self.assertEqual(code, 0, stderr)
+            self.assertIn("tool proposal", stdout)
+            self.assertTrue(output.exists())
+            self.assertEqual(validate_adapter_bundle(output), [])
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertIsNone(manifest["provider_research"])
+            self.assertIsNone(manifest["provider_resolution"])
+            self.assertEqual(manifest["provider_gap_proposals"], [])
 
 
 if __name__ == "__main__":

@@ -118,22 +118,22 @@ def _parser() -> argparse.ArgumentParser:
             "are recorded as evidence, but no execution order, concurrency, consolidator, "
             "or mandatory team is generated. The command never applies or runs adapters. "
             "Use the repository-aware adapter-options command to obtain selectable roles "
-            "and targets after separate provider-research and provider-resolution artifacts "
-            "cover every gap."
+            "and targets. Provider research is optional; when supplied, its complete "
+            "research/decision chain is preserved separately."
         ),
     )
     adapters.add_argument("repo", help="Local repository path to profile")
     adapters.add_argument(
         "--targets",
         required=True,
-        help="Required comma-separated subset exposed by unlocked adapter-options output",
+        help="Required comma-separated subset exposed by adapter-options output",
     )
     adapters.add_argument(
         "--role",
         action="append",
         required=True,
         metavar="ROLE",
-        help="Repeat for each explicit read-only role exposed by unlocked adapter-options output",
+        help="Repeat for each explicit read-only role exposed by adapter-options output",
     )
     adapters.add_argument("--output", required=True, help="Proposal directory (must not exist and be outside this repo)")
     adapters.add_argument("--compare-to", default=None, help="Destination repo to compare against, strictly read-only")
@@ -147,8 +147,8 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         metavar="FILE",
         help=(
-            "Validated provider-search evidence and recommendations for every capability "
-            "gap; research alone never unlocks adapter selection"
+            "Validated provider-search evidence for one or more selected capability gaps; "
+            "research alone never authorizes a provider outcome"
         ),
     )
     adapters.add_argument(
@@ -164,7 +164,7 @@ def _parser() -> argparse.ArgumentParser:
         "--decomposed-provider-research",
         default=None,
         metavar="FILE",
-        help="Provider research for every subcapability declared by decompose_capability",
+        help="Provider research for one or more subcapabilities declared by decompose_capability",
     )
     adapters.add_argument(
         "--decomposed-provider-resolution",
@@ -176,8 +176,8 @@ def _parser() -> argparse.ArgumentParser:
     adapter_options = subparsers.add_parser(
         "adapter-options",
         help=(
-            "Repository-aware adapter selection query; hides roles and targets until "
-            "provider research has been presented and a separate resolution covers every gap"
+            "Repository-aware adapter selection query; always exposes deterministic base "
+            "adapter options while keeping provider discovery advisory and separate"
         ),
     )
     adapter_options.add_argument("repo", help="Local repository path to profile")
@@ -192,7 +192,7 @@ def _parser() -> argparse.ArgumentParser:
         "--provider-research",
         default=None,
         metavar="FILE",
-        help="Validated provider-search evidence and recommendations for every capability gap",
+        help="Validated provider-search evidence for one or more selected capability gaps",
     )
     adapter_options.add_argument(
         "--provider-resolution",
@@ -204,7 +204,7 @@ def _parser() -> argparse.ArgumentParser:
         "--decomposed-provider-research",
         default=None,
         metavar="FILE",
-        help="Provider research for every subcapability declared by decompose_capability",
+        help="Provider research for one or more subcapabilities declared by decompose_capability",
     )
     adapter_options.add_argument(
         "--decomposed-provider-resolution",
@@ -295,33 +295,45 @@ def _run_propose_adapters(args) -> int:
     infrastructure = recommend_infrastructure(profile)
     gaps = _provider_gap_capabilities(infrastructure)
     providers = ()
-    if gaps and not args.provider_research:
-        raise ValueError(
-            "provider research artifact required for capability gaps: "
-            + ", ".join(item.capability_id for item in gaps)
-        )
     research = None
     resolution = None
     proposals = ()
     decomposed_research = None
     decomposed_resolution = None
     decomposed_proposals = ()
+    decomposed_researched_ids = ()
+    provider_chain_requested = any((
+        args.provider_research,
+        args.provider_resolution,
+        args.decomposed_provider_research,
+        args.decomposed_provider_resolution,
+        args.provider_catalog,
+    ))
+    if provider_chain_requested and not args.provider_research:
+        raise ValueError(
+            "provider artifacts or catalog require --provider-research; omit all provider "
+            "arguments to generate a base adapter bundle"
+        )
     if args.provider_research:
         research = load_provider_research(
             args.provider_research,
             (item.capability_id for item in gaps),
+            require_all=False,
         )
-    if gaps and not args.provider_resolution:
+    researched_ids = tuple(
+        item["capability_id"] for item in (research or {}).get("capabilities", [])
+    )
+    if research is not None and not args.provider_resolution:
         raise ValueError(
-            "provider resolution required after the user reviews provider research; "
-            "research recommendations cannot authorize adapter selection"
+            "provider resolution required to embed provider research in a bundle; "
+            "complete the provider branch or omit all provider arguments"
         )
     if args.provider_resolution:
         if research is None:
             raise ValueError("--provider-resolution requires --provider-research")
         preliminary_resolution, _ = load_provider_resolution(
             args.provider_resolution,
-            (item.capability_id for item in gaps),
+            researched_ids,
             research,
             require_catalog_for_selection=False,
         )
@@ -334,12 +346,12 @@ def _run_propose_adapters(args) -> int:
         )
         resolution, proposals = load_provider_resolution(
             args.provider_resolution,
-            (item.capability_id for item in gaps),
+            researched_ids,
             research,
             providers,
         )
-    else:
-        providers = load_provider_catalog(args.provider_catalog)
+    elif not provider_chain_requested:
+        providers = ()
     decomposed = decomposed_capabilities(resolution or {})
     decomposed_ids = tuple(item["capability_id"] for item in decomposed)
     if decomposed:
@@ -351,6 +363,11 @@ def _run_propose_adapters(args) -> int:
         decomposed_research = load_provider_research(
             args.decomposed_provider_research,
             decomposed_ids,
+            require_all=False,
+        )
+        decomposed_researched_ids = tuple(
+            item["capability_id"]
+            for item in decomposed_research["capabilities"]
         )
         if not args.decomposed_provider_resolution:
             raise ValueError(
@@ -359,7 +376,7 @@ def _run_propose_adapters(args) -> int:
             )
         decomposed_resolution, decomposed_proposals = load_provider_resolution(
             args.decomposed_provider_resolution,
-            decomposed_ids,
+            decomposed_researched_ids,
             decomposed_research,
             providers,
             allow_decomposition=False,
@@ -427,7 +444,7 @@ def _provider_discovery_packet(infrastructure) -> dict[str, object]:
         "schema_version": 1,
         "kind": "provider_discovery",
         "status": (
-            "requires_provider_research" if requires_research else "no_provider_gaps"
+            "provider_research_optional" if requires_research else "no_provider_gaps"
         ),
         "catalog": {
             "source": "builtin-empty",
@@ -438,12 +455,11 @@ def _provider_discovery_packet(infrastructure) -> dict[str, object]:
         "unresolved_capabilities": to_jsonable(gaps),
         "provider_discovery": to_jsonable(brief),
         "next_action": (
-            "Before recommending adapter roles or targets, perform the read-only public "
-            "provider research described in provider_discovery and write its validated "
-            "provider_research artifact. Present that artifact and stop for the user's "
-            "provider decisions before creating provider_resolution. If network research "
-            "is unavailable, record the runtime limitation explicitly. Do not download, "
-            "execute, install, or silently catalog a provider."
+            "Present the provider gaps alongside the deterministic adapter options. The "
+            "user may proceed with base adapters or request read-only public provider "
+            "research for selected gaps. Research remains advisory and must be completed "
+            "with separate user decisions before any provider outcome is embedded. Do not "
+            "download, execute, install, or silently catalog a provider."
             if requires_research
             else "No provider research is required before adapter selection."
         ),
@@ -481,18 +497,29 @@ def _run_adapter_options(args) -> int:
     decomposed_research = None
     decomposed_resolution = None
     decomposed_proposals = ()
-    adapter_options_unlocked = not unmapped_capabilities
+    decomposed_researched_ids = ()
+    if (
+        args.decomposed_provider_research
+        or args.decomposed_provider_resolution
+    ) and not args.provider_resolution:
+        raise ValueError(
+            "decomposed provider artifacts require --provider-resolution"
+        )
     if args.provider_research:
         research = load_provider_research(
             args.provider_research,
             (item.capability_id for item in unmapped_capabilities),
+            require_all=False,
         )
+    researched_ids = tuple(
+        item["capability_id"] for item in (research or {}).get("capabilities", [])
+    )
     if args.provider_resolution:
         if research is None:
             raise ValueError("--provider-resolution requires --provider-research")
         preliminary_resolution, _ = load_provider_resolution(
             args.provider_resolution,
-            (item.capability_id for item in unmapped_capabilities),
+            researched_ids,
             research,
             require_catalog_for_selection=False,
         )
@@ -505,13 +532,12 @@ def _run_adapter_options(args) -> int:
         )
         resolution, proposals = load_provider_resolution(
             args.provider_resolution,
-            (item.capability_id for item in unmapped_capabilities),
+            researched_ids,
             research,
             providers,
         )
         decomposition = decomposed_capabilities(resolution)
         if decomposition:
-            adapter_options_unlocked = False
             decomposed_ids = tuple(
                 item["capability_id"] for item in decomposition
             )
@@ -519,6 +545,11 @@ def _run_adapter_options(args) -> int:
                 decomposed_research = load_provider_research(
                     args.decomposed_provider_research,
                     decomposed_ids,
+                    require_all=False,
+                )
+                decomposed_researched_ids = tuple(
+                    item["capability_id"]
+                    for item in decomposed_research["capabilities"]
                 )
             if args.decomposed_provider_resolution:
                 if decomposed_research is None:
@@ -528,21 +559,21 @@ def _run_adapter_options(args) -> int:
                     )
                 decomposed_resolution, decomposed_proposals = load_provider_resolution(
                     args.decomposed_provider_resolution,
-                    decomposed_ids,
+                    (
+                        item["capability_id"]
+                        for item in decomposed_research["capabilities"]
+                    ),
                     decomposed_research,
                     providers,
                     allow_decomposition=False,
                 )
-                adapter_options_unlocked = True
         else:
             if args.decomposed_provider_research or args.decomposed_provider_resolution:
                 raise ValueError(
                     "decomposed provider artifacts require a decompose_capability decision"
                 )
-            adapter_options_unlocked = True
     elif unmapped_capabilities:
         providers = load_provider_catalog(args.provider_catalog)
-        adapter_options_unlocked = False
     elif args.decomposed_provider_research or args.decomposed_provider_resolution:
         raise ValueError(
             "decomposed provider artifacts require a decompose_capability decision"
@@ -550,22 +581,33 @@ def _run_adapter_options(args) -> int:
     else:
         providers = load_provider_catalog(args.provider_catalog)
 
-    if adapter_options_unlocked:
-        status = "requires_adapter_selection"
+    if not unmapped_capabilities:
+        provider_status = "not_required"
     elif research is None:
-        status = "requires_provider_research"
+        provider_status = "research_optional"
     elif resolution is None:
-        status = "requires_provider_decision"
-    elif decomposed_research is None:
-        status = "requires_decomposed_provider_research"
+        provider_status = "decision_optional"
+    elif decomposition and decomposed_research is None:
+        provider_status = "decomposed_research_optional"
+    elif decomposition and decomposed_resolution is None:
+        provider_status = "decomposed_decision_optional"
     else:
-        status = "requires_decomposed_provider_decision"
+        parent_unresearched = unmapped_capability_ids.difference(researched_ids)
+        decomposed_unresearched = {
+            item["capability_id"] for item in decomposition
+        }.difference(decomposed_researched_ids)
+        provider_status = (
+            "selected_capabilities_resolved"
+            if parent_unresearched or decomposed_unresearched
+            else "resolved"
+        )
+    status = "requires_adapter_selection"
 
     active_decision_research = (
         decomposed_research
-        if status == "requires_decomposed_provider_decision"
+        if provider_status == "decomposed_decision_optional"
         else research
-        if status == "requires_provider_decision"
+        if provider_status == "decision_optional"
         else None
     )
     decision_options = [
@@ -574,7 +616,7 @@ def _run_adapter_options(args) -> int:
         "leave_unresolved",
         "create_local_knowledge",
     ]
-    if status == "requires_provider_decision":
+    if provider_status == "decision_optional":
         decision_options.append("decompose_capability")
     adapter_questions = [
         {
@@ -590,6 +632,21 @@ def _run_adapter_options(args) -> int:
     ]
     payload = {
         "status": status,
+        "provider_status": provider_status,
+        "provider_scope": {
+            "researched_capability_ids": list(researched_ids),
+            "unresearched_capability_ids": sorted(
+                unmapped_capability_ids.difference(researched_ids)
+            ),
+            "decomposed_researched_capability_ids": list(
+                decomposed_researched_ids
+            ),
+            "decomposed_unresearched_capability_ids": sorted(
+                {item["capability_id"] for item in decomposition}.difference(
+                    decomposed_researched_ids
+                )
+            ),
+        },
         "repository_summary": {
             "name": profile.name,
             "primary_project_types": list(profile.primary_project_types),
@@ -636,14 +693,14 @@ def _run_adapter_options(args) -> int:
                 "that the remaining capability gap is resolved."
             ),
         },
-        "questions": adapter_questions if adapter_options_unlocked else [],
+        "questions": adapter_questions,
         "provider_decision_questions": (
             [
                 {
                     "capability_id": item["capability_id"],
                     "decision_scope": (
                         "decomposed_capability"
-                        if status == "requires_decomposed_provider_decision"
+                        if provider_status == "decomposed_decision_optional"
                         else "repository_capability"
                     ),
                     "question": "Which outcome should be recorded after reviewing this provider research?",
@@ -678,52 +735,37 @@ def _run_adapter_options(args) -> int:
         "decomposed_provider_gap_proposals": to_jsonable(decomposed_proposals),
         "next_action": (
             (
-                "Present only the repository facts and capability-provider gaps. Follow the "
-                "provider_discovery brief when public network research is permitted. If it "
-                "is unavailable, report that limitation. Do not recommend or ask the user "
-                "to choose adapter roles or targets. Research must be recorded in a "
-                "provider_research artifact; it cannot authorize its own recommendations."
+                "Present the deterministic adapter roles and targets together with the "
+                "unresolved provider gaps. Ask which base adapters the user wants. Offer "
+                "read-only provider research only for capabilities the user wants to "
+                "investigate; it is optional and must not block base setup."
             )
-            if status == "requires_provider_research"
+            if provider_status == "research_optional"
             else (
-                "Present the provider research, candidates, coverage gaps, and recommendations. "
-                "STOP and ask the user to choose an outcome for every capability. Create "
-                "provider_resolution only after that response. Do not expose or recommend "
-                "adapter roles or targets in this phase."
+                "Present the adapter choices and the optional provider research. The user "
+                "may proceed with base adapters without resolving it. Embed this research "
+                "only after separate provider decisions complete the provider branch."
             )
-            if status == "requires_provider_decision"
+            if provider_status == "decision_optional"
             else (
-                "Present the concrete decomposed capabilities and their repository evidence. "
-                "Then perform the new read-only provider research described in "
-                "provider_discovery. Record it separately as decomposed_provider_research. "
-                "Do not expose or recommend adapter roles or targets."
+                "Present the adapter choices and the concrete decomposed capabilities. "
+                "Researching those subcapabilities is optional and does not block a base "
+                "adapter bundle. If requested, record the research separately."
             )
-            if status == "requires_decomposed_provider_research"
+            if provider_status == "decomposed_research_optional"
             else (
-                "Present the decomposed provider research, candidates, coverage gaps, and "
-                "recommendations. STOP and ask the user to choose an outcome for every "
-                "subcapability. Create decomposed_provider_resolution only after that "
-                "response. Nested decomposition is not supported."
+                "Present the adapter choices and the optional decomposed-provider research. "
+                "The user may proceed with base adapters or finish separate decisions for "
+                "each subcapability. Nested decomposition remains unsupported."
             )
-            if status == "requires_decomposed_provider_decision"
+            if provider_status == "decomposed_decision_optional"
             else (
-                "Present the repository facts, user-resolved provider gaps, adapter "
-                "coverage, and available targets. Ask the user which roles and targets to "
-                "include before generating an installation preview."
+                "Present the repository facts, adapter coverage, available targets, and any "
+                "recorded provider outcomes. Ask which roles and targets to include before "
+                "generating an installation preview."
             )
         ),
     }
-    if not adapter_options_unlocked:
-        for hidden in (
-            "available_targets",
-            "target_details",
-            "matched_adapters",
-            "optional_adapters",
-            "unmapped_available_roles",
-            "unmapped_roles",
-            "deferred_questions",
-        ):
-            payload.pop(hidden, None)
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 
@@ -994,13 +1036,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"Wrote {len(files)} proposal files to {args.output}")
         print("No harness adapter was selected or generated.")
-        if provider_discovery["status"] == "requires_provider_research":
+        if provider_discovery["status"] == "provider_research_optional":
             print(
-                "STOP: provider-discovery.json contains unresolved capability gaps. "
-                "Complete its read-only research brief and write a validated "
-                "provider_research artifact, then present it and stop for the user's separate "
-                "provider_resolution decisions before recommending adapter roles or targets; "
-                "if public network research is unavailable, record that runtime limitation."
+                "Provider gaps remain visible in provider-discovery.json. Base adapter "
+                "selection may proceed independently; public provider research is optional "
+                "and requires separate user decisions before its outcomes are embedded."
             )
         return 0
     except (OSError, ProposalError, AdapterInstallError, AdapterSelectionError, MultiCliError, ValueError) as error:

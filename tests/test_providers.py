@@ -219,6 +219,18 @@ class ProviderResolutionTests(unittest.TestCase):
                 ["ml_reproducibility", "dependency_audit"],
             )
 
+    def test_optional_research_accepts_a_selected_subset(self):
+        normalized = parse_provider_research(
+            _research(_research_item("ml_reproducibility")),
+            ["ml_reproducibility", "dependency_audit"],
+            require_all=False,
+        )
+
+        self.assertEqual(
+            [item["capability_id"] for item in normalized["capabilities"]],
+            ["ml_reproducibility"],
+        )
+
     def test_completed_research_requires_provider_search_evidence(self):
         with self.assertRaisesRegex(
             ProviderResolutionError,

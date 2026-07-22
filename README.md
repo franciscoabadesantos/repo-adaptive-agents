@@ -151,6 +151,12 @@ research and user-decision phase, and roles/targets remain hidden until it is co
 Nested decomposition is rejected. Adapter bundle schema version 8 preserves the complete
 parent and decomposed decision chain.
 
+Version 0.12 removes the global provider gate. `adapter-options` always exposes deterministic
+base roles and targets while reporting provider work through a separate `provider_status`.
+Provider research remains available per capability, but it is opt-in and never blocks a base
+bundle. If provider artifacts are supplied to `propose-adapters`, their complete validated
+research/decision chain is still required and preserved.
+
 ## Knowledge provider resolution
 
 Inspect capability gaps using the empty built-in catalog:
@@ -340,8 +346,8 @@ it is not an IDE or harness. Codex, Claude, and Copilot wrappers are self-contai
 not depend on that artifact, so select `skill` only when the destination intentionally
 consumes or versions portable skills. Each target has an isolated renderer, so the three
 CLIs are never treated as having identical semantics. During repository adoption, roles and
-targets are exposed only by an unlocked `adapter-options <repo>` result; the renderer API
-keeps deterministic internal registries for development and testing.
+targets are exposed by `adapter-options <repo>` alongside unresolved provider gaps; the
+renderer API keeps deterministic internal registries for development and testing.
 
 Render a proposal (this generates files; it never applies them):
 
@@ -462,9 +468,11 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli adapter-options ./my-repo
 
 If capability-provider gaps exist, it emits repository identity and technologies,
 repository-native contracts, recommended capabilities, the gaps, and the provider research
-brief. Adapter roles, targets, and their questions are deliberately absent. Research must be
-recorded in a local JSON artifact outside the target repository. Research records actual
-provider searches and recommendations, but never user decisions. An unavailable example is:
+brief alongside deterministic adapter roles and targets. The user may proceed with base
+adapters or investigate selected gaps. Optional research must be recorded in a local JSON
+artifact outside the target repository. Research records actual provider searches and
+recommendations for one or more selected gaps, but never user decisions. Gaps omitted from
+that artifact remain explicitly unresearched. An unavailable example is:
 
 ```json
 {
@@ -502,8 +510,8 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli adapter-options ./my-repo \
   --provider-research /tmp/my-provider-research.json
 ```
 
-The output remains locked: it presents the research and asks for one provider outcome per
-capability. Stop for the user's response. Record those decisions separately:
+The output continues to expose base adapter choices and also asks for one provider outcome per
+researched capability. The user may ignore that optional branch or record decisions separately:
 
 ```json
 {
@@ -522,20 +530,19 @@ capability. Stop for the user's response. Record those decisions separately:
 ```
 
 Then rerun `adapter-options` with both artifacts. A selected provider must be a `suitable`
-research candidate and must also exist in the supplied reviewed catalog. Only the validated
-pair exposes matched/optional adapters, supported targets, and the two user selection
-questions. Neither artifact downloads or installs providers, and the command always writes
-nothing. `select_partial_provider` may reference a `partial_only` research candidate without
+research candidate and must also exist in the supplied reviewed catalog. Neither artifact
+downloads or installs providers, and the command always writes nothing.
+`select_partial_provider` may reference a `partial_only` research candidate without
 claiming the full capability is resolved; its exact coverage and remaining gaps stay in the
 decision packet.
 
 When the user chooses `decompose_capability`, that decision must contain `decomposition` with
 two to six objects containing `capability_id`, `title`, `objective`, `repository_reason`, and
-non-empty repository `evidence`. Rerunning `adapter-options` then returns
-`requires_decomposed_provider_research` and a research brief for those narrower capabilities.
+non-empty repository `evidence`. Rerunning `adapter-options` reports
+`provider_status: decomposed_research_optional` and a research brief for those narrower capabilities.
 Pass the resulting artifacts through `--decomposed-provider-research` and, after the user
 reviews that research, `--decomposed-provider-resolution`. The second resolution rejects
-nested decomposition. Adapter roles and targets remain hidden until both phases are complete.
+nested decomposition. Base adapter choices remain available throughout.
 A reviewed provider catalog remains strict: only the exact subcapability IDs declared by the
 validated parent resolution are accepted in addition to the global capability registry.
 
@@ -557,25 +564,25 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-adapters ./my-repo \
   --output /tmp/my-adapters
 ```
 
-`propose-adapters` applies the same gate and fails before creating its output directory when
-the research or subsequent resolution is missing, malformed, or incomplete. Adapter bundle
+`propose-adapters` needs no provider artifacts for a base bundle. When any provider artifact
+or catalog is supplied, every researched capability in that optional branch needs a matching
+decision. Decomposed research may likewise cover a selected subset of declared
+subcapabilities; the rest remain visible as unresearched. Incomplete or malformed supplied
+branches fail before output is created. Adapter bundle
 `manifest.json` schema version 8 embeds the parent and decomposed artifacts and their derived
 outcomes; installation previews display their research status, candidate count, and rationale
 before roles and file additions. The decomposed flags are required only when the parent
 resolution contains `decompose_capability`.
 
-The agent-led adoption flow uses two explicit decision boundaries:
+The agent-led adoption flow keeps base setup and provider discovery separate:
 
-1. run `propose` or `adapter-options`; present repository facts and provider gaps. Complete
-   permitted read-only research and write one `provider_research` entry for every gap. Lack of
-   permission to install a provider is not evidence that public research is unavailable;
-2. rerun `adapter-options` with only the research artifact, present candidates, evidence,
-   limitations, and recommendations, then stop for the user's provider decisions;
-3. write `provider_resolution` from that response and rerun `adapter-options` with both
-   artifacts. If it contains a decomposition, research each declared subcapability, present
-   that research, stop for the user's decisions, and record the separate decomposed
-   resolution. Only after any required second phase may the user choose roles and targets;
-4. render a proposal, preview installation, show both provider-resolution stages, proposed
+1. run `propose` or `adapter-options`; present repository facts, provider gaps, and the
+   deterministic role/target options. The user may proceed directly with a base bundle;
+2. only when requested, research selected provider gaps and present candidates, evidence,
+   limitations, and recommendations for separate decisions;
+3. if the user wants provider outcomes embedded, complete `provider_resolution` and any
+   decomposed research/resolution branch. Otherwise omit all provider arguments;
+4. render a proposal, preview installation, show any recorded provider outcomes, proposed
    roles/targets, and exact additions, then stop for approval. Approval of that exact preview
    accepts both the selection and the file plan;
 5. only after that approval, run

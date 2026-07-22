@@ -19,31 +19,31 @@ architectures, workflows, risks, and organizational preferences.
 - Inspect before editing.
 - Keep the deterministic core separate from optional LLM-assisted behavior.
 - When preparing another repository, treat `propose` as the canonical assessment output.
-  If `provider-discovery.json` reports `requires_provider_research`, complete that read-only
-  public research before recommending adapter roles or targets. Record actual searches of
-  provider marketplaces, skill/plugin repositories, code indexes, or the public web;
-  product documentation alone is not provider discovery. If network research is not
-  available, report the limitation.
+  Provider gaps are advisory and must remain visible, but they do not block deterministic
+  base adapter choices. Offer public provider research only for capabilities the user wants
+  to investigate. Record actual searches of provider marketplaces, skill/plugin repositories,
+  code indexes, or the public web; product documentation alone is not provider discovery.
 - Any plausible installable provider named in a search result must appear as a structured
   candidate with `suitable`, `partial_only`, or `reject` coverage. Do not hide candidates in
   prose. A user may explicitly select a partial provider, but the unresolved remainder must
   stay visible and must not be reported as full capability coverage.
-- Provider research is advisory. Record evidence, candidates, coverage limits, and a
-  recommendation for every gap in `provider_research`, present it, then stop for the user's
-  decisions. Do not create `provider_resolution`, expose adapter choices, or generate a
-  bundle in that same step. After the user responds, record the separate resolution and
-  rerun the repository-aware adapter query.
+- Provider research is advisory. For each gap the user elects to investigate, record evidence,
+  candidates, coverage limits, and a recommendation in `provider_research`, present it, then
+  stop for the user's decisions. Unresearched gaps remain visible and adapter choices remain
+  available independently. Do not embed incomplete research
+  in a bundle: after the user responds, record the separate resolution or omit the entire
+  provider branch from the base bundle.
   Lack of permission to download or install a provider is not evidence that public research
   is unavailable. Do not bypass the gate with raw outcomes or invented roles.
 - `decompose_capability` must declare two to six narrower, evidence-backed capabilities in
   `provider_resolution`. Research and resolve those subcapabilities in separate artifacts;
-  keep roles and targets hidden until that second decision phase is complete. Do not recurse
-  into another decomposition automatically.
+  this optional branch does not block base adapters. Do not recurse into another decomposition
+  automatically.
 - Treat `adapter-options <repo>` as the only adoption-time role/target query; global renderer
   catalogs are implementation details, not repository recommendations.
-- After provider decisions unlock `adapter-options`, present its role and target choices and
+- Present `adapter-options` role and target choices together with unresolved provider gaps and
   stop for the user's selection. Do not choose every target, infer a preferred harness, or
-  generate an adapter bundle from the initial request to prepare a repository.
+  force provider research before a base adapter bundle.
 - Model capabilities before mapping them to agents.
 - Use subagents only when they materially help.
 - Prefer one implementation owner per file area.
