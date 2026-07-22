@@ -41,6 +41,7 @@ The first MVP should:
 - detect stack, architecture, tests, deploy tooling, and integrations;
 - recommend capabilities and optional roles;
 - identify useful but unavailable external capabilities;
+- resolve capability gaps against optional local provider metadata without network access;
 - generate a portable repository profile and infrastructure plan;
 - optionally render explicit, auditable harness adapters;
 - preview and explicitly install new adapter files without overwriting repository state.
@@ -50,7 +51,8 @@ The first MVP should not:
 - manage credentials;
 - deploy remotely;
 - create pull requests automatically;
-- require an LLM for deterministic repository profiling.
+- require an LLM for deterministic repository profiling;
+- download, execute, or install knowledge providers.
 
 ## Validation
 

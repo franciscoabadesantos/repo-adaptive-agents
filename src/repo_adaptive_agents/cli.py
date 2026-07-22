@@ -27,6 +27,7 @@ from .multi_cli import (
 )
 from .multi_cli import write_proposal as write_role_proposal
 from .profiler import profile_repository
+from .providers import load_provider_catalog, resolve_providers
 from .recommender import recommend_infrastructure
 
 
@@ -131,6 +132,19 @@ def _parser() -> argparse.ArgumentParser:
     adapter_options.add_argument("repo", help="Local repository path to profile")
     adapter_options.add_argument("--request", default="", help="Optional user request to shape recommendations")
     adapter_options.add_argument("--evidence-path-limit", type=int, default=25, help="Maximum paths shown per evidence item")
+
+    provider_options = subparsers.add_parser(
+        "provider-options",
+        help="Resolve capability gaps against local provider metadata without network access or writes",
+    )
+    provider_options.add_argument("repo", help="Local repository path to profile")
+    provider_options.add_argument(
+        "--catalog",
+        default=None,
+        help="Optional local JSON provider catalog; omitted uses the empty built-in catalog",
+    )
+    provider_options.add_argument("--request", default="", help="Optional user request to shape recommendations")
+    provider_options.add_argument("--evidence-path-limit", type=int, default=25, help="Maximum paths shown per evidence item")
 
     install = subparsers.add_parser(
         "install-adapters",
@@ -306,6 +320,49 @@ def _run_adapter_options(args) -> int:
     return 0
 
 
+def _run_provider_options(args) -> int:
+    profile = profile_repository(args.repo, evidence_path_limit=args.evidence_path_limit)
+    infrastructure = recommend_infrastructure(profile, args.request)
+    matched, _optional, _unmapped = list_adapter_options(infrastructure)
+    covered_capabilities = {
+        capability
+        for adapter in matched
+        for capability in adapter.matched_capabilities
+    }
+    providers = load_provider_catalog(args.catalog)
+    resolution = resolve_providers(infrastructure, covered_capabilities, providers)
+    payload = {
+        "status": "provider_resolution",
+        "repository": profile.name,
+        "catalog": {
+            "source": str(Path(args.catalog).expanduser()) if args.catalog else "builtin-empty",
+            "provider_count": len(providers),
+            "network_access": False,
+        },
+        "capability_gaps": to_jsonable(resolution.capability_gaps),
+        "provider_candidates": to_jsonable(resolution.candidates),
+        "unresolved_capabilities": to_jsonable(resolution.unresolved_capabilities),
+        "policy": {
+            "metadata_only": "Provider sources were not accessed, downloaded, or executed.",
+            "approval": (
+                "A catalog entry is evidence of a candidate or prior catalog review, not "
+                "approval to install it in this repository."
+            ),
+            "generic_reviewer_boundary": (
+                "independent_reviewer can provide read-only isolation but does not itself "
+                "supply unresolved domain knowledge."
+            ),
+        },
+        "next_action": (
+            "Present matching candidates with source, revision, license, review status, and "
+            "compatible targets. Leave unmatched capabilities unresolved. No installation "
+            "command exists in this MVP."
+        ),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
 def _adapter_decision_lines(bundle_dir: str | Path) -> list[str]:
     """Build a concise, evidence-backed decision packet from a validated bundle."""
     bundle = Path(bundle_dir).expanduser().resolve()
@@ -458,6 +515,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_propose_adapters(args)
         if args.command == "adapter-options":
             return _run_adapter_options(args)
+        if args.command == "provider-options":
+            return _run_provider_options(args)
         if args.command == "install-adapters":
             return _run_install_adapters(args)
 

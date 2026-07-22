@@ -18,9 +18,11 @@ The implementation is intentionally split into small, inspectable layers:
 3. `recommender.py` applies explainable rules from project types and signals to produce
    an `InfrastructurePlan`, including repository contracts, capabilities, available roles,
    assumptions, and questions. Available roles are not a mandatory execution pipeline.
-4. `generator.py` writes the portable profile and infrastructure plan only. It does not
+4. `providers.py` optionally resolves uncovered capabilities against a strict local metadata
+   catalog. Resolution is read-only: provider sources are never fetched, executed, or installed.
+5. `generator.py` writes the portable profile and infrastructure plan only. It does not
    choose a harness, model, concurrency, sandbox, role execution order, or agent topology.
-5. `cli.py` exposes profile, plan, and propose commands.
+6. `cli.py` exposes the profiling, proposal, adapter, and provider-resolution commands.
 
 The data contract is represented by dataclasses in `models.py`; portable JSON Schema
 documents are exported from `schemas.py` for downstream validation.
@@ -100,6 +102,52 @@ Version 0.4.3 stops turning the `ml_reproducibility` capability into a synthetic
 `ml_reviewer` role. Domain knowledge without a canonical provider remains an explicit
 capability gap; the generic `independent_reviewer` is still available for read-only review
 isolation, but is not presented as ML expertise.
+
+Version 0.5 adds read-only provider resolution. `provider-options` can match explicit
+capability gaps against a local, versioned metadata catalog without network access,
+downloading provider content, or installing anything.
+
+## Knowledge provider resolution
+
+Inspect capability gaps using the empty built-in catalog:
+
+```sh
+PYTHONPATH=src python3 -m repo_adaptive_agents.cli provider-options /path/to/repository
+```
+
+Supply an explicitly chosen local catalog when the team has reviewed provider metadata:
+
+```sh
+PYTHONPATH=src python3 -m repo_adaptive_agents.cli provider-options /path/to/repository \
+  --catalog /path/to/providers.json
+```
+
+Catalog schema version 1 is deliberately small and strict:
+
+```json
+{
+  "schema_version": 1,
+  "providers": [
+    {
+      "id": "example_ml_review",
+      "title": "Example ML review knowledge",
+      "capabilities": ["ml_reproducibility"],
+      "kind": "skill",
+      "source": "https://example.invalid/providers/ml-review",
+      "revision": "0123456789abcdef0123456789abcdef01234567",
+      "compatible_targets": ["codex"],
+      "license": "MIT",
+      "review_status": "candidate"
+    }
+  ]
+}
+```
+
+`kind` is `skill`, `plugin`, or `manual`; `review_status` is `candidate` or `approved`.
+The catalog records provenance and compatibility, not permission to install. The command
+does not access `source`, and this MVP intentionally has no provider download or install
+command. Unmatched capabilities remain explicit rather than causing a new domain agent to
+be invented.
 
 ## Domain model
 
