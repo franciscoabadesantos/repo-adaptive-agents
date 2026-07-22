@@ -45,20 +45,21 @@ def _provider_resolution_args(fixture: str, root: Path) -> list[str]:
         for capability in infrastructure.capabilities
         if capability.capability_id not in covered
     ]
-    resolution = root / f"{fixture}-provider-resolution.json"
-    resolution.write_text(
+    research = root / f"{fixture}-provider-research.json"
+    research.write_text(
         json.dumps({
             "schema_version": 1,
-            "kind": "provider_resolution",
+            "kind": "provider_research",
             "capabilities": [
                 {
                     "capability_id": capability_id,
                     "research_status": "unavailable",
+                    "searches": [],
                     "candidates": [],
                     "evidence": ["Test runtime does not permit public network research."],
                     "limitation": "Public network research is unavailable in this test.",
-                    "proposed_outcome": "leave_unresolved",
-                    "provider_id": None,
+                    "recommended_outcome": "leave_unresolved",
+                    "recommended_provider_id": None,
                     "rationale": "Preserve the gap explicitly for this adapter test.",
                 }
                 for capability_id in gaps
@@ -66,7 +67,29 @@ def _provider_resolution_args(fixture: str, root: Path) -> list[str]:
         }),
         encoding="utf-8",
     )
-    return ["--provider-resolution", str(resolution)]
+    resolution = root / f"{fixture}-provider-resolution.json"
+    resolution.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "kind": "provider_resolution",
+            "decisions": [
+                {
+                    "capability_id": capability_id,
+                    "outcome": "leave_unresolved",
+                    "provider_id": None,
+                    "rationale": "Test fixture decision after reviewing provider research.",
+                }
+                for capability_id in gaps
+            ],
+        }),
+        encoding="utf-8",
+    )
+    return [
+        "--provider-research",
+        str(research),
+        "--provider-resolution",
+        str(resolution),
+    ]
 
 
 class AdapterSelectionTests(unittest.TestCase):
@@ -123,7 +146,8 @@ class AdapterBundleTests(unittest.TestCase):
             )
             self.assertEqual(validate_adapter_bundle(output), [])
             self.assertEqual(manifest["kind"], "adapter_bundle")
-            self.assertEqual(manifest["schema_version"], 5)
+            self.assertEqual(manifest["schema_version"], 6)
+            self.assertIsNone(manifest["provider_research"])
             self.assertIsNone(manifest["provider_resolution"])
             self.assertEqual(manifest["provider_gap_proposals"], [])
             self.assertEqual(manifest["selection_status"], "tool_proposal")
@@ -358,7 +382,7 @@ class AdapterCliTests(unittest.TestCase):
 
         self.assertEqual(code, 0, stderr)
         payload = json.loads(stdout)
-        self.assertEqual(payload["status"], "requires_install_decision")
+        self.assertEqual(payload["status"], "requires_adapter_selection")
         self.assertEqual(payload["available_targets"], ["skill", "codex", "claude", "copilot"])
         self.assertEqual(
             [item["role_id"] for item in payload["matched_adapters"]],
@@ -373,8 +397,60 @@ class AdapterCliTests(unittest.TestCase):
             {"adapter_targets", "adapter_roles"},
         )
         self.assertTrue(payload["provider_gap_proposals"])
+        self.assertEqual(payload["provider_research"]["kind"], "provider_research")
         self.assertEqual(payload["provider_resolution"]["kind"], "provider_resolution")
-        self.assertIn("evidence-backed provider-gap proposals", payload["next_action"])
+        self.assertIn("user-resolved provider gaps", payload["next_action"])
+
+    def test_provider_research_requires_a_separate_user_decision_phase(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_args = _provider_resolution_args(
+                "python-ml",
+                Path(temporary),
+            )
+            code, stdout, stderr = self._run([
+                "adapter-options",
+                str(FIXTURES / "python-ml"),
+                *artifact_args[:2],
+            ])
+
+            self.assertEqual(code, 0, stderr)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["status"], "requires_provider_decision")
+            self.assertEqual(payload["questions"], [])
+            self.assertTrue(payload["provider_decision_questions"])
+            self.assertNotIn("available_targets", payload)
+            self.assertNotIn("matched_adapters", payload)
+            self.assertIn("STOP", payload["next_action"])
+
+            output = Path(temporary) / "bundle"
+            code, stdout, stderr = self._run([
+                "propose-adapters",
+                str(FIXTURES / "python-ml"),
+                "--targets", "codex",
+                "--role", "repo_explorer",
+                "--output", str(output),
+                *artifact_args[:2],
+            ])
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("after the user reviews provider research", stderr)
+            self.assertFalse(output.exists())
+
+    def test_provider_resolution_without_research_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_args = _provider_resolution_args(
+                "python-ml",
+                Path(temporary),
+            )
+            code, stdout, stderr = self._run([
+                "adapter-options",
+                str(FIXTURES / "python-ml"),
+                *artifact_args[2:],
+            ])
+
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("requires --provider-research", stderr)
 
     def test_adapter_options_is_a_complete_decision_packet_for_prefect(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -493,7 +569,7 @@ class AdapterCliTests(unittest.TestCase):
 
             self.assertEqual(code, 2)
             self.assertEqual(stdout, "")
-            self.assertIn("provider resolution artifact required", stderr)
+            self.assertIn("provider research artifact required", stderr)
             self.assertFalse(output.exists())
 
 

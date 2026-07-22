@@ -20,14 +20,22 @@ architectures, workflows, risks, and organizational preferences.
 - Keep the deterministic core separate from optional LLM-assisted behavior.
 - When preparing another repository, treat `propose` as the canonical assessment output.
   If `provider-discovery.json` reports `requires_provider_research`, complete that read-only
-  public research before recommending adapter roles or targets. If network research is not
-  available, report the limitation and ask whether to continue with unresolved gaps.
-- Record evidence-backed research and a proposed outcome for every provider gap in a
-  validated resolution artifact before exposing adapter choices or generating a bundle.
+  public research before recommending adapter roles or targets. Record actual searches of
+  provider marketplaces, skill/plugin repositories, code indexes, or the public web;
+  product documentation alone is not provider discovery. If network research is not
+  available, report the limitation.
+- Provider research is advisory. Record evidence, candidates, coverage limits, and a
+  recommendation for every gap in `provider_research`, present it, then stop for the user's
+  decisions. Do not create `provider_resolution`, expose adapter choices, or generate a
+  bundle in that same step. After the user responds, record the separate resolution and
+  rerun the repository-aware adapter query.
   Lack of permission to download or install a provider is not evidence that public research
   is unavailable. Do not bypass the gate with raw outcomes or invented roles.
 - Treat `adapter-options <repo>` as the only adoption-time role/target query; global renderer
   catalogs are implementation details, not repository recommendations.
+- After provider decisions unlock `adapter-options`, present its role and target choices and
+  stop for the user's selection. Do not choose every target, infer a preferred harness, or
+  generate an adapter bundle from the initial request to prepare a repository.
 - Model capabilities before mapping them to agents.
 - Use subagents only when they materially help.
 - Prefer one implementation owner per file area.

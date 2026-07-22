@@ -14,7 +14,11 @@ import re
 import tomllib
 from pathlib import Path
 
-from ..providers import ProviderResolutionError, parse_provider_resolution
+from ..providers import (
+    ProviderResolutionError,
+    parse_provider_research,
+    parse_provider_resolution,
+)
 
 _CODEX_KNOWN_FIELDS = {
     "name",
@@ -260,6 +264,7 @@ def _contains_symlink(root: Path, relative: str) -> bool:
 def _validate_adapter_semantics(output: Path, manifest: dict) -> list[str]:
     """Cross-check proposal metadata against every rendered role proposal."""
     issues: list[str] = []
+    provider_research = manifest.get("provider_research")
     provider_resolution = manifest.get("provider_resolution")
     provider_proposals = manifest.get("provider_gap_proposals")
     if not isinstance(provider_proposals, list):
@@ -270,17 +275,32 @@ def _validate_adapter_semantics(output: Path, manifest: dict) -> list[str]:
             issues.append(
                 "adapter manifest: provider proposals require provider_resolution"
             )
+        if provider_research is not None:
+            issues.append(
+                "adapter manifest: provider_research requires a subsequent provider_resolution"
+            )
     elif isinstance(provider_resolution, dict):
-        raw_capabilities = provider_resolution.get("capabilities", [])
+        if not isinstance(provider_research, dict):
+            issues.append(
+                "adapter manifest: provider_resolution requires provider_research"
+            )
+            raw_capabilities = []
+        else:
+            raw_capabilities = provider_research.get("capabilities", [])
         capability_ids = [
             item.get("capability_id")
             for item in raw_capabilities
             if isinstance(item, dict) and isinstance(item.get("capability_id"), str)
         ]
         try:
+            normalized_research = parse_provider_research(
+                provider_research,
+                capability_ids,
+            )
             normalized, proposals = parse_provider_resolution(
                 provider_resolution,
                 capability_ids,
+                normalized_research,
                 require_catalog_for_selection=False,
             )
         except ProviderResolutionError as error:
@@ -294,6 +314,8 @@ def _validate_adapter_semantics(output: Path, manifest: dict) -> list[str]:
                 }
                 for proposal in proposals
             ]
+            if normalized_research != provider_research:
+                issues.append("adapter manifest: provider_research is not canonical")
             if normalized != provider_resolution:
                 issues.append("adapter manifest: provider_resolution is not canonical")
             if provider_proposals != expected_proposals:
@@ -302,6 +324,8 @@ def _validate_adapter_semantics(output: Path, manifest: dict) -> list[str]:
                 )
     else:
         issues.append("adapter manifest: provider_resolution must be an object or null")
+    if provider_research is not None and not isinstance(provider_research, dict):
+        issues.append("adapter manifest: provider_research must be an object or null")
     requested = manifest.get("requested_targets")
     if not isinstance(requested, list) or not requested:
         issues.append("adapter manifest: requested_targets must be a non-empty list")
@@ -433,7 +457,7 @@ def validate_adapter_bundle(output_dir: str | Path) -> list[str]:
         issues.append("adapter manifest: kind is not 'adapter_bundle'")
     if "execution_plan" in manifest:
         issues.append("adapter manifest: execution_plan is not allowed")
-    if manifest.get("schema_version") != 5:
+    if manifest.get("schema_version") != 6:
         issues.append("adapter manifest: unsupported schema_version")
     if manifest.get("selection_status") != "tool_proposal":
         issues.append("adapter manifest: invalid or missing selection_status")

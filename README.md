@@ -135,6 +135,11 @@ evidence or an explicit runtime limitation, up to three fully described candidat
 and a proposed outcome. These are tool proposals, not claims of user approval. Adapter bundle
 schema version 5 embeds the resolution and previews it before installation.
 
+Version 0.9 separates provider research from provider decisions. `provider_research` records
+actual provider searches, candidates, coverage limits, and recommendations but cannot unlock
+roles or targets. After that evidence is presented, a separate `provider_resolution` records
+the user's outcomes. Adapter bundle schema version 6 embeds both artifacts.
+
 ## Knowledge provider resolution
 
 Inspect capability gaps using the empty built-in catalog:
@@ -191,8 +196,8 @@ For every unmatched capability, `provider_discovery` supplies:
   providers.
 
 The Main agent may perform this read-only research when public network access is permitted;
-a dedicated research agent is optional. Research results and proposed outcomes are advisory
-and must remain visible to the user before adapter selection or installation.
+a dedicated research agent is optional. Research results and recommended outcomes are
+advisory: present them and stop for the user's separate resolution before adapter selection.
 Catalog entries marked `candidate` remain in this research brief until their coverage has
 been reviewed; only an `approved` provider suppresses repeat discovery for the capabilities
 it matches.
@@ -446,22 +451,23 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli adapter-options ./my-repo
 If capability-provider gaps exist, it emits repository identity and technologies,
 repository-native contracts, recommended capabilities, the gaps, and the provider research
 brief. Adapter roles, targets, and their questions are deliberately absent. Research must be
-recorded in a local JSON artifact outside the target repository. A no-match or unavailable
-example is:
+recorded in a local JSON artifact outside the target repository. Research records actual
+provider searches and recommendations, but never user decisions. An unavailable example is:
 
 ```json
 {
   "schema_version": 1,
-  "kind": "provider_resolution",
+  "kind": "provider_research",
   "capabilities": [
     {
       "capability_id": "ml_reproducibility",
       "research_status": "unavailable",
+      "searches": [],
       "candidates": [],
       "evidence": ["Web research tool unavailable: <exact runtime error>"],
       "limitation": "Public network access is unavailable in this runtime.",
-      "proposed_outcome": "leave_unresolved",
-      "provider_id": null,
+      "recommended_outcome": "leave_unresolved",
+      "recommended_provider_id": null,
       "rationale": "Preserve the gap until provider research can be completed."
     }
   ]
@@ -469,20 +475,42 @@ example is:
 ```
 
 Every status requires non-empty evidence. Completed research uses
-`research_status: "completed"`, null `limitation`, and zero to three candidates using every
-candidate field declared by `provider_discovery.result_contract`; unavailable research must
-preserve the exact runtime blocker. A selected provider must be a `suitable` candidate and
-must also exist in the supplied reviewed catalog. Use the artifact to unlock the query:
+`research_status: "completed"`, null `limitation`, at least one structured provider search,
+and zero to three candidates using every field declared by
+`provider_discovery.result_contract`. Search sources are marketplaces, provider repositories,
+code search, or web search; product documentation may assess coverage but does not satisfy
+provider discovery by itself. Unavailable research must preserve the exact runtime blocker.
+
+Pass only the research artifact first:
 
 ```sh
 PYTHONPATH=src python3 -m repo_adaptive_agents.cli adapter-options ./my-repo \
-  --provider-resolution /tmp/my-provider-resolution.json
+  --provider-research /tmp/my-provider-research.json
 ```
 
-The artifact does not download or install providers and cannot prove who authored its
-recommendations. Its evidence and proposed outcomes remain visible for human review. Once it
-covers every gap, the output exposes matched/optional adapters, supported targets, and the
-two user selection questions. The command always writes nothing.
+The output remains locked: it presents the research and asks for one provider outcome per
+capability. Stop for the user's response. Record those decisions separately:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "provider_resolution",
+  "decisions": [
+    {
+      "capability_id": "ml_reproducibility",
+      "outcome": "leave_unresolved",
+      "provider_id": null,
+      "rationale": "The user chose to keep this gap explicit for now."
+    }
+  ]
+}
+```
+
+Then rerun `adapter-options` with both artifacts. A selected provider must be a `suitable`
+research candidate and must also exist in the supplied reviewed catalog. Only the validated
+pair exposes matched/optional adapters, supported targets, and the two user selection
+questions. Neither artifact downloads or installs providers, and the command always writes
+nothing.
 
 `propose-adapters` profiles a repository and renders only the read-only roles and adapter targets
 supplied by the caller. The result is always a tool proposal: roles and targets remain
@@ -495,26 +523,30 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-adapters ./my-repo \
   --targets skill,codex,claude,copilot \
   --role repo_explorer \
   --role browser_qa \
+  --provider-research /tmp/my-provider-research.json \
   --provider-resolution /tmp/my-provider-resolution.json \
   --output /tmp/my-adapters
 ```
 
 `propose-adapters` applies the same gate and fails before creating its output directory when
-the resolution is missing, malformed, or incomplete. Adapter bundle `manifest.json` schema
-version 5 embeds the resolution and derived proposals; installation previews display their
-research status, candidate count, and rationale before roles and file additions.
+the research or subsequent resolution is missing, malformed, or incomplete. Adapter bundle
+`manifest.json` schema version 6 embeds both artifacts and the derived outcomes; installation
+previews display their research status, candidate count, and rationale before roles and file
+additions.
 
-The agent-led adoption flow uses one honest write gate:
+The agent-led adoption flow uses two explicit decision boundaries:
 
 1. run `propose` or `adapter-options`; present repository facts and provider gaps. Complete
-   permitted read-only research and write one resolution entry for every gap. Lack of
+   permitted read-only research and write one `provider_research` entry for every gap. Lack of
    permission to install a provider is not evidence that public research is unavailable;
-2. rerun `adapter-options` with the resolution, present its evidence and proposed outcomes,
-   then let the user choose roles and targets;
-3. render a proposal, preview installation, show the provider-resolution proposals, proposed
+2. rerun `adapter-options` with only the research artifact, present candidates, evidence,
+   limitations, and recommendations, then stop for the user's provider decisions;
+3. write `provider_resolution` from that response and rerun `adapter-options` with both
+   artifacts. Only then let the user choose roles and targets;
+4. render a proposal, preview installation, show the provider-resolution outcomes, proposed
    roles/targets, and exact additions, then stop for approval. Approval of that exact preview
    accepts both the selection and the file plan;
-4. only after that approval, run
+5. only after that approval, run
    `install-adapters --apply --confirm-install`.
 
 The CLI cannot prove whether a proposal came from a human when agent and user share the

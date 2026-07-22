@@ -251,19 +251,32 @@ class InstallCliTests(unittest.TestCase):
                 ["skill"],
                 ["repo_explorer"],
                 bundle,
-                provider_resolution={
+                provider_research={
                     "schema_version": 1,
-                    "kind": "provider_resolution",
+                    "kind": "provider_research",
                     "capabilities": [
                         {
                             "capability_id": "test_strategy",
                             "research_status": "unavailable",
+                            "searches": [],
                             "candidates": [],
                             "evidence": ["Test runtime has no public network tool."],
                             "limitation": "Network unavailable in this test.",
-                            "proposed_outcome": "leave_unresolved",
-                            "provider_id": None,
+                            "recommended_outcome": "leave_unresolved",
+                            "recommended_provider_id": None,
                             "rationale": "Preserve the unresolved gap.",
+                        }
+                    ],
+                },
+                provider_resolution={
+                    "schema_version": 1,
+                    "kind": "provider_resolution",
+                    "decisions": [
+                        {
+                            "capability_id": "test_strategy",
+                            "outcome": "leave_unresolved",
+                            "provider_id": None,
+                            "rationale": "User chose to preserve the unresolved gap.",
                         }
                     ],
                 },
