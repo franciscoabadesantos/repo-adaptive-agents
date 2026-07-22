@@ -22,6 +22,8 @@ architectures, workflows, risks, and organizational preferences.
   If `provider-discovery.json` reports `requires_provider_research`, complete that read-only
   public research before recommending adapter roles or targets. If network research is not
   available, report the limitation and ask whether to continue with unresolved gaps.
+- Record an explicit outcome for every provider gap before exposing adapter choices or
+  generating an adapter bundle; do not bypass the CLI gate by inventing a role.
 - Model capabilities before mapping them to agents.
 - Use subagents only when they materially help.
 - Prefer one implementation owner per file area.

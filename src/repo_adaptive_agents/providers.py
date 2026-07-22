@@ -16,6 +16,11 @@ PROVIDER_CATALOG_SCHEMA_VERSION = 1
 PROVIDER_KINDS = ("skill", "plugin", "manual")
 PROVIDER_REVIEW_STATUSES = ("candidate", "approved")
 PROVIDER_TARGETS = ("skill", "codex", "claude", "copilot")
+PROVIDER_GAP_OUTCOMES = (
+    "leave_unresolved",
+    "create_local_knowledge",
+    "decompose_capability",
+)
 BUILTIN_PROVIDERS: tuple["ProviderDefinition", ...] = ()
 _PROVIDER_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
 _MAX_CATALOG_BYTES = 1_000_000
@@ -23,6 +28,10 @@ _MAX_CATALOG_BYTES = 1_000_000
 
 class ProviderCatalogError(ValueError):
     """Raised when local provider metadata is malformed or ambiguous."""
+
+
+class ProviderDecisionError(ValueError):
+    """Raised when provider-gap decisions are incomplete or inconsistent."""
 
 
 @dataclass(frozen=True)
@@ -42,6 +51,13 @@ class ProviderDefinition:
 class ProviderCandidate:
     provider: ProviderDefinition
     matched_capabilities: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ProviderGapDecision:
+    capability_id: str
+    outcome: str
+    provider_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +165,76 @@ def build_provider_research_brief(
             },
         ],
     }
+
+
+def parse_provider_gap_decisions(
+    raw_decisions: Iterable[str],
+    capability_ids: Iterable[str],
+    providers: Iterable[ProviderDefinition] = (),
+) -> tuple[ProviderGapDecision, ...]:
+    """Validate explicit decisions for every provider capability gap.
+
+    Syntax is ``CAPABILITY=OUTCOME`` or
+    ``CAPABILITY=select_provider:PROVIDER_ID``. Provider selections must reference
+    catalog metadata that claims the selected capability.
+    """
+    ordered_capabilities = tuple(dict.fromkeys(capability_ids))
+    expected = set(ordered_capabilities)
+    provider_by_id = {provider.id: provider for provider in providers}
+    decisions: dict[str, ProviderGapDecision] = {}
+
+    for raw in raw_decisions:
+        capability_id, separator, raw_outcome = raw.partition("=")
+        capability_id = capability_id.strip()
+        raw_outcome = raw_outcome.strip()
+        if not separator or not capability_id or not raw_outcome:
+            raise ProviderDecisionError(
+                "provider decisions must use CAPABILITY=OUTCOME"
+            )
+        if capability_id not in expected:
+            raise ProviderDecisionError(
+                f"provider decision references non-gap capability: {capability_id}"
+            )
+        if capability_id in decisions:
+            raise ProviderDecisionError(
+                f"duplicate provider decision for capability: {capability_id}"
+            )
+
+        if raw_outcome.startswith("select_provider:"):
+            provider_id = raw_outcome.partition(":")[2].strip()
+            provider = provider_by_id.get(provider_id)
+            if provider is None:
+                raise ProviderDecisionError(
+                    f"selected provider is not present in the supplied catalog: {provider_id}"
+                )
+            if capability_id not in provider.capabilities:
+                raise ProviderDecisionError(
+                    f"provider {provider_id!r} does not claim capability {capability_id!r}"
+                )
+            decisions[capability_id] = ProviderGapDecision(
+                capability_id,
+                "select_provider",
+                provider_id,
+            )
+            continue
+
+        if raw_outcome not in PROVIDER_GAP_OUTCOMES:
+            allowed = ", ".join(PROVIDER_GAP_OUTCOMES)
+            raise ProviderDecisionError(
+                f"invalid provider decision for {capability_id}: use {allowed}, "
+                "or select_provider:PROVIDER_ID"
+            )
+        decisions[capability_id] = ProviderGapDecision(
+            capability_id,
+            raw_outcome,
+        )
+
+    missing = [item for item in ordered_capabilities if item not in decisions]
+    if missing:
+        raise ProviderDecisionError(
+            "missing provider decisions for capability gaps: " + ", ".join(missing)
+        )
+    return tuple(decisions[item] for item in ordered_capabilities)
 
 
 def _required_string(item: dict, field: str, provider_id: str) -> str:

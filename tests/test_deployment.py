@@ -251,6 +251,13 @@ class InstallCliTests(unittest.TestCase):
                 ["skill"],
                 ["repo_explorer"],
                 bundle,
+                provider_gap_decisions=[
+                    {
+                        "capability_id": "test_strategy",
+                        "outcome": "leave_unresolved",
+                        "provider_id": None,
+                    }
+                ],
             )
             destination = root / "repo"
             destination.mkdir()
@@ -263,6 +270,8 @@ class InstallCliTests(unittest.TestCase):
                 "Selection status: tool proposal",
                 preview,
             )
+            self.assertIn("Provider gap decisions recorded", preview)
+            self.assertIn("test_strategy: leave_unresolved", preview)
             self.assertIn("Approval of this preview accepts both the selection", preview)
             self.assertEqual(_files(destination), {})
 

@@ -89,8 +89,8 @@ writes `infrastructure-plan.json` instead of `team-plan.json`, and no longer gen
 TOML. The former experimental `propose-team` command is replaced by the explicit
 `propose-adapters` flow.
 
-Version 0.4 removes the unverifiable `--confirm-selection` attestation. Adapter bundles now
-use schema version 3 and are always labelled `tool_proposal`; regenerate older bundles before
+Version 0.4 removes the unverifiable `--confirm-selection` attestation. Adapter bundles are
+always labelled `tool_proposal`; regenerate older bundles before
 installation. The exact installation preview is the single decision packet approved by the
 user.
 
@@ -117,12 +117,12 @@ no network access: the brief tells a Main agent how to compare public candidates
 partial coverage and platform coupling, and return the decision to the user without
 downloading, executing, installing, or silently cataloguing a provider.
 
-Version 0.6.1 makes that handoff part of the canonical `propose` output. When provider gaps
-exist, `provider-discovery.json` reports `requires_provider_research` and the CLI explicitly
-stops adapter recommendation until the research is completed, network access is reported as
-unavailable, or the user chooses to continue with unresolved gaps. Adapter role/target
-questions remain present as `deferred_questions`, not active `questions`, until that gate is
-resolved.
+Version 0.7 makes that handoff enforceable in the canonical adapter flow. When provider gaps
+exist, `adapter-options` hides roles and targets and reports only repository facts, gaps, and
+the research brief. `propose-adapters` refuses to generate a bundle until every gap has an
+explicit decision: select a reviewed catalog provider, leave it unresolved, create local
+knowledge, or decompose it. The resulting adapter bundle records those decisions in schema
+version 4 so the installation preview remains auditable.
 
 ## Knowledge provider resolution
 
@@ -425,17 +425,28 @@ separate installation confirmation.
 
 ### Explicit adapter bundle: `propose-adapters`
 
-Before selecting anything, obtain the read-only decision packet:
+Before selecting anything, obtain the read-only assessment packet:
 
 ```sh
 PYTHONPATH=src python3 -m repo_adaptive_agents.cli adapter-options ./my-repo
 ```
 
-It emits a self-contained decision packet: repository identity and technologies,
-repository-native contracts, recommended capabilities, deterministically matched adapters,
-preference-based options, capabilities and plan roles without canonical adapters, every
-supported adapter target, and two explicit user questions. Consumers should present these
-facts and coverage gaps before asking for roles and targets. It writes nothing.
+If capability-provider gaps exist, it emits repository identity and technologies,
+repository-native contracts, recommended capabilities, the gaps, and the provider research
+brief. Adapter roles, targets, and their questions are deliberately absent. Record one
+decision per gap to unlock them, for example:
+
+```sh
+PYTHONPATH=src python3 -m repo_adaptive_agents.cli adapter-options ./my-repo \
+  --provider-decision ml_reproducibility=decompose_capability \
+  --provider-decision dependency_audit=leave_unresolved
+```
+
+Use `select_provider:PROVIDER_ID` only with `--provider-catalog` metadata that explicitly
+claims that capability. These flags record reviewed decisions; they do not download or
+install providers. Once every gap is decided, the output exposes the matched/optional
+adapters, supported targets, and the two user selection questions. The command always writes
+nothing.
 
 `propose-adapters` profiles a repository and renders only the read-only roles and adapter targets
 supplied by the caller. The result is always a tool proposal: roles and targets remain
@@ -448,18 +459,23 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-adapters ./my-repo \
   --targets skill,codex,claude,copilot \
   --role repo_explorer \
   --role browser_qa \
+  --provider-decision ml_reproducibility=leave_unresolved \
   --output /tmp/my-adapters
 ```
 
+`propose-adapters` applies the same gate and fails before creating its output directory when
+any provider gap lacks a decision. Adapter bundle `manifest.json` schema version 4 records the
+complete decision set; installation previews display it before roles and file additions.
+
 The agent-led adoption flow uses one honest write gate:
 
-1. run `profile`, `plan`, and `adapter-options`; present the repository facts, adapter
-   coverage, and gaps. The user may choose roles/targets now, or review a tool-generated
-   recommendation later;
-2. render a proposal, preview installation, show the proposed roles/targets and exact
-   additions, then stop for approval. Approval of that exact preview accepts both the
-   selection and the file plan;
-3. only after that approval, run
+1. run `propose` or `adapter-options`; present repository facts and provider gaps. Complete
+   permitted read-only research and record an explicit outcome for every gap;
+2. rerun `adapter-options` with those decisions, then let the user choose roles and targets;
+3. render a proposal, preview installation, show the provider decisions, proposed
+   roles/targets, and exact additions, then stop for approval. Approval of that exact preview
+   accepts both the selection and the file plan;
+4. only after that approval, run
    `install-adapters --apply --confirm-install`.
 
 The CLI cannot prove whether a selection came from a human when agent and user share the

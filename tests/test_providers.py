@@ -6,7 +6,12 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from repo_adaptive_agents.cli import main
-from repo_adaptive_agents.providers import ProviderCatalogError, load_provider_catalog
+from repo_adaptive_agents.providers import (
+    ProviderCatalogError,
+    ProviderDecisionError,
+    load_provider_catalog,
+    parse_provider_gap_decisions,
+)
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -71,6 +76,61 @@ class ProviderCatalogTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ProviderCatalogError, "schema_version must be 1"):
                 load_provider_catalog(path)
+
+
+class ProviderDecisionTests(unittest.TestCase):
+    def test_every_gap_requires_an_explicit_decision(self):
+        with self.assertRaisesRegex(
+            ProviderDecisionError,
+            "missing provider decisions for capability gaps: dependency_audit",
+        ):
+            parse_provider_gap_decisions(
+                ["ml_reproducibility=leave_unresolved"],
+                ["ml_reproducibility", "dependency_audit"],
+            )
+
+    def test_valid_decisions_follow_capability_order(self):
+        decisions = parse_provider_gap_decisions(
+            [
+                "dependency_audit=create_local_knowledge",
+                "ml_reproducibility=decompose_capability",
+            ],
+            ["ml_reproducibility", "dependency_audit"],
+        )
+
+        self.assertEqual(
+            [(item.capability_id, item.outcome) for item in decisions],
+            [
+                ("ml_reproducibility", "decompose_capability"),
+                ("dependency_audit", "create_local_knowledge"),
+            ],
+        )
+
+    def test_provider_selection_requires_matching_catalog_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            catalog = Path(temporary) / "providers.json"
+            catalog.write_text(
+                json.dumps(_catalog([_ml_provider()])),
+                encoding="utf-8",
+            )
+            providers = load_provider_catalog(catalog)
+
+            decisions = parse_provider_gap_decisions(
+                ["ml_reproducibility=select_provider:example_ml_review"],
+                ["ml_reproducibility"],
+                providers,
+            )
+            self.assertEqual(decisions[0].provider_id, "example_ml_review")
+
+            with self.assertRaisesRegex(
+                ProviderDecisionError,
+                "does not claim capability",
+            ):
+                parse_provider_gap_decisions(
+                    ["model_evaluation=select_provider:example_ml_review"],
+                    ["model_evaluation"],
+                    providers,
+                )
 
 
 class ProviderOptionsCliTests(unittest.TestCase):
