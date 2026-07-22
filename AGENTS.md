@@ -18,6 +18,10 @@ architectures, workflows, risks, and organizational preferences.
 
 - Inspect before editing.
 - Keep the deterministic core separate from optional LLM-assisted behavior.
+- When preparing another repository, treat `propose` as the canonical assessment output.
+  If `provider-discovery.json` reports `requires_provider_research`, complete that read-only
+  public research before recommending adapter roles or targets. If network research is not
+  available, report the limitation and ask whether to continue with unresolved gaps.
 - Model capabilities before mapping them to agents.
 - Use subagents only when they materially help.
 - Prefer one implementation owner per file area.

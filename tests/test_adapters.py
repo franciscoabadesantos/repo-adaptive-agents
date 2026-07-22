@@ -278,7 +278,7 @@ class AdapterCliTests(unittest.TestCase):
                 )
             )
 
-    def test_adapter_options_is_read_only_and_requests_user_selection(self):
+    def test_adapter_options_is_read_only_and_defers_user_selection(self):
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             code = main([
@@ -288,7 +288,7 @@ class AdapterCliTests(unittest.TestCase):
 
         self.assertEqual(code, 0, stderr.getvalue())
         payload = json.loads(stdout.getvalue())
-        self.assertEqual(payload["status"], "requires_install_decision")
+        self.assertEqual(payload["status"], "requires_provider_research")
         self.assertEqual(payload["repository_summary"]["primary_project_types"], ["frontend", "api"])
         self.assertIn("repository_contracts", payload)
         self.assertIn("recommended_capabilities", payload)
@@ -304,15 +304,19 @@ class AdapterCliTests(unittest.TestCase):
             "design_director",
             [item["role_id"] for item in payload["optional_adapters"]],
         )
+        self.assertEqual(payload["questions"], [])
         self.assertEqual(
-            {item["id"] for item in payload["questions"]},
+            {item["id"] for item in payload["deferred_questions"]},
             {"adapter_targets", "adapter_roles"},
         )
         target_question = next(
-            item for item in payload["questions"] if item["id"] == "adapter_targets"
+            item
+            for item in payload["deferred_questions"]
+            if item["id"] == "adapter_targets"
         )
         self.assertIn("optional portable artifact", target_question["question"])
         self.assertIn("Present the repository summary", payload["next_action"])
+        self.assertIn("Before asking the user", payload["next_action"])
 
     def test_adapter_options_is_a_complete_decision_packet_for_prefect(self):
         code, stdout, stderr = self._run([

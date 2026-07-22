@@ -28,6 +28,8 @@ def write_proposal(
     profile: RepoProfile,
     plan: InfrastructurePlan,
     output_dir: str | Path,
+    *,
+    provider_discovery: dict[str, object] | None = None,
 ) -> list[Path]:
     """Write only portable facts and recommendations.
 
@@ -47,6 +49,10 @@ def write_proposal(
         "profile.json": json.dumps(to_jsonable(profile), indent=2, sort_keys=True) + "\n",
         "infrastructure-plan.json": json.dumps(to_jsonable(plan), indent=2, sort_keys=True) + "\n",
     }
+    if provider_discovery is not None:
+        rendered["provider-discovery.json"] = (
+            json.dumps(to_jsonable(provider_discovery), indent=2, sort_keys=True) + "\n"
+        )
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}.tmp-", dir=output.parent))
     try:

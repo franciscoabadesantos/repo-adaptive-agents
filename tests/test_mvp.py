@@ -487,9 +487,22 @@ class MvpTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual(
                 {path.name for path in output.iterdir()},
-                {"profile.json", "infrastructure-plan.json"},
+                {
+                    "profile.json",
+                    "infrastructure-plan.json",
+                    "provider-discovery.json",
+                },
             )
+            discovery = json.loads((output / "provider-discovery.json").read_text())
+            self.assertEqual(discovery["schema_version"], 1)
+            self.assertEqual(discovery["kind"], "provider_discovery")
+            self.assertEqual(discovery["status"], "requires_provider_research")
+            self.assertEqual(discovery["catalog"]["source"], "builtin-empty")
+            self.assertFalse(discovery["catalog"]["network_access"])
+            self.assertTrue(discovery["unresolved_capabilities"])
+            self.assertIn("Before recommending adapter roles", discovery["next_action"])
             self.assertIn("No harness adapter was selected or generated.", stdout.getvalue())
+            self.assertIn("STOP: provider-discovery.json", stdout.getvalue())
             self.assertNotIn(".codex", stdout.getvalue())
 
     def test_propose_cli_requires_an_explicit_output(self):

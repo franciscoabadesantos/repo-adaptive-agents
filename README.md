@@ -75,7 +75,10 @@ child path as above; do not use `mktemp -u`. The generated directory contains:
 
 - `profile.json` — detected facts and evidence;
 - `infrastructure-plan.json` — repository contracts, capabilities, available roles,
-  integrations, questions, and assumptions.
+  integrations, questions, and assumptions;
+- `provider-discovery.json` — capabilities not covered by canonical adapters plus the
+  read-only research contract that must be resolved or explicitly deferred before adapter
+  roles and targets are recommended.
 
 This core command intentionally generates no Codex, Claude, Copilot, model, concurrency,
 sandbox, or execution-plan configuration. Harness adapters remain available through the
@@ -113,6 +116,13 @@ agent-assisted provider discovery. `adapter-options` and `provider-options` now 
 no network access: the brief tells a Main agent how to compare public candidates, disclose
 partial coverage and platform coupling, and return the decision to the user without
 downloading, executing, installing, or silently cataloguing a provider.
+
+Version 0.6.1 makes that handoff part of the canonical `propose` output. When provider gaps
+exist, `provider-discovery.json` reports `requires_provider_research` and the CLI explicitly
+stops adapter recommendation until the research is completed, network access is reported as
+unavailable, or the user chooses to continue with unresolved gaps. Adapter role/target
+questions remain present as `deferred_questions`, not active `questions`, until that gate is
+resolved.
 
 ## Knowledge provider resolution
 

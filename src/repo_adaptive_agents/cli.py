@@ -57,7 +57,10 @@ def _parser() -> argparse.ArgumentParser:
         sub.add_argument("--evidence-path-limit", type=int, default=25, help="Maximum paths shown per evidence item")
     propose = subparsers.add_parser(
         "propose",
-        help="Write a portable profile and infrastructure plan without choosing a harness",
+        help=(
+            "Write a portable profile, infrastructure plan, and provider-discovery gate "
+            "without choosing a harness"
+        ),
     )
     propose.add_argument("repo", help="Local repository path")
     propose.add_argument(
@@ -241,6 +244,46 @@ def _run_propose_adapters(args) -> int:
     return 0
 
 
+def _provider_discovery_packet(infrastructure) -> dict[str, object]:
+    """Build the portable provider-research gate for a repository plan."""
+    matched, _optional, _unmapped = list_adapter_options(infrastructure)
+    covered_capability_ids = {
+        capability
+        for adapter in matched
+        for capability in adapter.matched_capabilities
+    }
+    gaps = [
+        capability
+        for capability in infrastructure.capabilities
+        if capability.capability_id not in covered_capability_ids
+    ]
+    brief = build_provider_research_brief(gaps)
+    requires_research = bool(gaps)
+    return {
+        "schema_version": 1,
+        "kind": "provider_discovery",
+        "status": (
+            "requires_provider_research" if requires_research else "no_provider_gaps"
+        ),
+        "catalog": {
+            "source": "builtin-empty",
+            "provider_count": 0,
+            "network_access": False,
+        },
+        "covered_by_canonical_adapters": sorted(covered_capability_ids),
+        "unresolved_capabilities": to_jsonable(gaps),
+        "provider_discovery": to_jsonable(brief),
+        "next_action": (
+            "Before recommending adapter roles or targets, perform the read-only public "
+            "provider research described in provider_discovery. If network research is "
+            "unavailable, report that limitation and ask whether to continue with the gaps "
+            "unresolved. Do not download, execute, install, or silently catalog a provider."
+            if requires_research
+            else "No provider research is required before adapter selection."
+        ),
+    }
+
+
 def _run_adapter_options(args) -> int:
     profile = profile_repository(args.repo, evidence_path_limit=args.evidence_path_limit)
     infrastructure = recommend_infrastructure(profile, args.request)
@@ -264,8 +307,24 @@ def _run_adapter_options(args) -> int:
         for capability in infrastructure.capabilities
         if capability.capability_id in unmapped_capability_ids
     ]
+    adapter_questions = [
+        {
+            "id": "adapter_targets",
+            "question": "Which adapter targets should be installed? The skill target is an optional portable artifact, not a harness.",
+            "options": list(TARGETS),
+        },
+        {
+            "id": "adapter_roles",
+            "question": "Which matched and optional adapter roles should be installed?",
+            "options": [item.role_id for item in matched + optional],
+        },
+    ]
     payload = {
-        "status": "requires_install_decision",
+        "status": (
+            "requires_provider_research"
+            if unmapped_capabilities
+            else "requires_install_decision"
+        ),
         "repository_summary": {
             "name": profile.name,
             "primary_project_types": list(profile.primary_project_types),
@@ -306,25 +365,15 @@ def _run_adapter_options(args) -> int:
                 "but does not by itself supply missing domain expertise."
             ),
         },
-        "questions": [
-            {
-                "id": "adapter_targets",
-                "question": "Which adapter targets should be installed? The skill target is an optional portable artifact, not a harness.",
-                "options": list(TARGETS),
-            },
-            {
-                "id": "adapter_roles",
-                "question": "Which matched and optional adapter roles should be installed?",
-                "options": [item.role_id for item in matched + optional],
-            },
-        ],
+        "questions": [] if unmapped_capabilities else adapter_questions,
+        "deferred_questions": adapter_questions if unmapped_capabilities else [],
         "next_action": (
             "Present the repository summary, recommended capabilities, matched adapters, "
             "and explicit capability-provider gaps. Do not invent a domain role for an "
-            "unmapped capability. When public network research is permitted, follow the "
-            "provider_discovery brief before making a final provider recommendation, then "
-            "let the user choose among the documented options. The user may choose roles "
-            "and targets before a proposal, or review them in the exact installation preview."
+            "unmapped capability. Before asking the user to choose adapter roles or targets, "
+            "follow the provider_discovery brief when public network research is permitted. "
+            "If it is unavailable, report that limitation and ask whether to continue with "
+            "the gaps unresolved."
         ),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -545,9 +594,22 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "plan":
             print(json.dumps(to_jsonable(plan), indent=2, sort_keys=True))
             return 0
-        files = write_proposal(profile, plan, args.output)
+        provider_discovery = _provider_discovery_packet(plan)
+        files = write_proposal(
+            profile,
+            plan,
+            args.output,
+            provider_discovery=provider_discovery,
+        )
         print(f"Wrote {len(files)} proposal files to {args.output}")
         print("No harness adapter was selected or generated.")
+        if provider_discovery["status"] == "requires_provider_research":
+            print(
+                "STOP: provider-discovery.json contains unresolved capability gaps. "
+                "Complete its read-only research brief before recommending adapter roles "
+                "or targets; if public network research is unavailable, report that "
+                "limitation and ask whether to continue without it."
+            )
         return 0
     except (OSError, ProposalError, AdapterInstallError, AdapterSelectionError, MultiCliError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
