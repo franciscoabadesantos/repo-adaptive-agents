@@ -14,7 +14,7 @@ import re
 import tomllib
 from pathlib import Path
 
-from ..providers import PROVIDER_GAP_OUTCOMES
+from ..providers import ProviderResolutionError, parse_provider_resolution
 
 _CODEX_KNOWN_FIELDS = {
     "name",
@@ -258,45 +258,50 @@ def _contains_symlink(root: Path, relative: str) -> bool:
 
 
 def _validate_adapter_semantics(output: Path, manifest: dict) -> list[str]:
-    """Cross-check decision metadata against every rendered role proposal."""
+    """Cross-check proposal metadata against every rendered role proposal."""
     issues: list[str] = []
-    provider_decisions = manifest.get("provider_gap_decisions")
-    if not isinstance(provider_decisions, list):
-        issues.append("adapter manifest: provider_gap_decisions must be a list")
-        provider_decisions = []
-    seen_capabilities: set[str] = set()
-    for decision in provider_decisions:
-        if not isinstance(decision, dict) or set(decision) != {
-            "capability_id",
-            "outcome",
-            "provider_id",
-        }:
-            issues.append("adapter manifest: invalid provider gap decision")
-            continue
-        capability_id = decision.get("capability_id")
-        outcome = decision.get("outcome")
-        provider_id = decision.get("provider_id")
-        if not isinstance(capability_id, str) or not re.fullmatch(
-            r"[a-z][a-z0-9_]*", capability_id
-        ):
-            issues.append("adapter manifest: invalid provider decision capability")
-            continue
-        if capability_id in seen_capabilities:
+    provider_resolution = manifest.get("provider_resolution")
+    provider_proposals = manifest.get("provider_gap_proposals")
+    if not isinstance(provider_proposals, list):
+        issues.append("adapter manifest: provider_gap_proposals must be a list")
+        provider_proposals = []
+    if provider_resolution is None:
+        if provider_proposals:
             issues.append(
-                f"adapter manifest: duplicate provider decision for {capability_id!r}"
+                "adapter manifest: provider proposals require provider_resolution"
             )
-        seen_capabilities.add(capability_id)
-        if outcome == "select_provider":
-            if not isinstance(provider_id, str) or not re.fullmatch(
-                r"[a-z][a-z0-9_-]*", provider_id
-            ):
+    elif isinstance(provider_resolution, dict):
+        raw_capabilities = provider_resolution.get("capabilities", [])
+        capability_ids = [
+            item.get("capability_id")
+            for item in raw_capabilities
+            if isinstance(item, dict) and isinstance(item.get("capability_id"), str)
+        ]
+        try:
+            normalized, proposals = parse_provider_resolution(
+                provider_resolution,
+                capability_ids,
+                require_catalog_for_selection=False,
+            )
+        except ProviderResolutionError as error:
+            issues.append(f"adapter manifest: invalid provider_resolution ({error})")
+        else:
+            expected_proposals = [
+                {
+                    "capability_id": proposal.capability_id,
+                    "outcome": proposal.outcome,
+                    "provider_id": proposal.provider_id,
+                }
+                for proposal in proposals
+            ]
+            if normalized != provider_resolution:
+                issues.append("adapter manifest: provider_resolution is not canonical")
+            if provider_proposals != expected_proposals:
                 issues.append(
-                    f"adapter manifest: selected provider missing for {capability_id!r}"
+                    "adapter manifest: provider_gap_proposals do not match provider_resolution"
                 )
-        elif outcome not in PROVIDER_GAP_OUTCOMES or provider_id is not None:
-            issues.append(
-                f"adapter manifest: invalid provider outcome for {capability_id!r}"
-            )
+    else:
+        issues.append("adapter manifest: provider_resolution must be an object or null")
     requested = manifest.get("requested_targets")
     if not isinstance(requested, list) or not requested:
         issues.append("adapter manifest: requested_targets must be a non-empty list")
@@ -428,7 +433,7 @@ def validate_adapter_bundle(output_dir: str | Path) -> list[str]:
         issues.append("adapter manifest: kind is not 'adapter_bundle'")
     if "execution_plan" in manifest:
         issues.append("adapter manifest: execution_plan is not allowed")
-    if manifest.get("schema_version") != 4:
+    if manifest.get("schema_version") != 5:
         issues.append("adapter manifest: unsupported schema_version")
     if manifest.get("selection_status") != "tool_proposal":
         issues.append("adapter manifest: invalid or missing selection_status")

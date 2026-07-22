@@ -16,6 +16,9 @@ PROVIDER_CATALOG_SCHEMA_VERSION = 1
 PROVIDER_KINDS = ("skill", "plugin", "manual")
 PROVIDER_REVIEW_STATUSES = ("candidate", "approved")
 PROVIDER_TARGETS = ("skill", "codex", "claude", "copilot")
+PROVIDER_RESOLUTION_SCHEMA_VERSION = 1
+PROVIDER_RESEARCH_STATUSES = ("completed", "unavailable")
+PROVIDER_CANDIDATE_RECOMMENDATIONS = ("suitable", "partial_only", "reject")
 PROVIDER_GAP_OUTCOMES = (
     "leave_unresolved",
     "create_local_knowledge",
@@ -30,8 +33,8 @@ class ProviderCatalogError(ValueError):
     """Raised when local provider metadata is malformed or ambiguous."""
 
 
-class ProviderDecisionError(ValueError):
-    """Raised when provider-gap decisions are incomplete or inconsistent."""
+class ProviderResolutionError(ValueError):
+    """Raised when provider research or its proposed outcomes are incomplete."""
 
 
 @dataclass(frozen=True)
@@ -54,7 +57,7 @@ class ProviderCandidate:
 
 
 @dataclass(frozen=True)
-class ProviderGapDecision:
+class ProviderGapProposal:
     capability_id: str
     outcome: str
     provider_id: str | None = None
@@ -118,9 +121,20 @@ def build_provider_research_brief(
         "network_access": "not_performed_by_cli",
         "capabilities": research_items,
         "result_contract": {
-            "status": "provider_research_result",
+            "schema_version": PROVIDER_RESOLUTION_SCHEMA_VERSION,
+            "kind": "provider_resolution",
             "max_candidates_per_capability": 3,
             "no_match_allowed": True,
+            "required_capability_fields": [
+                "capability_id",
+                "research_status",
+                "candidates",
+                "evidence",
+                "limitation",
+                "proposed_outcome",
+                "provider_id",
+                "rationale",
+            ],
             "required_candidate_fields": [
                 "provider_id",
                 "title",
@@ -167,74 +181,315 @@ def build_provider_research_brief(
     }
 
 
-def parse_provider_gap_decisions(
-    raw_decisions: Iterable[str],
+def _resolution_string(value: object, field: str, capability_id: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ProviderResolutionError(
+            f"provider resolution {capability_id!r}: {field} must be a non-empty string"
+        )
+    return value.strip()
+
+
+def _resolution_strings(
+    value: object,
+    field: str,
+    capability_id: str,
+    *,
+    allow_empty: bool = True,
+) -> list[str]:
+    if not isinstance(value, list) or (not allow_empty and not value):
+        qualifier = "non-empty " if not allow_empty else ""
+        raise ProviderResolutionError(
+            f"provider resolution {capability_id!r}: {field} must be a {qualifier}array"
+        )
+    if not all(isinstance(item, str) and item.strip() for item in value):
+        raise ProviderResolutionError(
+            f"provider resolution {capability_id!r}: {field} entries must be non-empty strings"
+        )
+    normalized = [item.strip() for item in value]
+    if len(set(normalized)) != len(normalized):
+        raise ProviderResolutionError(
+            f"provider resolution {capability_id!r}: {field} entries must be unique"
+        )
+    return normalized
+
+
+def _parse_research_candidate(item: object, capability_id: str) -> dict[str, object]:
+    if not isinstance(item, dict):
+        raise ProviderResolutionError(
+            f"provider resolution {capability_id!r}: each candidate must be an object"
+        )
+    expected = {
+        "provider_id",
+        "title",
+        "primary_source",
+        "revision",
+        "kind",
+        "compatible_targets",
+        "license",
+        "trust_signals",
+        "exact_coverage",
+        "coverage_gaps",
+        "permissions",
+        "external_requirements",
+        "platform_coupling",
+        "recommendation",
+    }
+    if set(item) != expected:
+        raise ProviderResolutionError(
+            f"provider resolution {capability_id!r}: candidate fields must be exactly "
+            + ", ".join(sorted(expected))
+        )
+    provider_id = _resolution_string(item["provider_id"], "provider_id", capability_id)
+    if not _PROVIDER_ID.fullmatch(provider_id):
+        raise ProviderResolutionError(
+            f"provider resolution {capability_id!r}: invalid provider_id {provider_id!r}"
+        )
+    kind = _resolution_string(item["kind"], "kind", capability_id)
+    if kind not in PROVIDER_KINDS:
+        raise ProviderResolutionError(
+            f"provider resolution {capability_id!r}: unsupported candidate kind {kind!r}"
+        )
+    targets = _resolution_strings(
+        item["compatible_targets"],
+        "compatible_targets",
+        capability_id,
+        allow_empty=False,
+    )
+    unknown_targets = sorted(set(targets).difference(PROVIDER_TARGETS))
+    if unknown_targets:
+        raise ProviderResolutionError(
+            f"provider resolution {capability_id!r}: unknown candidate targets: "
+            + ", ".join(unknown_targets)
+        )
+    recommendation = _resolution_string(
+        item["recommendation"], "recommendation", capability_id
+    )
+    if recommendation not in PROVIDER_CANDIDATE_RECOMMENDATIONS:
+        raise ProviderResolutionError(
+            f"provider resolution {capability_id!r}: invalid candidate recommendation"
+        )
+    return {
+        "provider_id": provider_id,
+        "title": _resolution_string(item["title"], "title", capability_id),
+        "primary_source": _resolution_string(
+            item["primary_source"], "primary_source", capability_id
+        ),
+        "revision": _resolution_string(item["revision"], "revision", capability_id),
+        "kind": kind,
+        "compatible_targets": targets,
+        "license": _resolution_string(item["license"], "license", capability_id),
+        "trust_signals": _resolution_strings(
+            item["trust_signals"], "trust_signals", capability_id, allow_empty=False
+        ),
+        "exact_coverage": _resolution_strings(
+            item["exact_coverage"], "exact_coverage", capability_id
+        ),
+        "coverage_gaps": _resolution_strings(
+            item["coverage_gaps"], "coverage_gaps", capability_id
+        ),
+        "permissions": _resolution_strings(
+            item["permissions"], "permissions", capability_id
+        ),
+        "external_requirements": _resolution_strings(
+            item["external_requirements"], "external_requirements", capability_id
+        ),
+        "platform_coupling": _resolution_string(
+            item["platform_coupling"], "platform_coupling", capability_id
+        ),
+        "recommendation": recommendation,
+    }
+
+
+def parse_provider_resolution(
+    payload: object,
     capability_ids: Iterable[str],
     providers: Iterable[ProviderDefinition] = (),
-) -> tuple[ProviderGapDecision, ...]:
-    """Validate explicit decisions for every provider capability gap.
-
-    Syntax is ``CAPABILITY=OUTCOME`` or
-    ``CAPABILITY=select_provider:PROVIDER_ID``. Provider selections must reference
-    catalog metadata that claims the selected capability.
-    """
+    *,
+    require_catalog_for_selection: bool = True,
+) -> tuple[dict[str, object], tuple[ProviderGapProposal, ...]]:
+    """Validate evidence-backed provider research and proposed outcomes for every gap."""
     ordered_capabilities = tuple(dict.fromkeys(capability_ids))
     expected = set(ordered_capabilities)
     provider_by_id = {provider.id: provider for provider in providers}
-    decisions: dict[str, ProviderGapDecision] = {}
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version",
+        "kind",
+        "capabilities",
+    }:
+        raise ProviderResolutionError(
+            "provider resolution root fields must be exactly capabilities, kind, schema_version"
+        )
+    if (
+        type(payload["schema_version"]) is not int
+        or payload["schema_version"] != PROVIDER_RESOLUTION_SCHEMA_VERSION
+    ):
+        raise ProviderResolutionError(
+            f"provider resolution schema_version must be {PROVIDER_RESOLUTION_SCHEMA_VERSION}"
+        )
+    if payload["kind"] != "provider_resolution":
+        raise ProviderResolutionError("provider resolution kind must be 'provider_resolution'")
+    if not isinstance(payload["capabilities"], list):
+        raise ProviderResolutionError("provider resolution capabilities must be an array")
 
-    for raw in raw_decisions:
-        capability_id, separator, raw_outcome = raw.partition("=")
-        capability_id = capability_id.strip()
-        raw_outcome = raw_outcome.strip()
-        if not separator or not capability_id or not raw_outcome:
-            raise ProviderDecisionError(
-                "provider decisions must use CAPABILITY=OUTCOME"
+    normalized_by_id: dict[str, dict[str, object]] = {}
+    proposals: dict[str, ProviderGapProposal] = {}
+    expected_fields = {
+        "capability_id",
+        "research_status",
+        "candidates",
+        "evidence",
+        "limitation",
+        "proposed_outcome",
+        "provider_id",
+        "rationale",
+    }
+    for raw in payload["capabilities"]:
+        if not isinstance(raw, dict) or set(raw) != expected_fields:
+            raise ProviderResolutionError(
+                "provider resolution capability fields must be exactly "
+                + ", ".join(sorted(expected_fields))
             )
+        capability_id = _resolution_string(
+            raw["capability_id"], "capability_id", "unknown"
+        )
         if capability_id not in expected:
-            raise ProviderDecisionError(
-                f"provider decision references non-gap capability: {capability_id}"
+            raise ProviderResolutionError(
+                f"provider resolution references non-gap capability: {capability_id}"
             )
-        if capability_id in decisions:
-            raise ProviderDecisionError(
-                f"duplicate provider decision for capability: {capability_id}"
+        if capability_id in normalized_by_id:
+            raise ProviderResolutionError(
+                f"duplicate provider resolution for capability: {capability_id}"
             )
-
-        if raw_outcome.startswith("select_provider:"):
-            provider_id = raw_outcome.partition(":")[2].strip()
+        research_status = _resolution_string(
+            raw["research_status"], "research_status", capability_id
+        )
+        if research_status not in PROVIDER_RESEARCH_STATUSES:
+            raise ProviderResolutionError(
+                f"provider resolution {capability_id!r}: invalid research_status"
+            )
+        candidates_raw = raw["candidates"]
+        if not isinstance(candidates_raw, list) or len(candidates_raw) > 3:
+            raise ProviderResolutionError(
+                f"provider resolution {capability_id!r}: candidates must be an array of at most 3"
+            )
+        candidates = [
+            _parse_research_candidate(candidate, capability_id)
+            for candidate in candidates_raw
+        ]
+        candidate_ids = [candidate["provider_id"] for candidate in candidates]
+        if len(set(candidate_ids)) != len(candidate_ids):
+            raise ProviderResolutionError(
+                f"provider resolution {capability_id!r}: candidate ids must be unique"
+            )
+        evidence = _resolution_strings(
+            raw["evidence"],
+            "evidence",
+            capability_id,
+            allow_empty=False,
+        )
+        limitation = raw["limitation"]
+        if research_status == "unavailable":
+            if candidates:
+                raise ProviderResolutionError(
+                    f"provider resolution {capability_id!r}: unavailable research cannot contain candidates"
+                )
+            limitation = _resolution_string(limitation, "limitation", capability_id)
+        elif limitation is not None:
+            raise ProviderResolutionError(
+                f"provider resolution {capability_id!r}: completed research must use null limitation"
+            )
+        outcome = _resolution_string(
+            raw["proposed_outcome"], "proposed_outcome", capability_id
+        )
+        if outcome not in (*PROVIDER_GAP_OUTCOMES, "select_provider"):
+            raise ProviderResolutionError(
+                f"provider resolution {capability_id!r}: invalid proposed_outcome"
+            )
+        provider_id = raw["provider_id"]
+        if outcome == "select_provider":
+            provider_id = _resolution_string(provider_id, "provider_id", capability_id)
+            candidate = next(
+                (item for item in candidates if item["provider_id"] == provider_id),
+                None,
+            )
+            if candidate is None or candidate["recommendation"] != "suitable":
+                raise ProviderResolutionError(
+                    f"provider resolution {capability_id!r}: selected provider must be a suitable candidate"
+                )
             provider = provider_by_id.get(provider_id)
-            if provider is None:
-                raise ProviderDecisionError(
+            if provider is None and require_catalog_for_selection:
+                raise ProviderResolutionError(
                     f"selected provider is not present in the supplied catalog: {provider_id}"
                 )
-            if capability_id not in provider.capabilities:
-                raise ProviderDecisionError(
+            if provider is not None and capability_id not in provider.capabilities:
+                raise ProviderResolutionError(
                     f"provider {provider_id!r} does not claim capability {capability_id!r}"
                 )
-            decisions[capability_id] = ProviderGapDecision(
-                capability_id,
-                "select_provider",
-                provider_id,
+            if provider is not None and (
+                candidate["title"] != provider.title
+                or candidate["primary_source"] != provider.source
+                or candidate["revision"] != provider.revision
+                or candidate["kind"] != provider.kind
+                or set(candidate["compatible_targets"])
+                != set(provider.compatible_targets)
+                or candidate["license"] != provider.license
+            ):
+                raise ProviderResolutionError(
+                    f"selected provider metadata does not match the supplied catalog: {provider_id}"
+                )
+        elif provider_id is not None:
+            raise ProviderResolutionError(
+                f"provider resolution {capability_id!r}: provider_id requires select_provider"
             )
-            continue
-
-        if raw_outcome not in PROVIDER_GAP_OUTCOMES:
-            allowed = ", ".join(PROVIDER_GAP_OUTCOMES)
-            raise ProviderDecisionError(
-                f"invalid provider decision for {capability_id}: use {allowed}, "
-                "or select_provider:PROVIDER_ID"
-            )
-        decisions[capability_id] = ProviderGapDecision(
+        normalized_by_id[capability_id] = {
+            "capability_id": capability_id,
+            "research_status": research_status,
+            "candidates": candidates,
+            "evidence": evidence,
+            "limitation": limitation,
+            "proposed_outcome": outcome,
+            "provider_id": provider_id,
+            "rationale": _resolution_string(raw["rationale"], "rationale", capability_id),
+        }
+        proposals[capability_id] = ProviderGapProposal(
             capability_id,
-            raw_outcome,
+            outcome,
+            provider_id,
         )
 
-    missing = [item for item in ordered_capabilities if item not in decisions]
+    missing = [item for item in ordered_capabilities if item not in normalized_by_id]
     if missing:
-        raise ProviderDecisionError(
-            "missing provider decisions for capability gaps: " + ", ".join(missing)
+        raise ProviderResolutionError(
+            "missing provider research for capability gaps: " + ", ".join(missing)
         )
-    return tuple(decisions[item] for item in ordered_capabilities)
+    normalized = {
+        "schema_version": PROVIDER_RESOLUTION_SCHEMA_VERSION,
+        "kind": "provider_resolution",
+        "capabilities": [normalized_by_id[item] for item in ordered_capabilities],
+    }
+    return normalized, tuple(proposals[item] for item in ordered_capabilities)
+
+
+def load_provider_resolution(
+    path: str | Path,
+    capability_ids: Iterable[str],
+    providers: Iterable[ProviderDefinition] = (),
+) -> tuple[dict[str, object], tuple[ProviderGapProposal, ...]]:
+    """Load a local research artifact without accessing its cited sources."""
+    resolution_path = Path(path).expanduser()
+    if not resolution_path.is_file():
+        raise ProviderResolutionError(
+            f"provider resolution is not a file: {resolution_path}"
+        )
+    if resolution_path.stat().st_size > _MAX_CATALOG_BYTES:
+        raise ProviderResolutionError(
+            f"provider resolution exceeds {_MAX_CATALOG_BYTES} bytes: {resolution_path}"
+        )
+    try:
+        payload = json.loads(resolution_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ProviderResolutionError(f"invalid provider resolution: {error}") from error
+    return parse_provider_resolution(payload, capability_ids, providers)
 
 
 def _required_string(item: dict, field: str, provider_id: str) -> str:

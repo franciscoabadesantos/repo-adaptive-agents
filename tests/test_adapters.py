@@ -32,7 +32,7 @@ def _tree_bytes(root: Path) -> dict:
     }
 
 
-def _provider_decision_args(fixture: str) -> list[str]:
+def _provider_resolution_args(fixture: str, root: Path) -> list[str]:
     infrastructure = _infrastructure(fixture)
     matched, _optional, _unmapped = list_adapter_options(infrastructure)
     covered = {
@@ -45,11 +45,28 @@ def _provider_decision_args(fixture: str) -> list[str]:
         for capability in infrastructure.capabilities
         if capability.capability_id not in covered
     ]
-    return [
-        item
-        for capability_id in gaps
-        for item in ("--provider-decision", f"{capability_id}=leave_unresolved")
-    ]
+    resolution = root / f"{fixture}-provider-resolution.json"
+    resolution.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "kind": "provider_resolution",
+            "capabilities": [
+                {
+                    "capability_id": capability_id,
+                    "research_status": "unavailable",
+                    "candidates": [],
+                    "evidence": ["Test runtime does not permit public network research."],
+                    "limitation": "Public network research is unavailable in this test.",
+                    "proposed_outcome": "leave_unresolved",
+                    "provider_id": None,
+                    "rationale": "Preserve the gap explicitly for this adapter test.",
+                }
+                for capability_id in gaps
+            ],
+        }),
+        encoding="utf-8",
+    )
+    return ["--provider-resolution", str(resolution)]
 
 
 class AdapterSelectionTests(unittest.TestCase):
@@ -106,8 +123,9 @@ class AdapterBundleTests(unittest.TestCase):
             )
             self.assertEqual(validate_adapter_bundle(output), [])
             self.assertEqual(manifest["kind"], "adapter_bundle")
-            self.assertEqual(manifest["schema_version"], 4)
-            self.assertEqual(manifest["provider_gap_decisions"], [])
+            self.assertEqual(manifest["schema_version"], 5)
+            self.assertIsNone(manifest["provider_resolution"])
+            self.assertEqual(manifest["provider_gap_proposals"], [])
             self.assertEqual(manifest["selection_status"], "tool_proposal")
             self.assertNotIn("execution_plan", manifest)
             self.assertNotIn("parallel_groups", json.dumps(manifest))
@@ -285,7 +303,7 @@ class AdapterCliTests(unittest.TestCase):
                 "--role", "repo_explorer",
                 "--role", "browser_qa",
                 "--output", str(output),
-                *_provider_decision_args("team-fullstack"),
+                *_provider_resolution_args("team-fullstack", Path(temporary)),
             ])
             self.assertEqual(code, 0, stderr)
             self.assertIn("Proposed adapters: repo_explorer, browser_qa", stdout)
@@ -330,12 +348,13 @@ class AdapterCliTests(unittest.TestCase):
         self.assertIn("Present only the repository facts", payload["next_action"])
         self.assertIn("Do not recommend", payload["next_action"])
 
-    def test_provider_decisions_unlock_adapter_options(self):
-        code, stdout, stderr = self._run([
-            "adapter-options",
-            str(FIXTURES / "team-fullstack"),
-            *_provider_decision_args("team-fullstack"),
-        ])
+    def test_provider_resolution_unlocks_adapter_options(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            code, stdout, stderr = self._run([
+                "adapter-options",
+                str(FIXTURES / "team-fullstack"),
+                *_provider_resolution_args("team-fullstack", Path(temporary)),
+            ])
 
         self.assertEqual(code, 0, stderr)
         payload = json.loads(stdout)
@@ -353,15 +372,17 @@ class AdapterCliTests(unittest.TestCase):
             {item["id"] for item in payload["questions"]},
             {"adapter_targets", "adapter_roles"},
         )
-        self.assertTrue(payload["provider_gap_decisions"])
-        self.assertIn("recorded provider-gap decisions", payload["next_action"])
+        self.assertTrue(payload["provider_gap_proposals"])
+        self.assertEqual(payload["provider_resolution"]["kind"], "provider_resolution")
+        self.assertIn("evidence-backed provider-gap proposals", payload["next_action"])
 
     def test_adapter_options_is_a_complete_decision_packet_for_prefect(self):
-        code, stdout, stderr = self._run([
-            "adapter-options",
-            str(FIXTURES / "prefect-data-ops"),
-            *_provider_decision_args("prefect-data-ops"),
-        ])
+        with tempfile.TemporaryDirectory() as temporary:
+            code, stdout, stderr = self._run([
+                "adapter-options",
+                str(FIXTURES / "prefect-data-ops"),
+                *_provider_resolution_args("prefect-data-ops", Path(temporary)),
+            ])
 
         self.assertEqual(code, 0, stderr)
         payload = json.loads(stdout)
@@ -386,11 +407,12 @@ class AdapterCliTests(unittest.TestCase):
         self.assertTrue(any(item["name"] == "pipeline_reviewer" for item in payload["unmapped_roles"]))
 
     def test_ml_expertise_is_an_explicit_provider_gap_not_a_synthetic_role(self):
-        code, stdout, stderr = self._run([
-            "adapter-options",
-            str(FIXTURES / "python-ml"),
-            *_provider_decision_args("python-ml"),
-        ])
+        with tempfile.TemporaryDirectory() as temporary:
+            code, stdout, stderr = self._run([
+                "adapter-options",
+                str(FIXTURES / "python-ml"),
+                *_provider_resolution_args("python-ml", Path(temporary)),
+            ])
 
         self.assertEqual(code, 0, stderr)
         payload = json.loads(stdout)
@@ -433,7 +455,7 @@ class AdapterCliTests(unittest.TestCase):
                 "--targets", "skill,codex",
                 "--role", "repo_explorer",
                 "--output", str(output),
-                *_provider_decision_args("team-fullstack"),
+                *_provider_resolution_args("team-fullstack", Path(temporary)),
             ])
             self.assertEqual(code, 0, stderr)
             self.assertIn("tool proposal", stdout)
@@ -451,14 +473,14 @@ class AdapterCliTests(unittest.TestCase):
                     "--targets", "skill",
                     "--role", role,
                     "--output", str(output),
-                    *_provider_decision_args("team-fullstack"),
+                    *_provider_resolution_args("team-fullstack", Path(temporary)),
                 ])
                 self.assertEqual(code, 2)
                 self.assertEqual(stdout, "")
                 self.assertTrue(stderr.startswith("error: "))
                 self.assertFalse(output.exists())
 
-    def test_propose_adapters_requires_decisions_for_every_provider_gap(self):
+    def test_propose_adapters_requires_resolution_for_every_provider_gap(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "bundle"
             code, stdout, stderr = self._run([
@@ -471,7 +493,7 @@ class AdapterCliTests(unittest.TestCase):
 
             self.assertEqual(code, 2)
             self.assertEqual(stdout, "")
-            self.assertIn("missing provider decisions", stderr)
+            self.assertIn("provider resolution artifact required", stderr)
             self.assertFalse(output.exists())
 
 

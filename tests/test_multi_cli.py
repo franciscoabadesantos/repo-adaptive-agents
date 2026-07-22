@@ -894,6 +894,17 @@ class MultiCliCliTests(unittest.TestCase):
                 self._run([command])
             self.assertEqual(exit_ctx.exception.code, 2)
 
+    def test_raw_provider_decision_flag_is_not_accepted(self):
+        fixture = Path(__file__).parent / "fixtures/python-ml"
+        with self.assertRaises(SystemExit) as exit_ctx:
+            self._run([
+                "adapter-options",
+                str(fixture),
+                "--provider-decision",
+                "ml_reproducibility=leave_unresolved",
+            ])
+        self.assertEqual(exit_ctx.exception.code, 2)
+
     def test_render_role_cli_writes_and_validates(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "out"

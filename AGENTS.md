@@ -22,8 +22,10 @@ architectures, workflows, risks, and organizational preferences.
   If `provider-discovery.json` reports `requires_provider_research`, complete that read-only
   public research before recommending adapter roles or targets. If network research is not
   available, report the limitation and ask whether to continue with unresolved gaps.
-- Record an explicit outcome for every provider gap before exposing adapter choices or
-  generating an adapter bundle; do not bypass the CLI gate by inventing a role.
+- Record evidence-backed research and a proposed outcome for every provider gap in a
+  validated resolution artifact before exposing adapter choices or generating a bundle.
+  Lack of permission to download or install a provider is not evidence that public research
+  is unavailable. Do not bypass the gate with raw outcomes or invented roles.
 - Treat `adapter-options <repo>` as the only adoption-time role/target query; global renderer
   catalogs are implementation details, not repository recommendations.
 - Model capabilities before mapping them to agents.

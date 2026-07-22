@@ -8,9 +8,9 @@ from pathlib import Path
 from repo_adaptive_agents.cli import main
 from repo_adaptive_agents.providers import (
     ProviderCatalogError,
-    ProviderDecisionError,
+    ProviderResolutionError,
     load_provider_catalog,
-    parse_provider_gap_decisions,
+    parse_provider_resolution,
 )
 
 
@@ -35,6 +35,50 @@ def _ml_provider(**overrides) -> dict:
     }
     provider.update(overrides)
     return provider
+
+
+def _research_candidate(**overrides) -> dict:
+    candidate = {
+        "provider_id": "example_ml_review",
+        "title": "Example ML review knowledge",
+        "primary_source": "https://example.invalid/providers/ml-review",
+        "revision": "0123456789abcdef0123456789abcdef01234567",
+        "kind": "skill",
+        "compatible_targets": ["codex"],
+        "license": "MIT",
+        "trust_signals": ["Versioned primary source"],
+        "exact_coverage": ["ML experiment review"],
+        "coverage_gaps": [],
+        "permissions": ["Read repository files"],
+        "external_requirements": [],
+        "platform_coupling": "Codex adapter required",
+        "recommendation": "suitable",
+    }
+    candidate.update(overrides)
+    return candidate
+
+
+def _resolution_item(capability_id: str, **overrides) -> dict:
+    item = {
+        "capability_id": capability_id,
+        "research_status": "unavailable",
+        "candidates": [],
+        "evidence": ["Runtime reported that public network access is unavailable."],
+        "limitation": "Public network access was unavailable.",
+        "proposed_outcome": "leave_unresolved",
+        "provider_id": None,
+        "rationale": "Keep the capability gap explicit.",
+    }
+    item.update(overrides)
+    return item
+
+
+def _resolution(*items: dict) -> dict:
+    return {
+        "schema_version": 1,
+        "kind": "provider_resolution",
+        "capabilities": list(items),
+    }
 
 
 class ProviderCatalogTests(unittest.TestCase):
@@ -78,28 +122,38 @@ class ProviderCatalogTests(unittest.TestCase):
                 load_provider_catalog(path)
 
 
-class ProviderDecisionTests(unittest.TestCase):
-    def test_every_gap_requires_an_explicit_decision(self):
+class ProviderResolutionTests(unittest.TestCase):
+    def test_every_gap_requires_research_and_a_proposed_outcome(self):
         with self.assertRaisesRegex(
-            ProviderDecisionError,
-            "missing provider decisions for capability gaps: dependency_audit",
+            ProviderResolutionError,
+            "missing provider research for capability gaps: dependency_audit",
         ):
-            parse_provider_gap_decisions(
-                ["ml_reproducibility=leave_unresolved"],
+            parse_provider_resolution(
+                _resolution(_resolution_item("ml_reproducibility")),
                 ["ml_reproducibility", "dependency_audit"],
             )
 
-    def test_valid_decisions_follow_capability_order(self):
-        decisions = parse_provider_gap_decisions(
-            [
-                "dependency_audit=create_local_knowledge",
-                "ml_reproducibility=decompose_capability",
-            ],
+    def test_valid_resolution_is_canonicalized_to_capability_order(self):
+        normalized, proposals = parse_provider_resolution(
+            _resolution(
+                _resolution_item(
+                    "dependency_audit",
+                    proposed_outcome="create_local_knowledge",
+                ),
+                _resolution_item(
+                    "ml_reproducibility",
+                    proposed_outcome="decompose_capability",
+                ),
+            ),
             ["ml_reproducibility", "dependency_audit"],
         )
 
         self.assertEqual(
-            [(item.capability_id, item.outcome) for item in decisions],
+            [item["capability_id"] for item in normalized["capabilities"]],
+            ["ml_reproducibility", "dependency_audit"],
+        )
+        self.assertEqual(
+            [(item.capability_id, item.outcome) for item in proposals],
             [
                 ("ml_reproducibility", "decompose_capability"),
                 ("dependency_audit", "create_local_knowledge"),
@@ -115,21 +169,100 @@ class ProviderDecisionTests(unittest.TestCase):
             )
             providers = load_provider_catalog(catalog)
 
-            decisions = parse_provider_gap_decisions(
-                ["ml_reproducibility=select_provider:example_ml_review"],
+            _normalized, proposals = parse_provider_resolution(
+                _resolution(_resolution_item(
+                    "ml_reproducibility",
+                    research_status="completed",
+                    candidates=[_research_candidate()],
+                    evidence=["https://example.invalid/providers/ml-review"],
+                    limitation=None,
+                    proposed_outcome="select_provider",
+                    provider_id="example_ml_review",
+                    rationale="Candidate covers the requested capability.",
+                )),
                 ["ml_reproducibility"],
                 providers,
             )
-            self.assertEqual(decisions[0].provider_id, "example_ml_review")
+            self.assertEqual(proposals[0].provider_id, "example_ml_review")
 
             with self.assertRaisesRegex(
-                ProviderDecisionError,
+                ProviderResolutionError,
                 "does not claim capability",
             ):
-                parse_provider_gap_decisions(
-                    ["model_evaluation=select_provider:example_ml_review"],
+                parse_provider_resolution(
+                    _resolution(_resolution_item(
+                        "model_evaluation",
+                        research_status="completed",
+                        candidates=[_research_candidate()],
+                        evidence=["https://example.invalid/providers/ml-review"],
+                        limitation=None,
+                        proposed_outcome="select_provider",
+                        provider_id="example_ml_review",
+                    )),
                     ["model_evaluation"],
                     providers,
+                )
+
+    def test_completed_research_requires_evidence(self):
+        with self.assertRaisesRegex(ProviderResolutionError, "evidence must be a non-empty array"):
+            parse_provider_resolution(
+                _resolution(_resolution_item(
+                    "ml_reproducibility",
+                    research_status="completed",
+                    evidence=[],
+                    limitation=None,
+                )),
+                ["ml_reproducibility"],
+            )
+
+    def test_unavailable_research_requires_blocker_evidence(self):
+        with self.assertRaisesRegex(ProviderResolutionError, "evidence must be a non-empty array"):
+            parse_provider_resolution(
+                _resolution(_resolution_item(
+                    "ml_reproducibility",
+                    evidence=[],
+                )),
+                ["ml_reproducibility"],
+            )
+
+    def test_suitable_candidate_can_still_be_left_unresolved(self):
+        _normalized, proposals = parse_provider_resolution(
+            _resolution(_resolution_item(
+                "ml_reproducibility",
+                research_status="completed",
+                candidates=[_research_candidate()],
+                evidence=["https://example.invalid/providers/ml-review"],
+                limitation=None,
+                rationale="The candidate is suitable, but adoption remains optional.",
+            )),
+            ["ml_reproducibility"],
+        )
+
+        self.assertEqual(proposals[0].outcome, "leave_unresolved")
+
+    def test_selected_provider_metadata_must_match_catalog(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            catalog = Path(temporary) / "providers.json"
+            catalog.write_text(
+                json.dumps(_catalog([_ml_provider()])),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ProviderResolutionError,
+                "metadata does not match",
+            ):
+                parse_provider_resolution(
+                    _resolution(_resolution_item(
+                        "ml_reproducibility",
+                        research_status="completed",
+                        candidates=[_research_candidate(revision="different-revision")],
+                        evidence=["https://example.invalid/providers/ml-review"],
+                        limitation=None,
+                        proposed_outcome="select_provider",
+                        provider_id="example_ml_review",
+                    )),
+                    ["ml_reproducibility"],
+                    load_provider_catalog(catalog),
                 )
 
 
@@ -166,6 +299,11 @@ class ProviderOptionsCliTests(unittest.TestCase):
         self.assertIn(
             "exact_coverage",
             research["result_contract"]["required_candidate_fields"],
+        )
+        self.assertEqual(research["result_contract"]["kind"], "provider_resolution")
+        self.assertIn(
+            "proposed_outcome",
+            research["result_contract"]["required_capability_fields"],
         )
         self.assertEqual(research["result_contract"]["max_candidates_per_capability"], 3)
         self.assertTrue(research["result_contract"]["no_match_allowed"])

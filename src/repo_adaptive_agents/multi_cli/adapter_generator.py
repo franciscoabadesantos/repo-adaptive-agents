@@ -20,7 +20,7 @@ from .generator import (
     write_files_atomically,
 )
 
-ADAPTER_BUNDLE_SCHEMA_VERSION = 4
+ADAPTER_BUNDLE_SCHEMA_VERSION = 5
 
 
 def _profile_summary(profile: RepoProfile) -> dict:
@@ -103,7 +103,8 @@ def render_adapter_bundle(
     role_ids: list[str],
     *,
     compare_to: str | Path | None = None,
-    provider_gap_decisions: list[dict] | None = None,
+    provider_resolution: dict | None = None,
+    provider_gap_proposals: list[dict] | None = None,
 ) -> tuple[dict[str, str], dict, AdapterPlan]:
     """Profile a repository and render only the adapters explicitly requested."""
     profile = profile_repository(repo_path)
@@ -137,7 +138,8 @@ def render_adapter_bundle(
         "profile": _profile_summary(profile),
         "requested_targets": list(resolved_targets),
         "selection_status": "tool_proposal",
-        "provider_gap_decisions": provider_gap_decisions or [],
+        "provider_resolution": provider_resolution,
+        "provider_gap_proposals": provider_gap_proposals or [],
         "selected_adapters": [
             _selection_dict(item) for item in adapter_plan.selected_adapters
         ],
@@ -164,7 +166,8 @@ def write_adapter_bundle(
     *,
     compare_to: str | Path | None = None,
     protected_root: str | Path | None = None,
-    provider_gap_decisions: list[dict] | None = None,
+    provider_resolution: dict | None = None,
+    provider_gap_proposals: list[dict] | None = None,
 ) -> tuple[list[Path], AdapterPlan, dict]:
     repo = Path(repo_path).expanduser().resolve()
     if not repo.is_dir():
@@ -177,7 +180,8 @@ def write_adapter_bundle(
         targets,
         role_ids,
         compare_to=compare_to,
-        provider_gap_decisions=provider_gap_decisions,
+        provider_resolution=provider_resolution,
+        provider_gap_proposals=provider_gap_proposals,
     )
     written = write_files_atomically(output_dir, files, protected_root=protected_root)
     return written, plan, manifest

@@ -500,6 +500,10 @@ class MvpTests(unittest.TestCase):
             self.assertEqual(discovery["catalog"]["source"], "builtin-empty")
             self.assertFalse(discovery["catalog"]["network_access"])
             self.assertTrue(discovery["unresolved_capabilities"])
+            result_contract = discovery["provider_discovery"]["result_contract"]
+            self.assertEqual(result_contract["kind"], "provider_resolution")
+            self.assertIn("research_status", result_contract["required_capability_fields"])
+            self.assertIn("rationale", result_contract["required_capability_fields"])
             self.assertIn("Before recommending adapter roles", discovery["next_action"])
             self.assertIn("No harness adapter was selected or generated.", stdout.getvalue())
             self.assertIn("STOP: provider-discovery.json", stdout.getvalue())

@@ -31,7 +31,7 @@ from .providers import (
     build_provider_research_brief,
     capabilities_requiring_research,
     load_provider_catalog,
-    parse_provider_gap_decisions,
+    load_provider_resolution,
     resolve_providers,
 )
 from .recommender import recommend_infrastructure
@@ -115,7 +115,7 @@ def _parser() -> argparse.ArgumentParser:
             "are recorded as evidence, but no execution order, concurrency, consolidator, "
             "or mandatory team is generated. The command never applies or runs adapters. "
             "Use the repository-aware adapter-options command to obtain selectable roles "
-            "and targets after provider gaps have explicit decisions."
+            "and targets after a validated provider-resolution artifact covers every gap."
         ),
     )
     adapters.add_argument("repo", help="Local repository path to profile")
@@ -136,17 +136,15 @@ def _parser() -> argparse.ArgumentParser:
     adapters.add_argument(
         "--provider-catalog",
         default=None,
-        help="Optional reviewed local provider catalog used by select_provider decisions",
+        help="Optional reviewed local provider catalog used by select_provider proposals",
     )
     adapters.add_argument(
-        "--provider-decision",
-        action="append",
-        default=[],
-        metavar="CAPABILITY=OUTCOME",
+        "--provider-resolution",
+        default=None,
+        metavar="FILE",
         help=(
-            "Repeat once per provider gap after research/user review. Outcomes: "
-            "leave_unresolved, create_local_knowledge, decompose_capability, or "
-            "select_provider:PROVIDER_ID"
+            "Validated provider research and proposed outcomes for every capability gap; "
+            "required before an adapter bundle can be generated"
         ),
     )
 
@@ -154,7 +152,7 @@ def _parser() -> argparse.ArgumentParser:
         "adapter-options",
         help=(
             "Repository-aware adapter selection query; hides roles and targets until "
-            "provider gaps have explicit decisions"
+            "a validated provider-resolution artifact covers every gap"
         ),
     )
     adapter_options.add_argument("repo", help="Local repository path to profile")
@@ -163,14 +161,13 @@ def _parser() -> argparse.ArgumentParser:
     adapter_options.add_argument(
         "--provider-catalog",
         default=None,
-        help="Optional reviewed local provider catalog used by select_provider decisions",
+        help="Optional reviewed local provider catalog used by select_provider proposals",
     )
     adapter_options.add_argument(
-        "--provider-decision",
-        action="append",
-        default=[],
-        metavar="CAPABILITY=OUTCOME",
-        help="Repeat once per provider gap to unlock adapter options after research",
+        "--provider-resolution",
+        default=None,
+        metavar="FILE",
+        help="Validated provider research artifact used to unlock adapter options",
     )
 
     provider_options = subparsers.add_parser(
@@ -255,11 +252,19 @@ def _run_propose_adapters(args) -> int:
     infrastructure = recommend_infrastructure(profile)
     gaps = _provider_gap_capabilities(infrastructure)
     providers = load_provider_catalog(args.provider_catalog)
-    decisions = parse_provider_gap_decisions(
-        args.provider_decision,
-        (item.capability_id for item in gaps),
-        providers,
-    )
+    if gaps and not args.provider_resolution:
+        raise ValueError(
+            "provider resolution artifact required for capability gaps: "
+            + ", ".join(item.capability_id for item in gaps)
+        )
+    resolution = None
+    proposals = ()
+    if args.provider_resolution:
+        resolution, proposals = load_provider_resolution(
+            args.provider_resolution,
+            (item.capability_id for item in gaps),
+            providers,
+        )
     written, plan, _ = write_adapter_bundle(
         args.repo,
         targets,
@@ -267,7 +272,8 @@ def _run_propose_adapters(args) -> int:
         args.output,
         compare_to=args.compare_to,
         protected_root=Path.cwd(),
-        provider_gap_decisions=to_jsonable(decisions),
+        provider_resolution=resolution,
+        provider_gap_proposals=to_jsonable(proposals),
     )
     issues = validate_adapter_bundle(args.output)
     if issues:
@@ -326,9 +332,10 @@ def _provider_discovery_packet(infrastructure) -> dict[str, object]:
         "provider_discovery": to_jsonable(brief),
         "next_action": (
             "Before recommending adapter roles or targets, perform the read-only public "
-            "provider research described in provider_discovery. If network research is "
-            "unavailable, report that limitation and ask whether to continue with the gaps "
-            "unresolved. Do not download, execute, install, or silently catalog a provider."
+            "provider research described in provider_discovery and write its validated "
+            "provider_resolution artifact. If network research is unavailable, record the "
+            "runtime limitation explicitly. Do not download, execute, install, or silently "
+            "catalog a provider."
             if requires_research
             else "No provider research is required before adapter selection."
         ),
@@ -359,11 +366,12 @@ def _run_adapter_options(args) -> int:
         if capability.capability_id in unmapped_capability_ids
     ]
     providers = load_provider_catalog(args.provider_catalog)
-    decisions = ()
+    resolution = None
+    proposals = ()
     adapter_options_unlocked = not unmapped_capabilities
-    if args.provider_decision:
-        decisions = parse_provider_gap_decisions(
-            args.provider_decision,
+    if args.provider_resolution:
+        resolution, proposals = load_provider_resolution(
+            args.provider_resolution,
             (item.capability_id for item in unmapped_capabilities),
             providers,
         )
@@ -428,17 +436,19 @@ def _run_adapter_options(args) -> int:
         },
         "questions": adapter_questions if adapter_options_unlocked else [],
         "deferred_questions": [],
-        "provider_gap_decisions": to_jsonable(decisions),
+        "provider_resolution": resolution,
+        "provider_gap_proposals": to_jsonable(proposals),
         "next_action": (
             (
                 "Present only the repository facts and capability-provider gaps. Follow the "
                 "provider_discovery brief when public network research is permitted. If it "
                 "is unavailable, report that limitation. Do not recommend or ask the user "
-                "to choose adapter roles or targets until every gap has an explicit decision."
+                "to choose adapter roles or targets until a validated provider-resolution "
+                "artifact covers every gap. Raw outcome flags are not accepted."
             )
             if not adapter_options_unlocked
             else (
-                "Present the repository facts, recorded provider-gap decisions, adapter "
+                "Present the repository facts, evidence-backed provider-gap proposals, adapter "
                 "coverage, and available targets. Ask the user which roles and targets to "
                 "include before generating an installation preview."
             )
@@ -472,7 +482,7 @@ def _run_provider_options(args) -> int:
     resolution = resolve_providers(infrastructure, covered_capabilities, providers)
     research_capabilities = capabilities_requiring_research(resolution)
     payload = {
-        "status": "provider_resolution",
+        "status": "provider_options",
         "repository": profile.name,
         "catalog": {
             "source": str(Path(args.catalog).expanduser()) if args.catalog else "builtin-empty",
@@ -500,15 +510,15 @@ def _run_provider_options(args) -> int:
             "Present matching candidates with source, revision, license, review status, and "
             "compatible targets. For unmatched capabilities, follow the provider_discovery "
             "brief when public network research is permitted and present the resulting "
-            "coverage limits before asking the user to choose. No provider installation "
-            "command exists in this MVP."
+            "coverage limits in a provider_resolution artifact before adapter selection. "
+            "No provider installation command exists in this MVP."
         ),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 
 
-def _adapter_decision_lines(bundle_dir: str | Path) -> list[str]:
+def _adapter_proposal_lines(bundle_dir: str | Path) -> list[str]:
     """Build a concise, evidence-backed decision packet from a validated bundle."""
     bundle = Path(bundle_dir).expanduser().resolve()
     try:
@@ -551,17 +561,25 @@ def _adapter_decision_lines(bundle_dir: str | Path) -> list[str]:
         "  Selection status: tool proposal; roles and targets are recommendations until "
         "this exact install plan is approved"
     )
-    provider_decisions = manifest.get("provider_gap_decisions", [])
-    if provider_decisions:
-        lines.append("  Provider gap decisions recorded in this proposal:")
-        for decision in provider_decisions:
+    provider_proposals = manifest.get("provider_gap_proposals", [])
+    if provider_proposals:
+        lines.append("  Evidence-backed provider gap proposals recorded in this tool proposal:")
+        resolution_items = {
+            item.get("capability_id"): item
+            for item in (manifest.get("provider_resolution") or {}).get("capabilities", [])
+        }
+        for proposal in provider_proposals:
             provider = (
-                f" ({decision['provider_id']})"
-                if decision.get("provider_id")
+                f" ({proposal['provider_id']})"
+                if proposal.get("provider_id")
                 else ""
             )
+            research = resolution_items.get(proposal["capability_id"], {})
             lines.append(
-                f"    - {decision['capability_id']}: {decision['outcome']}{provider}"
+                f"    - {proposal['capability_id']}: {proposal['outcome']}{provider}; "
+                f"research={research.get('research_status', 'unknown')}; "
+                f"candidates={len(research.get('candidates', []))}; "
+                f"rationale={research.get('rationale', 'not recorded')}"
             )
     lines.append("  Selected adapters:")
     for item in selected:
@@ -636,7 +654,7 @@ def _run_install_adapters(args) -> int:
             "and separately approved installation"
         )
     plan = plan_adapter_install(args.bundle, args.repo)
-    print("\n".join(_adapter_decision_lines(args.bundle)))
+    print("\n".join(_adapter_proposal_lines(args.bundle)))
     print(
         f"Install plan: {len(plan.additions)} addition(s), "
         f"{len(plan.unchanged)} unchanged, {len(plan.conflicts)} conflict(s)"
@@ -691,9 +709,9 @@ def main(argv: list[str] | None = None) -> int:
         if provider_discovery["status"] == "requires_provider_research":
             print(
                 "STOP: provider-discovery.json contains unresolved capability gaps. "
-                "Complete its read-only research brief before recommending adapter roles "
-                "or targets; if public network research is unavailable, report that "
-                "limitation and ask whether to continue without it."
+                "Complete its read-only research brief and write a validated "
+                "provider_resolution artifact before recommending adapter roles or targets; "
+                "if public network research is unavailable, record that runtime limitation."
             )
         return 0
     except (OSError, ProposalError, AdapterInstallError, AdapterSelectionError, MultiCliError, ValueError) as error:

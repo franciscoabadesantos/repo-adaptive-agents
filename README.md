@@ -126,8 +126,14 @@ version 4 so the installation preview remains auditable.
 
 Version 0.7.1 removes the global `roles` and `targets` catalog commands from the adoption
 CLI. Repository setup must use `adapter-options <repo>`; it reveals selectable roles and
-targets only after the provider-decision gate is complete. The canonical registries remain
+targets only after the provider-resolution gate is complete. The canonical registries remain
 available to the renderer implementation and its tests.
+
+Version 0.8 removes raw provider-outcome flags. Unlocking adapter selection now requires a
+schema-versioned `provider_resolution` JSON artifact covering every gap with research status,
+evidence or an explicit runtime limitation, up to three fully described candidates, rationale,
+and a proposed outcome. These are tool proposals, not claims of user approval. Adapter bundle
+schema version 5 embeds the resolution and previews it before installation.
 
 ## Knowledge provider resolution
 
@@ -180,12 +186,13 @@ For every unmatched capability, `provider_discovery` supplies:
   `suitable`, `partial_only`, or `reject` recommendation; reporting no match is valid;
 - rules to use primary sources, protect private repository context, and reject inflated
   capability matches;
-- explicit user choices: review a candidate, leave the gap unresolved, create local
-  knowledge, or decompose an over-broad capability and research narrower providers.
+- available resolution outcomes: select a reviewed candidate, leave the gap unresolved,
+  create local knowledge, or decompose an over-broad capability and research narrower
+  providers.
 
 The Main agent may perform this read-only research when public network access is permitted;
-a dedicated research agent is optional. Research results are advisory and must return to
-the user before any provider proposal or installation workflow is introduced.
+a dedicated research agent is optional. Research results and proposed outcomes are advisory
+and must remain visible to the user before adapter selection or installation.
 Catalog entries marked `candidate` remain in this research brief until their coverage has
 been reviewed; only an `approved` provider suppresses repeat discovery for the capabilities
 it matches.
@@ -438,20 +445,44 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli adapter-options ./my-repo
 
 If capability-provider gaps exist, it emits repository identity and technologies,
 repository-native contracts, recommended capabilities, the gaps, and the provider research
-brief. Adapter roles, targets, and their questions are deliberately absent. Record one
-decision per gap to unlock them, for example:
+brief. Adapter roles, targets, and their questions are deliberately absent. Research must be
+recorded in a local JSON artifact outside the target repository. A no-match or unavailable
+example is:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "provider_resolution",
+  "capabilities": [
+    {
+      "capability_id": "ml_reproducibility",
+      "research_status": "unavailable",
+      "candidates": [],
+      "evidence": ["Web research tool unavailable: <exact runtime error>"],
+      "limitation": "Public network access is unavailable in this runtime.",
+      "proposed_outcome": "leave_unresolved",
+      "provider_id": null,
+      "rationale": "Preserve the gap until provider research can be completed."
+    }
+  ]
+}
+```
+
+Every status requires non-empty evidence. Completed research uses
+`research_status: "completed"`, null `limitation`, and zero to three candidates using every
+candidate field declared by `provider_discovery.result_contract`; unavailable research must
+preserve the exact runtime blocker. A selected provider must be a `suitable` candidate and
+must also exist in the supplied reviewed catalog. Use the artifact to unlock the query:
 
 ```sh
 PYTHONPATH=src python3 -m repo_adaptive_agents.cli adapter-options ./my-repo \
-  --provider-decision ml_reproducibility=decompose_capability \
-  --provider-decision dependency_audit=leave_unresolved
+  --provider-resolution /tmp/my-provider-resolution.json
 ```
 
-Use `select_provider:PROVIDER_ID` only with `--provider-catalog` metadata that explicitly
-claims that capability. These flags record reviewed decisions; they do not download or
-install providers. Once every gap is decided, the output exposes the matched/optional
-adapters, supported targets, and the two user selection questions. The command always writes
-nothing.
+The artifact does not download or install providers and cannot prove who authored its
+recommendations. Its evidence and proposed outcomes remain visible for human review. Once it
+covers every gap, the output exposes matched/optional adapters, supported targets, and the
+two user selection questions. The command always writes nothing.
 
 `propose-adapters` profiles a repository and renders only the read-only roles and adapter targets
 supplied by the caller. The result is always a tool proposal: roles and targets remain
@@ -464,30 +495,34 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-adapters ./my-repo \
   --targets skill,codex,claude,copilot \
   --role repo_explorer \
   --role browser_qa \
-  --provider-decision ml_reproducibility=leave_unresolved \
+  --provider-resolution /tmp/my-provider-resolution.json \
   --output /tmp/my-adapters
 ```
 
 `propose-adapters` applies the same gate and fails before creating its output directory when
-any provider gap lacks a decision. Adapter bundle `manifest.json` schema version 4 records the
-complete decision set; installation previews display it before roles and file additions.
+the resolution is missing, malformed, or incomplete. Adapter bundle `manifest.json` schema
+version 5 embeds the resolution and derived proposals; installation previews display their
+research status, candidate count, and rationale before roles and file additions.
 
 The agent-led adoption flow uses one honest write gate:
 
 1. run `propose` or `adapter-options`; present repository facts and provider gaps. Complete
-   permitted read-only research and record an explicit outcome for every gap;
-2. rerun `adapter-options` with those decisions, then let the user choose roles and targets;
-3. render a proposal, preview installation, show the provider decisions, proposed
+   permitted read-only research and write one resolution entry for every gap. Lack of
+   permission to install a provider is not evidence that public research is unavailable;
+2. rerun `adapter-options` with the resolution, present its evidence and proposed outcomes,
+   then let the user choose roles and targets;
+3. render a proposal, preview installation, show the provider-resolution proposals, proposed
    roles/targets, and exact additions, then stop for approval. Approval of that exact preview
    accepts both the selection and the file plan;
 4. only after that approval, run
    `install-adapters --apply --confirm-install`.
 
-The CLI cannot prove whether a selection came from a human when agent and user share the
-same permissions, so it never claims prior user approval. Recommendations, CLI arguments,
-capability matches, and repository facts must not be described as user choices before the
-installation preview is approved. Both `--targets` and at least one `--role` are required. A user may explicitly choose a
-read-only role without a deterministic capability match (for example, design judgment);
+The CLI cannot prove whether a proposal came from a human when agent and user share the
+same permissions, so it never claims prior user approval. Resolution outcomes,
+recommendations, CLI arguments, capability matches, and repository facts must not be
+described as user choices before the installation preview is approved. Both `--targets` and
+at least one `--role` are required. A user may explicitly choose a read-only role without a
+deterministic capability match (for example, design judgment);
 the manifest records empty match evidence rather than pretending the profiler inferred it.
 `implementation_agent` remains available only through `render-role` with an explicit write
 scope. `--compare-to DIR` performs a strictly read-only comparison with a destination.

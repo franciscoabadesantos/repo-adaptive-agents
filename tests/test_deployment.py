@@ -251,7 +251,23 @@ class InstallCliTests(unittest.TestCase):
                 ["skill"],
                 ["repo_explorer"],
                 bundle,
-                provider_gap_decisions=[
+                provider_resolution={
+                    "schema_version": 1,
+                    "kind": "provider_resolution",
+                    "capabilities": [
+                        {
+                            "capability_id": "test_strategy",
+                            "research_status": "unavailable",
+                            "candidates": [],
+                            "evidence": ["Test runtime has no public network tool."],
+                            "limitation": "Network unavailable in this test.",
+                            "proposed_outcome": "leave_unresolved",
+                            "provider_id": None,
+                            "rationale": "Preserve the unresolved gap.",
+                        }
+                    ],
+                },
+                provider_gap_proposals=[
                     {
                         "capability_id": "test_strategy",
                         "outcome": "leave_unresolved",
@@ -270,8 +286,9 @@ class InstallCliTests(unittest.TestCase):
                 "Selection status: tool proposal",
                 preview,
             )
-            self.assertIn("Provider gap decisions recorded", preview)
+            self.assertIn("Evidence-backed provider gap proposals", preview)
             self.assertIn("test_strategy: leave_unresolved", preview)
+            self.assertIn("research=unavailable", preview)
             self.assertIn("Approval of this preview accepts both the selection", preview)
             self.assertEqual(_files(destination), {})
 
