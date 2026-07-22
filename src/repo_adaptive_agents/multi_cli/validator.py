@@ -457,7 +457,7 @@ def validate_adapter_bundle(output_dir: str | Path) -> list[str]:
         issues.append("adapter manifest: kind is not 'adapter_bundle'")
     if "execution_plan" in manifest:
         issues.append("adapter manifest: execution_plan is not allowed")
-    if manifest.get("schema_version") != 6:
+    if manifest.get("schema_version") != 7:
         issues.append("adapter manifest: unsupported schema_version")
     if manifest.get("selection_status") != "tool_proposal":
         issues.append("adapter manifest: invalid or missing selection_status")

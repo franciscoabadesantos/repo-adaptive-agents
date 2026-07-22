@@ -20,7 +20,7 @@ from .generator import (
     write_files_atomically,
 )
 
-ADAPTER_BUNDLE_SCHEMA_VERSION = 6
+ADAPTER_BUNDLE_SCHEMA_VERSION = 7
 
 
 def _profile_summary(profile: RepoProfile) -> dict:

@@ -77,7 +77,7 @@ def _research_item(capability_id: str, **overrides) -> dict:
 
 def _research(*items: dict) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "provider_research",
         "capabilities": list(items),
     }
@@ -96,7 +96,7 @@ def _decision(capability_id: str, **overrides) -> dict:
 
 def _resolution(*items: dict) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "provider_resolution",
         "decisions": list(items),
     }
@@ -111,11 +111,15 @@ def _completed_research(capability_id: str, **overrides) -> dict:
             "source_kind": "code_search",
             "query": f"{capability_id} skill",
             "result": "Reviewed public provider repositories.",
+            "discovered_provider_ids": [],
         }],
         evidence=["https://example.invalid/provider-search"],
         limitation=None,
     )
     item.update(overrides)
+    discovered_ids = [candidate["provider_id"] for candidate in item["candidates"]]
+    for search in item["searches"]:
+        search["discovered_provider_ids"] = discovered_ids
     return item
 
 
@@ -183,6 +187,33 @@ class ProviderResolutionTests(unittest.TestCase):
                     searches=[],
                     limitation=None,
                 )),
+                ["ml_reproducibility"],
+            )
+
+    def test_named_discovered_provider_must_be_a_structured_candidate(self):
+        item = _completed_research("ml_reproducibility")
+        item["searches"][0]["discovered_provider_ids"] = ["example_ml_review"]
+        with self.assertRaisesRegex(
+            ProviderResolutionError,
+            "discovered providers must be described as candidates",
+        ):
+            parse_provider_research(
+                _research(item),
+                ["ml_reproducibility"],
+            )
+
+    def test_candidate_must_be_linked_to_a_provider_search(self):
+        item = _completed_research(
+            "ml_reproducibility",
+            candidates=[_research_candidate()],
+        )
+        item["searches"][0]["discovered_provider_ids"] = []
+        with self.assertRaisesRegex(
+            ProviderResolutionError,
+            "candidates must be linked from a provider search",
+        ):
+            parse_provider_research(
+                _research(item),
                 ["ml_reproducibility"],
             )
 
@@ -300,6 +331,33 @@ class ProviderResolutionTests(unittest.TestCase):
         )
         self.assertEqual(proposals[0].outcome, "leave_unresolved")
 
+    def test_partial_provider_can_be_selected_without_closing_the_gap(self):
+        research = parse_provider_research(
+            _research(_completed_research(
+                "ml_reproducibility",
+                candidates=[_research_candidate(
+                    recommendation="partial_only",
+                    exact_coverage=["Model evaluation"],
+                    coverage_gaps=["Dataset lineage", "Temporal leakage review"],
+                )],
+                recommended_outcome="select_partial_provider",
+                recommended_provider_id="example_ml_review",
+            )),
+            ["ml_reproducibility"],
+        )
+        _normalized, proposals = parse_provider_resolution(
+            _resolution(_decision(
+                "ml_reproducibility",
+                outcome="select_partial_provider",
+                provider_id="example_ml_review",
+            )),
+            ["ml_reproducibility"],
+            research,
+        )
+
+        self.assertEqual(proposals[0].outcome, "select_partial_provider")
+        self.assertEqual(proposals[0].provider_id, "example_ml_review")
+
     def test_research_recommendation_cannot_replace_resolution(self):
         research = parse_provider_research(
             _research(_research_item("ml_reproducibility")),
@@ -382,6 +440,7 @@ class ProviderOptionsCliTests(unittest.TestCase):
             research["result_contract"]["required_candidate_fields"],
         )
         self.assertEqual(research["result_contract"]["kind"], "provider_research")
+        self.assertEqual(research["result_contract"]["schema_version"], 2)
         self.assertIn(
             "recommended_outcome",
             research["result_contract"]["required_capability_fields"],
@@ -390,9 +449,18 @@ class ProviderOptionsCliTests(unittest.TestCase):
             "source_kind",
             research["result_contract"]["required_search_fields"],
         )
+        self.assertIn(
+            "discovered_provider_ids",
+            research["result_contract"]["required_search_fields"],
+        )
         self.assertEqual(
             research["decision_contract"]["kind"],
             "provider_resolution",
+        )
+        self.assertEqual(research["decision_contract"]["schema_version"], 2)
+        self.assertIn(
+            "select_partial_provider",
+            {item["id"] for item in research["decision_options"]},
         )
         self.assertEqual(research["result_contract"]["max_candidates_per_capability"], 3)
         self.assertTrue(research["result_contract"]["no_match_allowed"])

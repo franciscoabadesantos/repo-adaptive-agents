@@ -140,6 +140,11 @@ actual provider searches, candidates, coverage limits, and recommendations but c
 roles or targets. After that evidence is presented, a separate `provider_resolution` records
 the user's outcomes. Adapter bundle schema version 6 embeds both artifacts.
 
+Version 0.10 makes discovered providers selectable rather than leaving them only in search
+prose. Each search links named results to structured candidates. Users may explicitly select
+a `partial_only` candidate without converting that choice into a false claim of full
+capability coverage. Adapter bundle schema version 7 preserves this distinction.
+
 ## Knowledge provider resolution
 
 Inspect capability gaps using the empty built-in catalog:
@@ -189,11 +194,12 @@ For every unmatched capability, `provider_discovery` supplies:
   external requirements, license, revision, trust signals, and platform coupling;
 - at most three materially different candidates per capability, with an explicit
   `suitable`, `partial_only`, or `reject` recommendation; reporting no match is valid;
+- explicit links from every named provider search result to its structured candidate;
 - rules to use primary sources, protect private repository context, and reject inflated
   capability matches;
-- available resolution outcomes: select a reviewed candidate, leave the gap unresolved,
-  create local knowledge, or decompose an over-broad capability and research narrower
-  providers.
+- available resolution outcomes: select a suitable reviewed candidate, select a partial
+  candidate while preserving its remaining gap, leave the gap unresolved, create local
+  knowledge, or decompose an over-broad capability and research narrower providers.
 
 The Main agent may perform this read-only research when public network access is permitted;
 a dedicated research agent is optional. Research results and recommended outcomes are
@@ -456,7 +462,7 @@ provider searches and recommendations, but never user decisions. An unavailable 
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "kind": "provider_research",
   "capabilities": [
     {
@@ -479,7 +485,9 @@ Every status requires non-empty evidence. Completed research uses
 and zero to three candidates using every field declared by
 `provider_discovery.result_contract`. Search sources are marketplaces, provider repositories,
 code search, or web search; product documentation may assess coverage but does not satisfy
-provider discovery by itself. Unavailable research must preserve the exact runtime blocker.
+provider discovery by itself. Each search includes `discovered_provider_ids`; every ID must
+map to a structured candidate, and every candidate must be linked by a search. Unavailable
+research must preserve the exact runtime blocker.
 
 Pass only the research artifact first:
 
@@ -493,7 +501,7 @@ capability. Stop for the user's response. Record those decisions separately:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "kind": "provider_resolution",
   "decisions": [
     {
@@ -510,7 +518,9 @@ Then rerun `adapter-options` with both artifacts. A selected provider must be a 
 research candidate and must also exist in the supplied reviewed catalog. Only the validated
 pair exposes matched/optional adapters, supported targets, and the two user selection
 questions. Neither artifact downloads or installs providers, and the command always writes
-nothing.
+nothing. `select_partial_provider` may reference a `partial_only` research candidate without
+claiming the full capability is resolved; its exact coverage and remaining gaps stay in the
+decision packet.
 
 `propose-adapters` profiles a repository and renders only the read-only roles and adapter targets
 supplied by the caller. The result is always a tool proposal: roles and targets remain
@@ -530,7 +540,7 @@ PYTHONPATH=src python3 -m repo_adaptive_agents.cli propose-adapters ./my-repo \
 
 `propose-adapters` applies the same gate and fails before creating its output directory when
 the research or subsequent resolution is missing, malformed, or incomplete. Adapter bundle
-`manifest.json` schema version 6 embeds both artifacts and the derived outcomes; installation
+`manifest.json` schema version 7 embeds both artifacts and the derived outcomes; installation
 previews display their research status, candidate count, and rationale before roles and file
 additions.
 

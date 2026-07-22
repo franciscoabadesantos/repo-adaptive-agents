@@ -479,6 +479,10 @@ def _run_adapter_options(args) -> int:
                 "Generic read-only review isolation does not by itself supply missing "
                 "domain expertise."
             ),
+            "partial_provider_boundary": (
+                "select_partial_provider records an explicit user choice but does not claim "
+                "that the remaining capability gap is resolved."
+            ),
         },
         "questions": adapter_questions if adapter_options_unlocked else [],
         "provider_decision_questions": (
@@ -488,12 +492,25 @@ def _run_adapter_options(args) -> int:
                     "question": "Which outcome should be recorded after reviewing this provider research?",
                     "options": [
                         "select_provider",
+                        "select_partial_provider",
                         "leave_unresolved",
                         "create_local_knowledge",
                         "decompose_capability",
                     ],
                     "research_recommendation": item["recommended_outcome"],
                     "recommended_provider_id": item["recommended_provider_id"],
+                    "candidate_options": [
+                        {
+                            "provider_id": candidate["provider_id"],
+                            "title": candidate["title"],
+                            "recommendation": candidate["recommendation"],
+                            "primary_source": candidate["primary_source"],
+                            "compatible_targets": candidate["compatible_targets"],
+                            "exact_coverage": candidate["exact_coverage"],
+                            "coverage_gaps": candidate["coverage_gaps"],
+                        }
+                        for candidate in item["candidates"]
+                    ],
                 }
                 for item in (research or {}).get("capabilities", [])
             ]
@@ -655,6 +672,10 @@ def _adapter_proposal_lines(bundle_dir: str | Path) -> list[str]:
                 f"candidates={len(research.get('candidates', []))}; "
                 f"rationale={research.get('rationale', 'not recorded')}"
             )
+            if proposal["outcome"] == "select_partial_provider":
+                lines.append(
+                    "      Partial selection does not resolve the remaining capability gap."
+                )
     lines.append("  Selected adapters:")
     for item in selected:
         role_id = item.get("role_id", "unknown")

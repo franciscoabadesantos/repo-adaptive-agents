@@ -252,7 +252,7 @@ class InstallCliTests(unittest.TestCase):
                 ["repo_explorer"],
                 bundle,
                 provider_research={
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "kind": "provider_research",
                     "capabilities": [
                         {
@@ -269,7 +269,7 @@ class InstallCliTests(unittest.TestCase):
                     ],
                 },
                 provider_resolution={
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "kind": "provider_resolution",
                     "decisions": [
                         {

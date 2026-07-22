@@ -24,6 +24,10 @@ architectures, workflows, risks, and organizational preferences.
   provider marketplaces, skill/plugin repositories, code indexes, or the public web;
   product documentation alone is not provider discovery. If network research is not
   available, report the limitation.
+- Any plausible installable provider named in a search result must appear as a structured
+  candidate with `suitable`, `partial_only`, or `reject` coverage. Do not hide candidates in
+  prose. A user may explicitly select a partial provider, but the unresolved remainder must
+  stay visible and must not be reported as full capability coverage.
 - Provider research is advisory. Record evidence, candidates, coverage limits, and a
   recommendation for every gap in `provider_research`, present it, then stop for the user's
   decisions. Do not create `provider_resolution`, expose adapter choices, or generate a

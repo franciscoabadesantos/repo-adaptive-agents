@@ -16,8 +16,8 @@ PROVIDER_CATALOG_SCHEMA_VERSION = 1
 PROVIDER_KINDS = ("skill", "plugin", "manual")
 PROVIDER_REVIEW_STATUSES = ("candidate", "approved")
 PROVIDER_TARGETS = ("skill", "codex", "claude", "copilot")
-PROVIDER_RESEARCH_SCHEMA_VERSION = 1
-PROVIDER_RESOLUTION_SCHEMA_VERSION = 1
+PROVIDER_RESEARCH_SCHEMA_VERSION = 2
+PROVIDER_RESOLUTION_SCHEMA_VERSION = 2
 PROVIDER_RESEARCH_STATUSES = ("completed", "unavailable")
 PROVIDER_CANDIDATE_RECOMMENDATIONS = ("suitable", "partial_only", "reject")
 PROVIDER_SEARCH_KINDS = (
@@ -31,6 +31,7 @@ PROVIDER_GAP_OUTCOMES = (
     "create_local_knowledge",
     "decompose_capability",
 )
+PROVIDER_SELECTION_OUTCOMES = ("select_provider", "select_partial_provider")
 BUILTIN_PROVIDERS: tuple["ProviderDefinition", ...] = ()
 _PROVIDER_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
 _MAX_CATALOG_BYTES = 1_000_000
@@ -148,6 +149,7 @@ def build_provider_research_brief(
                 "source_kind",
                 "query",
                 "result",
+                "discovered_provider_ids",
             ],
             "search_kind_values": list(PROVIDER_SEARCH_KINDS),
             "required_candidate_fields": [
@@ -190,7 +192,11 @@ def build_provider_research_brief(
         "decision_options": [
             {
                 "id": "select_provider",
-                "description": "Review and later propose a selected provider.",
+                "description": "Select a suitable provider as full capability coverage.",
+            },
+            {
+                "id": "select_partial_provider",
+                "description": "Select a partial provider while keeping the remaining capability gap explicit.",
             },
             {
                 "id": "leave_unresolved",
@@ -327,27 +333,44 @@ def _parse_research_candidate(item: object, capability_id: str) -> dict[str, obj
     }
 
 
-def _parse_provider_search(item: object, capability_id: str) -> dict[str, str]:
+def _parse_provider_search(item: object, capability_id: str) -> dict[str, object]:
     if not isinstance(item, dict) or set(item) != {
         "source",
         "source_kind",
         "query",
         "result",
+        "discovered_provider_ids",
     }:
         raise ProviderResolutionError(
             f"provider research {capability_id!r}: search fields must be exactly "
-            "query, result, source, source_kind"
+            "discovered_provider_ids, query, result, source, source_kind"
         )
     source_kind = _resolution_string(item["source_kind"], "source_kind", capability_id)
     if source_kind not in PROVIDER_SEARCH_KINDS:
         raise ProviderResolutionError(
             f"provider research {capability_id!r}: invalid source_kind {source_kind!r}"
         )
+    discovered_provider_ids = _resolution_strings(
+        item["discovered_provider_ids"],
+        "discovered_provider_ids",
+        capability_id,
+    )
+    invalid_ids = [
+        provider_id
+        for provider_id in discovered_provider_ids
+        if not _PROVIDER_ID.fullmatch(provider_id)
+    ]
+    if invalid_ids:
+        raise ProviderResolutionError(
+            f"provider research {capability_id!r}: invalid discovered provider ids: "
+            + ", ".join(invalid_ids)
+        )
     return {
         "source": _resolution_string(item["source"], "source", capability_id),
         "source_kind": source_kind,
         "query": _resolution_string(item["query"], "query", capability_id),
         "result": _resolution_string(item["result"], "result", capability_id),
+        "discovered_provider_ids": discovered_provider_ids,
     }
 
 
@@ -434,6 +457,23 @@ def parse_provider_research(
             raise ProviderResolutionError(
                 f"provider research {capability_id!r}: candidate ids must be unique"
             )
+        discovered_ids = {
+            provider_id
+            for search in searches
+            for provider_id in search["discovered_provider_ids"]
+        }
+        missing_candidates = sorted(discovered_ids.difference(candidate_ids))
+        if missing_candidates:
+            raise ProviderResolutionError(
+                f"provider research {capability_id!r}: discovered providers must be described as candidates: "
+                + ", ".join(missing_candidates)
+            )
+        unlinked_candidates = sorted(set(candidate_ids).difference(discovered_ids))
+        if unlinked_candidates:
+            raise ProviderResolutionError(
+                f"provider research {capability_id!r}: candidates must be linked from a provider search: "
+                + ", ".join(unlinked_candidates)
+            )
         evidence = _resolution_strings(
             raw["evidence"],
             "evidence",
@@ -457,12 +497,12 @@ def parse_provider_research(
                     f"provider research {capability_id!r}: completed research must use null limitation"
                 )
         outcome = _resolution_string(raw["recommended_outcome"], "recommended_outcome", capability_id)
-        if outcome not in (*PROVIDER_GAP_OUTCOMES, "select_provider"):
+        if outcome not in (*PROVIDER_GAP_OUTCOMES, *PROVIDER_SELECTION_OUTCOMES):
             raise ProviderResolutionError(
                 f"provider research {capability_id!r}: invalid recommended_outcome"
             )
         provider_id = raw["recommended_provider_id"]
-        if outcome == "select_provider":
+        if outcome in PROVIDER_SELECTION_OUTCOMES:
             provider_id = _resolution_string(
                 provider_id, "recommended_provider_id", capability_id
             )
@@ -470,13 +510,16 @@ def parse_provider_research(
                 (item for item in candidates if item["provider_id"] == provider_id),
                 None,
             )
-            if candidate is None or candidate["recommendation"] != "suitable":
+            required_recommendation = (
+                "suitable" if outcome == "select_provider" else "partial_only"
+            )
+            if candidate is None or candidate["recommendation"] != required_recommendation:
                 raise ProviderResolutionError(
-                    f"provider research {capability_id!r}: recommended provider must be a suitable candidate"
+                    f"provider research {capability_id!r}: {outcome} requires a {required_recommendation} candidate"
                 )
         elif provider_id is not None:
             raise ProviderResolutionError(
-                f"provider research {capability_id!r}: recommended_provider_id requires select_provider"
+                f"provider research {capability_id!r}: recommended_provider_id requires a provider-selection outcome"
             )
         normalized_by_id[capability_id] = {
             "capability_id": capability_id,
@@ -557,12 +600,12 @@ def parse_provider_resolution(
                 f"duplicate provider resolution for capability: {capability_id}"
             )
         outcome = _resolution_string(raw["outcome"], "outcome", capability_id)
-        if outcome not in (*PROVIDER_GAP_OUTCOMES, "select_provider"):
+        if outcome not in (*PROVIDER_GAP_OUTCOMES, *PROVIDER_SELECTION_OUTCOMES):
             raise ProviderResolutionError(
                 f"provider resolution {capability_id!r}: invalid outcome"
             )
         provider_id = raw["provider_id"]
-        if outcome == "select_provider":
+        if outcome in PROVIDER_SELECTION_OUTCOMES:
             provider_id = _resolution_string(provider_id, "provider_id", capability_id)
             candidate = next(
                 (
@@ -572,16 +615,27 @@ def parse_provider_resolution(
                 ),
                 None,
             )
-            if candidate is None or candidate["recommendation"] != "suitable":
+            required_recommendation = (
+                "suitable" if outcome == "select_provider" else "partial_only"
+            )
+            if candidate is None or candidate["recommendation"] != required_recommendation:
                 raise ProviderResolutionError(
-                    f"provider resolution {capability_id!r}: selected provider must be a suitable research candidate"
+                    f"provider resolution {capability_id!r}: {outcome} requires a {required_recommendation} research candidate"
                 )
             provider = provider_by_id.get(provider_id)
-            if provider is None and require_catalog_for_selection:
+            if (
+                outcome == "select_provider"
+                and provider is None
+                and require_catalog_for_selection
+            ):
                 raise ProviderResolutionError(
                     f"selected provider is not present in the supplied catalog: {provider_id}"
                 )
-            if provider is not None and capability_id not in provider.capabilities:
+            if (
+                outcome == "select_provider"
+                and provider is not None
+                and capability_id not in provider.capabilities
+            ):
                 raise ProviderResolutionError(
                     f"provider {provider_id!r} does not claim capability {capability_id!r}"
                 )
@@ -598,7 +652,7 @@ def parse_provider_resolution(
                 )
         elif provider_id is not None:
             raise ProviderResolutionError(
-                f"provider resolution {capability_id!r}: provider_id requires select_provider"
+                f"provider resolution {capability_id!r}: provider_id requires a provider-selection outcome"
             )
         normalized_by_id[capability_id] = {
             "capability_id": capability_id,

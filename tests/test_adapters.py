@@ -48,7 +48,7 @@ def _provider_resolution_args(fixture: str, root: Path) -> list[str]:
     research = root / f"{fixture}-provider-research.json"
     research.write_text(
         json.dumps({
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "provider_research",
             "capabilities": [
                 {
@@ -70,7 +70,7 @@ def _provider_resolution_args(fixture: str, root: Path) -> list[str]:
     resolution = root / f"{fixture}-provider-resolution.json"
     resolution.write_text(
         json.dumps({
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "provider_resolution",
             "decisions": [
                 {
@@ -146,7 +146,7 @@ class AdapterBundleTests(unittest.TestCase):
             )
             self.assertEqual(validate_adapter_bundle(output), [])
             self.assertEqual(manifest["kind"], "adapter_bundle")
-            self.assertEqual(manifest["schema_version"], 6)
+            self.assertEqual(manifest["schema_version"], 7)
             self.assertIsNone(manifest["provider_research"])
             self.assertIsNone(manifest["provider_resolution"])
             self.assertEqual(manifest["provider_gap_proposals"], [])
@@ -451,6 +451,79 @@ class AdapterCliTests(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertEqual(stdout, "")
             self.assertIn("requires --provider-research", stderr)
+
+    def test_provider_decision_packet_exposes_partial_candidates_and_remaining_gaps(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_args = _provider_resolution_args(
+                "python-ml",
+                Path(temporary),
+            )
+            research_path = Path(artifact_args[1])
+            research = json.loads(research_path.read_text(encoding="utf-8"))
+            ml_item = next(
+                item
+                for item in research["capabilities"]
+                if item["capability_id"] == "ml_reproducibility"
+            )
+            ml_item.update({
+                "research_status": "completed",
+                "searches": [{
+                    "source": "https://example.invalid/ml-skill",
+                    "source_kind": "provider_repository",
+                    "query": "ML reproducibility skill",
+                    "result": "A partial model-evaluation provider was found.",
+                    "discovered_provider_ids": ["partial_ml_review"],
+                }],
+                "candidates": [{
+                    "provider_id": "partial_ml_review",
+                    "title": "Partial ML review",
+                    "primary_source": "https://example.invalid/ml-skill",
+                    "revision": "0123456789abcdef0123456789abcdef01234567",
+                    "kind": "skill",
+                    "compatible_targets": ["codex"],
+                    "license": "MIT",
+                    "trust_signals": ["Versioned primary source"],
+                    "exact_coverage": ["Model evaluation"],
+                    "coverage_gaps": ["Temporal leakage", "Dataset lineage"],
+                    "permissions": ["Read repository files"],
+                    "external_requirements": [],
+                    "platform_coupling": "Codex adapter required",
+                    "recommendation": "partial_only",
+                }],
+                "evidence": ["https://example.invalid/ml-skill"],
+                "limitation": None,
+                "recommended_outcome": "select_partial_provider",
+                "recommended_provider_id": "partial_ml_review",
+                "rationale": "Useful partial coverage with explicit remaining gaps.",
+            })
+            research_path.write_text(json.dumps(research), encoding="utf-8")
+
+            code, stdout, stderr = self._run([
+                "adapter-options",
+                str(FIXTURES / "python-ml"),
+                "--provider-research", str(research_path),
+            ])
+
+            self.assertEqual(code, 0, stderr)
+            payload = json.loads(stdout)
+            question = next(
+                item
+                for item in payload["provider_decision_questions"]
+                if item["capability_id"] == "ml_reproducibility"
+            )
+            self.assertIn("select_partial_provider", question["options"])
+            self.assertEqual(
+                question["candidate_options"][0]["provider_id"],
+                "partial_ml_review",
+            )
+            self.assertEqual(
+                question["candidate_options"][0]["coverage_gaps"],
+                ["Temporal leakage", "Dataset lineage"],
+            )
+            self.assertIn(
+                "does not claim",
+                payload["capability_provider_policy"]["partial_provider_boundary"],
+            )
 
     def test_adapter_options_is_a_complete_decision_packet_for_prefect(self):
         with tempfile.TemporaryDirectory() as temporary:
