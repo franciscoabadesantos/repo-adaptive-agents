@@ -114,22 +114,22 @@ def _parser() -> argparse.ArgumentParser:
             "roles and adapter targets supplied by the caller as a tool proposal. Capability matches "
             "are recorded as evidence, but no execution order, concurrency, consolidator, "
             "or mandatory team is generated. The command never applies or runs adapters. "
-            f"Read-only roles: {', '.join(r for r in role_ids() if r != 'implementation_agent')}. "
-            f"Targets: {', '.join(TARGETS)}."
+            "Use the repository-aware adapter-options command to obtain selectable roles "
+            "and targets after provider gaps have explicit decisions."
         ),
     )
     adapters.add_argument("repo", help="Local repository path to profile")
     adapters.add_argument(
         "--targets",
         required=True,
-        help=f"Required comma-separated subset of: {', '.join(TARGETS)}",
+        help="Required comma-separated subset exposed by unlocked adapter-options output",
     )
     adapters.add_argument(
         "--role",
         action="append",
         required=True,
         metavar="ROLE",
-        help="Repeat for each explicit read-only adapter role",
+        help="Repeat for each explicit read-only role exposed by unlocked adapter-options output",
     )
     adapters.add_argument("--output", required=True, help="Proposal directory (must not exist and be outside this repo)")
     adapters.add_argument("--compare-to", default=None, help="Destination repo to compare against, strictly read-only")
@@ -152,7 +152,10 @@ def _parser() -> argparse.ArgumentParser:
 
     adapter_options = subparsers.add_parser(
         "adapter-options",
-        help="Report matched adapters, preference-based options, and adapter targets without writing",
+        help=(
+            "Repository-aware adapter selection query; hides roles and targets until "
+            "provider gaps have explicit decisions"
+        ),
     )
     adapter_options.add_argument("repo", help="Local repository path to profile")
     adapter_options.add_argument("--request", default="", help="Optional user request to shape recommendations")
@@ -209,8 +212,6 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
-    subparsers.add_parser("roles", help="[experimental] List available canonical roles")
-    subparsers.add_parser("targets", help="[experimental] List supported render targets")
     return parser
 
 
@@ -659,12 +660,6 @@ def _run_install_adapters(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        if args.command == "roles":
-            print("\n".join(role_ids()))
-            return 0
-        if args.command == "targets":
-            print("\n".join(TARGETS))
-            return 0
         if args.command == "render-role":
             return _run_render_role(args)
         if args.command == "propose-adapters":

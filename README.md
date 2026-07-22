@@ -124,6 +124,11 @@ explicit decision: select a reviewed catalog provider, leave it unresolved, crea
 knowledge, or decompose it. The resulting adapter bundle records those decisions in schema
 version 4 so the installation preview remains auditable.
 
+Version 0.7.1 removes the global `roles` and `targets` catalog commands from the adoption
+CLI. Repository setup must use `adapter-options <repo>`; it reveals selectable roles and
+targets only after the provider-decision gate is complete. The canonical registries remain
+available to the renderer implementation and its tests.
+
 ## Knowledge provider resolution
 
 Inspect capability gaps using the empty built-in catalog:
@@ -305,14 +310,14 @@ Each output is classified by portability:
 - **target_specific** — the Codex TOML embeds runtime semantics (e.g. `sandbox_mode`,
   `model_reasoning_effort`) that do not carry across tools.
 
-Supported targets in the pilot are `skill`, `codex`, `claude`, and `copilot` (also printed by
-`repo-adaptive-agents targets`; roles by `repo-adaptive-agents roles`). The stable CLI target
-name `skill` means an optional portable Agent Skill artifact under `.agents/skills/`; it is
-not an IDE or harness. Codex, Claude, and Copilot wrappers are self-contained and do not
-depend on that artifact, so select `skill` only when the destination intentionally consumes
-or versions portable skills. Each target has an isolated renderer, so the three CLIs are
-never treated as having identical semantics. The roles are listed deterministically by
-`repo-adaptive-agents roles`.
+Supported targets in the pilot are `skill`, `codex`, `claude`, and `copilot`. The stable CLI
+target name `skill` means an optional portable Agent Skill artifact under `.agents/skills/`;
+it is not an IDE or harness. Codex, Claude, and Copilot wrappers are self-contained and do
+not depend on that artifact, so select `skill` only when the destination intentionally
+consumes or versions portable skills. Each target has an isolated renderer, so the three
+CLIs are never treated as having identical semantics. During repository adoption, roles and
+targets are exposed only by an unlocked `adapter-options <repo>` result; the renderer API
+keeps deterministic internal registries for development and testing.
 
 Render a proposal (this generates files; it never applies them):
 

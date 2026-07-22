@@ -888,13 +888,11 @@ class MultiCliCliTests(unittest.TestCase):
             self._run(["render-role", "--help"])
         self.assertEqual(exit_ctx.exception.code, 0)
 
-    def test_roles_and_targets_commands(self):
-        code, out, _ = self._run(["roles"])
-        self.assertEqual(code, 0)
-        self.assertEqual(out.strip().splitlines(), role_ids())
-        code, out, _ = self._run(["targets"])
-        self.assertEqual(code, 0)
-        self.assertEqual(out.strip().splitlines(), list(TARGETS))
+    def test_global_role_and_target_catalog_commands_are_not_public(self):
+        for command in ("roles", "targets"):
+            with self.assertRaises(SystemExit) as exit_ctx:
+                self._run([command])
+            self.assertEqual(exit_ctx.exception.code, 2)
 
     def test_render_role_cli_writes_and_validates(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -24,6 +24,8 @@ architectures, workflows, risks, and organizational preferences.
   available, report the limitation and ask whether to continue with unresolved gaps.
 - Record an explicit outcome for every provider gap before exposing adapter choices or
   generating an adapter bundle; do not bypass the CLI gate by inventing a role.
+- Treat `adapter-options <repo>` as the only adoption-time role/target query; global renderer
+  catalogs are implementation details, not repository recommendations.
 - Model capabilities before mapping them to agents.
 - Use subagents only when they materially help.
 - Prefer one implementation owner per file area.
