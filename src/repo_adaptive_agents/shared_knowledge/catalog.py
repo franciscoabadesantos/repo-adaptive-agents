@@ -145,20 +145,24 @@ def initialize_repository(
         conflicts = [
             field
             for field, value in requested.items()
-            if value is not None and value.strip() != getattr(existing, field)
+            if value is not None
+            and _required_text(value, field) != getattr(existing, field)
         ]
         if conflicts:
             raise SharedKnowledgeError(
                 "team knowledge is already initialized with different " + ", ".join(conflicts)
             )
         return target
-    repository_id = (repository or _remote_repository(root)).strip()
+    repository_id = _required_text(
+        _remote_repository(root) if repository is None else repository,
+        "repository",
+    )
     default_team = repository_id.rsplit("/", 1)[-1]
     config = KnowledgeConfig(
-        organization=_required_text(organization or "local", "organization"),
-        team=_required_text(team or default_team, "team"),
-        repository=_required_text(repository_id, "repository"),
-        default_owner=_required_text(owner or _default_owner(root), "default_owner"),
+        organization=_required_text("local" if organization is None else organization, "organization"),
+        team=_required_text(default_team if team is None else team, "team"),
+        repository=repository_id,
+        default_owner=_required_text(_default_owner(root) if owner is None else owner, "default_owner"),
     )
     target.mkdir()
     items = target / ITEMS_DIR
@@ -197,6 +201,8 @@ class KnowledgeStore:
                 if path.is_symlink() or not path.is_file():
                     raise KnowledgeContentError("item must be a regular Markdown file, not a symlink")
                 item = parse_item(path, relative_to=self.root)
+                if not ITEM_ID.fullmatch(item.id):
+                    raise KnowledgeContentError(f"invalid item ID: {item.id}")
                 if path.name != f"{item.id}.md":
                     raise KnowledgeContentError(f"filename must be {item.id}.md")
                 items.append(item)

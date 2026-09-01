@@ -131,6 +131,14 @@ def test_show_rejects_path_like_item_id(tmp_path: Path):
     assert "invalid knowledge item ID" in result.stderr
 
 
+def test_init_rejects_empty_explicit_metadata(tmp_path: Path):
+    repository = _git_repo(tmp_path)
+    result = _cli(repository, "init", "--team", "   ")
+    assert result.returncode == 2
+    assert "config team must be a non-empty string" in result.stderr
+    assert not (repository / ".team-knowledge").exists()
+
+
 def test_native_boundary_exposes_and_resolves_active_item(tmp_path: Path):
     repository = _git_repo(tmp_path)
     initialize_repository(repository, organization="acme", team="payments", repository="acme/service")
