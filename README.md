@@ -26,6 +26,10 @@ team-knowledge list
 team-knowledge check
 ```
 
+Add `--restricted` only when an item must be withheld from an agent whenever native
+admission says it is ineligible. Ordinary knowledge uses the normal visibility path while
+still requiring final validation before its body can be returned.
+
 Initialization creates this Git-friendly layout:
 
 ```text
@@ -59,13 +63,18 @@ outcomes, never prompts, source code, model responses, or knowledge bodies.
 ## Runtime boundary in increment one
 
 `repo_adaptive_agents.shared_knowledge` translates the simple Markdown contract into the
-existing `repo_adaptive_agents.admission_control` domain model. It uses the existing
-repository-instruction payload; no new resource ontology was added.
+existing `repo_adaptive_agents.admission_control` domain model. Generic notes use the
+minimal `SHARED_KNOWLEDGE` type and content-path payload, so they do not masquerade as
+repository instructions.
 
 The service can expose an admitted ID/title/summary index, pass externally chosen IDs to
 native validation, and return bodies and canonical citation labels only for validated
 items. It performs no keyword matching, semantic ranking, capability inference, or other
 deterministic relevance selection.
+
+Ordinary items map to native `ALLOW_WHEN_INADMISSIBLE`: their title and summary may remain
+visible, but their body is returned only after final validation. `exposure: restricted`
+maps to `REQUIRE_ADMISSIBLE` and withholds an ineligible item before selection.
 
 ## Development
 

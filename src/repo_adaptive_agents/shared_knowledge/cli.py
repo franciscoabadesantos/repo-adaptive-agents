@@ -42,6 +42,11 @@ def _parser() -> argparse.ArgumentParser:
     body.add_argument("--body", help="Markdown body text")
     body.add_argument("--body-file", metavar="PATH", help="Read the Markdown body from a UTF-8 file")
     add.add_argument("--owner", help="Override the configured default owner")
+    add.add_argument(
+        "--restricted",
+        action="store_true",
+        help="Withhold this item from agents whenever it is inadmissible",
+    )
 
     list_items = commands.add_parser("list", help="List shared team knowledge")
     _repo_argument(list_items)
@@ -83,7 +88,13 @@ def _run(args: argparse.Namespace) -> int:
 
     store = KnowledgeStore.open(args.repo)
     if args.command == "add":
-        item = store.add(args.title, args.summary, _read_body(args), owner=args.owner)
+        item = store.add(
+            args.title,
+            args.summary,
+            _read_body(args),
+            owner=args.owner,
+            restricted=args.restricted,
+        )
         print(f"Added {item.id}: {item.title}")
         print(f"Created {item.path}; review and commit it through the normal Git workflow.")
         return 0
@@ -105,7 +116,7 @@ def _run(args: argparse.Namespace) -> int:
         print(
             "Team knowledge is valid: "
             f"{result.active} active, {result.revoked} revoked, "
-            f"{result.exposable} available to agents."
+            f"{result.exposable} visible in the agent index."
         )
         return 0
     if args.command == "revoke":

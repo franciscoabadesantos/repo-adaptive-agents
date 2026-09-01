@@ -43,9 +43,8 @@ def _cli(repository: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _add(repository: Path, title: str = "Settlement retry contract") -> str:
-    result = _cli(
-        repository,
+def _add(repository: Path, title: str = "Settlement retry contract", *, restricted: bool = False) -> str:
+    arguments = [
         "add",
         "--title",
         title,
@@ -53,7 +52,10 @@ def _add(repository: Path, title: str = "Settlement retry contract") -> str:
         "Use when changing settlement retry behavior.",
         "--body",
         "Preserve the original idempotency key across every retry.",
-    )
+    ]
+    if restricted:
+        arguments.append("--restricted")
+    result = _cli(repository, *arguments)
     assert result.returncode == 0, result.stderr
     match = re.search(r"Added (tk-[0-9a-f]{12}):", result.stdout)
     assert match
@@ -87,6 +89,7 @@ def test_cli_init_add_list_show_check_and_revoke(tmp_path: Path):
     assert f"id: {item_id}" in source
     assert "owner: engineer@example.com" in source
     assert "state: active" in source
+    assert "exposure:" not in source
     assert "revision: 1" in source
 
     listed = _cli(repository, "list")
@@ -97,14 +100,14 @@ def test_cli_init_add_list_show_check_and_revoke(tmp_path: Path):
     assert shown.stdout == source
     checked = _cli(repository, "check")
     assert checked.returncode == 0
-    assert "1 active, 0 revoked, 1 available" in checked.stdout
+    assert "1 active, 0 revoked, 1 visible in the agent index" in checked.stdout
 
     revoked = _cli(repository, "revoke", item_id)
     assert revoked.returncode == 0
     assert f"Revoked {item_id}" in revoked.stdout
     checked = _cli(repository, "check")
     assert checked.returncode == 0
-    assert "0 active, 1 revoked, 0 available" in checked.stdout
+    assert "0 active, 1 revoked, 1 visible in the agent index" in checked.stdout
     updated = item_path.read_text(encoding="utf-8")
     assert "state: revoked" in updated
     assert "revision: 2" in updated
@@ -150,12 +153,13 @@ def test_native_boundary_exposes_and_resolves_active_item(tmp_path: Path):
     )
     catalog, _items = store.native_catalog()
     record = catalog.by_id()[item.id]
-    assert record.content.kind == native.ResourceKind.REPOSITORY_INSTRUCTION
-    assert record.content.payload.instruction_path == f".team-knowledge/items/{item.id}.md"
+    assert record.content.kind == native.ResourceKind.SHARED_KNOWLEDGE
+    assert record.content.payload.content_path == f".team-knowledge/items/{item.id}.md"
+    assert isinstance(record.content.payload, native.SharedKnowledgePayload)
     assert record.admission.scope == native.Scope(
         organization="acme", team="payments", repository="acme/service"
     )
-    assert record.admission.exposure_policy == native.ExposurePolicy.REQUIRE_ADMISSIBLE
+    assert record.admission.exposure_policy == native.ExposurePolicy.ALLOW_WHEN_INADMISSIBLE
 
     service = SharedKnowledgeService(store)
     exposure = service.expose_index(actor="second@example.com", task_id="task-1", effective_at=NOW)
@@ -182,6 +186,8 @@ def test_revoke_after_exposure_is_rejected_by_native_validation(tmp_path: Path):
     exposure = service.expose_index(effective_at=NOW)
 
     store.revoke(item.id)
+    current_exposure = service.expose_index(effective_at=NOW)
+    assert tuple(entry.id for entry in current_exposure.index) == (item.id,)
     resolution = service.validate_ids(exposure, (item.id,))
 
     assert resolution.items == ()
@@ -189,6 +195,36 @@ def test_revoke_after_exposure_is_rejected_by_native_validation(tmp_path: Path):
     assert native.ReasonCode.REVOKED in {
         reason.code for reason in resolution.validation.selection_decisions[0].reasons
     }
+
+
+def test_restricted_knowledge_is_withheld_when_inadmissible(tmp_path: Path):
+    repository = _git_repo(tmp_path)
+    initialize_repository(repository)
+    store = KnowledgeStore.open(repository)
+    ordinary = store.add("Ordinary note", "Useful ordinary context.", "Ordinary body.")
+    restricted = store.add(
+        "Restricted note",
+        "Sensitive context for approved use.",
+        "Restricted body.",
+        restricted=True,
+    )
+    assert "exposure: restricted" in (repository / restricted.path).read_text(encoding="utf-8")
+    store.revoke(ordinary.id)
+    store.revoke(restricted.id)
+
+    catalog, _items = store.native_catalog()
+    assert catalog.by_id()[ordinary.id].admission.exposure_policy == native.ExposurePolicy.ALLOW_WHEN_INADMISSIBLE
+    assert catalog.by_id()[restricted.id].admission.exposure_policy == native.ExposurePolicy.REQUIRE_ADMISSIBLE
+    service = SharedKnowledgeService(store)
+    exposure = service.expose_index(effective_at=NOW)
+
+    assert tuple(entry.id for entry in exposure.index) == (ordinary.id,)
+    result = service.validate_ids(exposure, (ordinary.id, restricted.id))
+    assert result.items == ()
+    decisions = {decision.resource_id: decision for decision in result.validation.selection_decisions}
+    assert native.ReasonCode.REVOKED in {reason.code for reason in decisions[ordinary.id].reasons}
+    assert native.ReasonCode.NOT_EXPOSED in {reason.code for reason in decisions[restricted.id].reasons}
+    assert native.ReasonCode.REVOKED in {reason.code for reason in decisions[restricted.id].reasons}
 
 
 def test_manual_change_after_exposure_is_rejected_by_native_validation(tmp_path: Path):

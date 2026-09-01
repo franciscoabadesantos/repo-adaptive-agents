@@ -31,6 +31,8 @@ def _context(
 def _payload(kind):
     if kind == native.ResourceKind.AGENT_SKILL:
         return native.SkillPayload(("codex",), "SKILL.md")
+    if kind == native.ResourceKind.SHARED_KNOWLEDGE:
+        return native.SharedKnowledgePayload(".team-knowledge/items/note.md")
     if kind == native.ResourceKind.REPOSITORY_INSTRUCTION:
         return native.RepositoryInstructionPayload("AGENTS.md")
     if kind in {native.ResourceKind.MCP_TOOL, native.ResourceKind.MCP_RESOURCE}:

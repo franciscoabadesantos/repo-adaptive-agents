@@ -7,7 +7,9 @@ from pathlib import Path
 
 
 REQUIRED_FIELDS = ("id", "title", "summary", "owner", "state", "revision")
+OPTIONAL_FIELDS = ("exposure",)
 VALID_STATES = frozenset({"active", "revoked"})
+VALID_EXPOSURES = frozenset({"normal", "restricted"})
 
 
 class KnowledgeContentError(ValueError):
@@ -21,6 +23,7 @@ class KnowledgeItem:
     summary: str
     owner: str
     state: str
+    exposure: str
     revision: int
     body: str
     path: Path
@@ -56,7 +59,7 @@ def parse_item(path: Path, *, relative_to: Path | None = None) -> KnowledgeItem:
             raise KnowledgeContentError(f"frontmatter line {number} must use key: value")
         key, value = line.split(":", 1)
         key = key.strip()
-        if key not in REQUIRED_FIELDS:
+        if key not in {*REQUIRED_FIELDS, *OPTIONAL_FIELDS}:
             raise KnowledgeContentError(f"unsupported frontmatter field: {key or '<empty>'}")
         if key in values:
             raise KnowledgeContentError(f"duplicate frontmatter field: {key}")
@@ -68,6 +71,9 @@ def parse_item(path: Path, *, relative_to: Path | None = None) -> KnowledgeItem:
     state = values["state"].strip()
     if state not in VALID_STATES:
         raise KnowledgeContentError("state must be active or revoked")
+    exposure = values.get("exposure", "normal").strip()
+    if exposure not in VALID_EXPOSURES:
+        raise KnowledgeContentError("exposure must be normal or restricted")
     try:
         revision = int(values["revision"])
     except ValueError as error:
@@ -85,6 +91,7 @@ def parse_item(path: Path, *, relative_to: Path | None = None) -> KnowledgeItem:
         summary=_one_line(values["summary"], "summary"),
         owner=_one_line(values["owner"], "owner"),
         state=state,
+        exposure=exposure,
         revision=revision,
         body=body,
         path=stored_path,
@@ -100,14 +107,21 @@ def render_item(item: KnowledgeItem) -> str:
         "summary": _one_line(item.summary, "summary"),
         "owner": _one_line(item.owner, "owner"),
         "state": item.state,
+        "exposure": item.exposure,
         "revision": str(item.revision),
     }
     if values["state"] not in VALID_STATES:
         raise KnowledgeContentError("state must be active or revoked")
+    if values["exposure"] not in VALID_EXPOSURES:
+        raise KnowledgeContentError("exposure must be normal or restricted")
     if item.revision < 1:
         raise KnowledgeContentError("revision must be a positive integer")
     body = item.body.strip()
     if not body:
         raise KnowledgeContentError("body must be non-empty")
-    frontmatter = "\n".join(f"{field}: {values[field]}" for field in REQUIRED_FIELDS)
+    rendered_fields = ["id", "title", "summary", "owner", "state"]
+    if values["exposure"] == "restricted":
+        rendered_fields.append("exposure")
+    rendered_fields.append("revision")
+    frontmatter = "\n".join(f"{field}: {values[field]}" for field in rendered_fields)
     return f"---\n{frontmatter}\n---\n\n{body}\n"

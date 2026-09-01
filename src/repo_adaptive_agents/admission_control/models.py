@@ -11,6 +11,7 @@ from typing import Any, Mapping, TypeAlias
 
 class ResourceKind(str, Enum):
     AGENT_SKILL = "agent_skill"
+    SHARED_KNOWLEDGE = "shared_knowledge"
     REPOSITORY_INSTRUCTION = "repository_instruction"
     MCP_TOOL = "mcp_tool"
     MCP_RESOURCE = "mcp_resource"
@@ -262,6 +263,14 @@ class RepositoryInstructionPayload:
 
 
 @dataclass(frozen=True)
+class SharedKnowledgePayload:
+    content_path: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "content_path", normalize_repository_path(self.content_path))
+
+
+@dataclass(frozen=True)
 class MCPPayload:
     server: str
     capability: str
@@ -294,7 +303,7 @@ class EnvironmentContractPayload:
             raise ValueError("contract_class must be non-empty")
 
 
-ResourcePayload: TypeAlias = SkillPayload | RepositoryInstructionPayload | MCPPayload | PolicyPayload | EnvironmentContractPayload
+ResourcePayload: TypeAlias = SkillPayload | SharedKnowledgePayload | RepositoryInstructionPayload | MCPPayload | PolicyPayload | EnvironmentContractPayload
 
 
 @dataclass(frozen=True)

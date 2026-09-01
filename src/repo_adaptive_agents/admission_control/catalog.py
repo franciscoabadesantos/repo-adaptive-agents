@@ -17,6 +17,7 @@ from .models import (
     ResourceKind,
     ResourcePayload,
     ResourceRecord,
+    SharedKnowledgePayload,
     SkillPayload,
     to_data,
 )
@@ -83,6 +84,7 @@ def _validate_content(content: ResourceContent) -> None:
         raise CatalogError(f"resource {content.id} kind must be a ResourceKind")
     expected_payload = {
         ResourceKind.AGENT_SKILL: SkillPayload,
+        ResourceKind.SHARED_KNOWLEDGE: SharedKnowledgePayload,
         ResourceKind.REPOSITORY_INSTRUCTION: RepositoryInstructionPayload,
         ResourceKind.MCP_TOOL: MCPPayload,
         ResourceKind.MCP_RESOURCE: MCPPayload,

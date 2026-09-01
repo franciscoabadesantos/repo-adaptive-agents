@@ -59,16 +59,23 @@ only contributor-supplied requirements. Owner defaults from `config.json`; repos
 scope, active lifecycle, normal non-sensitive exposure, and no expiry are implicit.
 Advanced admission metadata is not part of the first increment.
 
-The Markdown path is translated internally to the native
-`REPOSITORY_INSTRUCTION` payload. No new native resource kind is needed: the payload only
-identifies repository-local content, while title, summary, body, identity, lifecycle, and
-scope retain their native meanings.
+Ordinary items omit exposure metadata. Exposure-sensitive items add one advanced field:
+
+```markdown
+exposure: restricted
+```
+
+The Markdown path is translated internally to the native `SHARED_KNOWLEDGE` payload.
+Shared knowledge is deliberately distinct from `REPOSITORY_INSTRUCTION`: reusable context
+does not inherit the semantics of an `AGENTS.md`-style instruction. The new type adds only
+a content path; governance remains in the existing native envelope.
 
 ## Contribution workflow
 
 Commands operate on the current Git repository unless `--repo PATH` is supplied:
 
-- `team-knowledge add --title TITLE --summary SUMMARY (--body TEXT | --body-file FILE)`
+- `team-knowledge add --title TITLE --summary SUMMARY (--body TEXT | --body-file FILE)
+  [--restricted]`
   creates one item and records `contribution_created` locally.
 - `team-knowledge list` shows ID, state, title, and summary without internal control data.
 - `team-knowledge show ID` prints the source Markdown for direct inspection.
@@ -100,7 +107,9 @@ Markdown catalog
 
 Selection is never based on keywords, capabilities, deterministic scoring, or a semantic
 ontology. The model owns relevance. The service never returns a body until its ID survives
-native validation. Revoked content is neither indexed nor returned.
+native validation. Ordinary inadmissible knowledge may remain visible in the title/summary
+index but cannot survive validation. Restricted inadmissible knowledge is withheld from the
+index as well.
 
 ## Visible citations
 
@@ -161,9 +170,10 @@ The shared-knowledge package translates each item to one native `ResourceRecord`
 
 - active/revoked -> native lifecycle;
 - configured repository -> native repository scope;
-- Markdown path -> existing repository-instruction payload;
+- Markdown path -> generic shared-knowledge payload;
 - title, summary, and body -> native model-visible content;
-- normal knowledge -> selectable with exposure requiring admissibility.
+- normal knowledge -> selectable with visibility independent from final admissibility;
+- `exposure: restricted` -> visibility requires admissibility.
 
 It calls `admit()`, records the exact index exposure with `record_exposure()`, and calls
 `validate()` against the current catalog. It does not reproduce lifecycle, scope, digest,
@@ -177,8 +187,8 @@ change detection, exposure, or post-selection rules.
 4. Manual Markdown editing remains supported and `check` rejects malformed or duplicate
    items without rewriting them.
 5. Valid active items enter the native catalog and admitted title/summary index.
-6. Revoked items are not exposed; an item revoked or changed after exposure is rejected by
-   native validation.
+6. Revoked or changed items never survive native validation; restricted revoked items are
+   also withheld before selection.
 7. Invalid items cannot enter a validated native catalog.
 8. End-to-end tests exercise the installed CLI against a real temporary Git repository.
 9. Normal output contains no admission receipts, hashes, catalog revisions, reason codes,
@@ -187,3 +197,18 @@ change detection, exposure, or post-selection rules.
 
 Live model calls, the Codex skill, feedback commands, citation rendering in an agent answer,
 and pilot analysis are explicitly deferred until increment one is reviewed.
+
+## Boundary review decision — 2026-09-02
+
+The initial increment temporarily mapped team knowledge to `REPOSITORY_INSTRUCTION` and
+made all visibility require admissibility. Review rejected both defaults:
+
+- the content-category enum is a semantic contract even though the current admission
+  algorithm does not branch on kind, so generic knowledge now has a payload-only
+  `SHARED_KNOWLEDGE` type;
+- ordinary visibility uses `ALLOW_WHEN_INADMISSIBLE`, while final validation remains
+  unchanged and authoritative;
+- the optional `exposure: restricted` field maps to `REQUIRE_ADMISSIBLE` for content that
+  must be withheld before semantic selection.
+
+No lifecycle, scope, precedence, conflict, digest, or validation algorithm changed.

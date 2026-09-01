@@ -232,7 +232,15 @@ class KnowledgeStore:
             raise SharedKnowledgeError(f"item ID {item.id} does not match filename {path.name}")
         return item
 
-    def add(self, title: str, summary: str, body: str, *, owner: str | None = None) -> KnowledgeItem:
+    def add(
+        self,
+        title: str,
+        summary: str,
+        body: str,
+        *,
+        owner: str | None = None,
+        restricted: bool = False,
+    ) -> KnowledgeItem:
         for _attempt in range(10):
             item_id = f"tk-{uuid.uuid4().hex[:12]}"
             path = self.items_directory / f"{item_id}.md"
@@ -246,6 +254,7 @@ class KnowledgeStore:
             summary,
             owner or self.config.default_owner,
             "active",
+            "restricted" if restricted else "normal",
             1,
             body,
             path.relative_to(self.root),
@@ -280,11 +289,11 @@ class KnowledgeStore:
         records: list[native.ResourceRecord] = []
         for item in items:
             lifecycle = native.LifecycleState.APPROVED if item.state == "active" else native.LifecycleState.REVOKED
-            payload = native.RepositoryInstructionPayload(item.path.as_posix())
+            payload = native.SharedKnowledgePayload(item.path.as_posix())
             content = native.build_content(
                 item.id,
                 str(item.revision),
-                native.ResourceKind.REPOSITORY_INSTRUCTION,
+                native.ResourceKind.SHARED_KNOWLEDGE,
                 item.title,
                 item.summary,
                 item.body,
@@ -302,7 +311,11 @@ class KnowledgeStore:
                         ),
                         compatibility=(),
                         dependencies=(),
-                        exposure_policy=native.ExposurePolicy.REQUIRE_ADMISSIBLE,
+                        exposure_policy=(
+                            native.ExposurePolicy.REQUIRE_ADMISSIBLE
+                            if item.exposure == "restricted"
+                            else native.ExposurePolicy.ALLOW_WHEN_INADMISSIBLE
+                        ),
                         selectable=True,
                     ),
                 )

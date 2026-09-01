@@ -23,3 +23,15 @@ derive authoritative facts.
 The initial extraction is protected by source-hash and callable-origin tests.
 Future product changes may evolve it, but must do so after this known baseline.
 
+## Product evolution: generic shared knowledge
+
+On 2026-09-02 the product added `SHARED_KNOWLEDGE` and `SharedKnowledgePayload` because
+generic reusable Markdown is not a repository instruction. This is a content-category and
+payload-only extension. The native admission and validation algorithms are unchanged.
+
+The product translation also preserves the validated distinction between visibility and
+final eligibility:
+
+- ordinary knowledge uses `ALLOW_WHEN_INADMISSIBLE`;
+- exposure-sensitive knowledge uses `REQUIRE_ADMISSIBLE`;
+- both still require final native validation before their bodies are returned.
