@@ -1,4 +1,4 @@
-"""Atomic audit-trail persistence for an admission-control run."""
+"""Atomic audit persistence for native admission and validation results."""
 
 from __future__ import annotations
 
@@ -8,62 +8,55 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from .catalog import ResourceCatalog
-from .models import AdmissionRun, to_data
+from .models import AdmissionSnapshot, ExposureReceipt, ValidationResult, to_data
 
 
 class AuditWriteError(ValueError):
     pass
 
 
-def _json(value) -> str:
+def _json(value: Any) -> str:
     return json.dumps(to_data(value), indent=2, sort_keys=True) + "\n"
 
 
 def write_audit_bundle(
-    run: AdmissionRun,
-    pre_catalog: ResourceCatalog,
+    snapshot: AdmissionSnapshot,
+    exposure: ExposureReceipt,
+    result: ValidationResult,
+    admission_catalog: ResourceCatalog,
+    current_catalog: ResourceCatalog,
     output_dir: str | Path,
-    *,
-    post_catalog: ResourceCatalog | None = None,
 ) -> tuple[Path, ...]:
-    output = Path(output_dir).expanduser().resolve()
-    if output.exists() or output.is_symlink():
+    requested_output = Path(output_dir).expanduser()
+    if requested_output.exists() or requested_output.is_symlink():
+        raise AuditWriteError(f"output already exists; refusing to overwrite: {requested_output}")
+    output = requested_output.resolve()
+    if output.exists():
         raise AuditWriteError(f"output already exists; refusing to overwrite: {output}")
-    pre_catalog = pre_catalog.validated()
-    current_catalog = (post_catalog or pre_catalog).validated()
-    if pre_catalog.sha256() != run.pre_catalog_sha256 or current_catalog.sha256() != run.post_catalog_sha256:
-        raise AuditWriteError("catalogs do not match the admission run digests")
-    current = current_catalog.by_id()
-    final_records = [current[resource_id] for resource_id in run.final_exposure_ids]
+    admission_catalog = admission_catalog.validated()
+    current_catalog = current_catalog.validated()
+    if snapshot.catalog_sha256 != admission_catalog.sha256():
+        raise AuditWriteError("admission catalog does not match snapshot")
+    if result.current_catalog_sha256 != current_catalog.sha256() or result.exposure != exposure:
+        raise AuditWriteError("current catalog or exposure does not match validation result")
+
     rendered = {
-        "catalog_snapshot.json": _json({
-            "pre": {"sha256": pre_catalog.sha256(), "catalog": pre_catalog.canonical_data()},
-            "post": {"sha256": current_catalog.sha256(), "catalog": current_catalog.canonical_data()},
+        "admission_context.json": _json(snapshot.context.model_facing_data()),
+        "catalog_snapshots.json": _json({
+            "admission": {"revision": admission_catalog.revision, "sha256": admission_catalog.sha256(), "catalog": admission_catalog.canonical_data()},
+            "current": {"revision": current_catalog.revision, "sha256": current_catalog.sha256(), "catalog": current_catalog.canonical_data()},
         }),
-        "resolution_context.json": _json(run.context),
-        "prefilter_decisions.json": _json(run.prefilter_decisions),
-        "exposed_resources.json": _json({
-            "selectable": run.exposed_selectable_resources,
-            "mandatory_controls": run.exposed_mandatory_controls,
-        }),
-        "raw_model_selections.json": _json(run.raw_model_selections),
-        "post_validation_decisions.json": _json({
-            "decisions": run.post_validation_decisions,
-            "violations": run.violations,
-            "blocked": run.blocked,
-        }),
-        "mandatory_controls.json": _json(run.mandatory_control_ids),
-        "final_exposure_set.json": _json({
-            "selected_ids": run.final_selected_ids,
-            "mandatory_control_ids": run.mandatory_control_ids,
-            "final_exposure_ids": run.final_exposure_ids,
-            "resources": final_records,
-        }),
+        "admission_decisions.json": _json({"resources": snapshot.decisions, "rules": snapshot.rule_decisions, "reasons": snapshot.reasons, "blocked": snapshot.blocked}),
+        "exposable_content.json": _json(snapshot.exposable_resources),
+        "actual_exposure_receipt.json": _json(exposure),
+        "raw_selections.json": _json(result.raw_selections),
+        "validation_result.json": _json(result),
     }
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "files": [
             {"path": name, "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()}
             for name, content in sorted(rendered.items())

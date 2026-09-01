@@ -1,4 +1,10 @@
-# Admission-control experiment
+# First admission-control experiment (preserved)
+
+This document describes the first frozen admission-control slice at commit
+`86bc867cf63c53b74cf09e18a90f8f759a98c12e`. It is retained for audit history.
+The replacement native package boundary on
+`experiment/admission-control-native` is documented in
+[`native_boundary/NATIVE_ARCHITECTURE.md`](native_boundary/NATIVE_ARCHITECTURE.md).
 
 This is a parallel, non-product experiment derived from the independently
 scored knowledge-resolution holdout. The earlier cases are now known and are
