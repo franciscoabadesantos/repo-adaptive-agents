@@ -1,0 +1,23 @@
+{
+  "first_blind_evaluation": {
+    "implementation_commit": "86bc867cf63c53b74cf09e18a90f8f759a98c12e",
+    "implementation_tree": "031910328ba1bde5d78ddbe7b31817b237b8fa81",
+    "model_calls": 270,
+    "native_attribution_valid": false,
+    "reason": "The frozen package required a substantive compatibility adapter.",
+    "final_scoring_report": "pending human-readable report"
+  },
+  "native_public_evaluation": {
+    "implementation_commit": "b610f1b1232eeb2840e5cca2ddaf450ba64fa491",
+    "implementation_tree": "a0e784208ab3df5e8889cc96c2319448ffab4687",
+    "model_calls": 250,
+    "condition_records": 375,
+    "shared_av_byte_identical": true,
+    "prohibited_pv_exposures": 0,
+    "withheld_content_leaks": 0,
+    "macro_selected_set_stability": {"A": 0.96, "V": 1.0, "PV": 1.0},
+    "hidden_success_criteria_scored": false,
+    "final_scoring_report": "pending human-readable report"
+  }
+}
+
