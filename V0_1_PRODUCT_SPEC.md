@@ -124,7 +124,7 @@ Citation labels come from validated resource identities, not model-authored titl
 
 ## Feedback
 
-The next increment will expose:
+Increment two exposes:
 
 ```sh
 team-knowledge feedback ITEM_ID useful
@@ -140,7 +140,8 @@ incorrect knowledge is corrected or revoked through the normal Git workflow.
 Events are appended to ignored `.team-knowledge/events.jsonl` and stay local/private by
 default. Allowed event types are `contribution_created`, `contribution_available`,
 `item_exposed`, `item_selected`, `validation_accepted`, `validation_rejected`, `item_cited`,
-and `feedback_recorded` with a `useful`, `outdated`, or `incorrect` value.
+`item_body_returned`, and `feedback_recorded` with a `useful`, `outdated`, or `incorrect`
+value.
 
 Events may contain timestamp, item ID, actor, repository identity, task/session correlation
 ID, validation outcome, and reason category. They must not contain raw prompts, source code,
@@ -153,10 +154,13 @@ item; person B's task later selects, validates, uses, and visibly cites it.
 ## Initial agent integration
 
 The single target is Codex because this repository and pilot already use repository-local
-Codex instructions. The next increment should install one repository-local Agent Skill that:
+Codex instructions. `team-knowledge init --codex` installs one repository-local Agent Skill
+that:
 
-1. calls a machine-readable command to obtain the admitted ID/title/summary index;
-2. asks Codex to choose relevant IDs and passes only those IDs to a resolve command;
+1. calls `team-knowledge index --json` to obtain an exposure ID and the admitted
+   ID/revision/title/summary index;
+2. asks Codex to choose relevant IDs and passes only those IDs plus the exposure ID to
+   `team-knowledge use --json`;
 3. receives validated bodies plus canonical citation labels;
 4. instructs Codex to append the visible disclosure; and
 5. records selected, accepted/rejected, and cited events without prompt or body telemetry.
@@ -195,8 +199,8 @@ change detection, exposure, or post-selection rules.
    benchmark terms, or research terminology.
 10. The full existing repository test suite remains green.
 
-Live model calls, the Codex skill, feedback commands, citation rendering in an agent answer,
-and pilot analysis are explicitly deferred until increment one is reviewed.
+Pilot analytics, additional agents, hosted infrastructure, and automatic observation of the
+final Codex response remain deferred.
 
 ## Boundary review decision — 2026-09-02
 
@@ -212,3 +216,23 @@ made all visibility require admissibility. Review rejected both defaults:
   must be withheld before semantic selection.
 
 No lifecycle, scope, precedence, conflict, digest, or validation algorithm changed.
+
+## Increment-two implementation
+
+`index --json` persists the exact native exposure receipt under private Git metadata and
+returns an opaque exposure ID plus ID, revision, title, and summary. It never returns a
+knowledge body or private governance metadata.
+
+`use --exposure ID --json RESOURCE...` reloads that receipt, re-reads the authoritative
+Markdown catalog, and invokes native validation. Its `knowledge` and `citations` arrays
+contain only validated resources; rejected entries contain only ID, exposed revision when
+known, and rejected status. Native mandatory additions are reported separately.
+
+Runtime events include resource revision and a stable repository-scoped pseudonym derived
+from the current checkout's Git identity. `item_body_returned` is reliable because the CLI
+records it when emitting validated content. The repository Skill requires visible citation,
+but v0.1 cannot reliably inspect Codex's final response, so it does not claim an automatic
+`item_cited` event.
+
+Exposure receipt files may accumulate under Git metadata during the pilot. Expiration and
+cleanup are deferred because they do not affect Git history or model-visible content.

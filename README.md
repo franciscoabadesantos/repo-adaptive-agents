@@ -1,13 +1,10 @@
-# repo-adaptive-agents
+# Shared team knowledge for coding agents
 
-This branch contains the first vertical slice of **shared team knowledge for coding
-agents**. An engineer can contribute ordinary Markdown in a Git repository, inspect the
-catalog, and load it through the validated native control boundary.
+This repository contains a one-team v0.1 for contributing useful engineering knowledge
+once and reusing it safely with Codex. Knowledge is ordinary Markdown reviewed through the
+repository's normal Git workflow.
 
-Live model calls and the Codex integration are not implemented yet. Increment one proves
-the repository workflow and native enforcement before an agent is connected.
-
-## Try the shared-knowledge workflow
+## Team quickstart
 
 Python 3.11 or newer is required.
 
@@ -17,20 +14,41 @@ source .venv/bin/activate
 python -m pip install -e '.[dev]'
 
 cd /path/to/an/existing/git/repository
-team-knowledge init --team payments
+team-knowledge init --team payments --codex
 team-knowledge add \
   --title "Settlement retry contract" \
   --summary "Use when changing settlement retry behavior." \
   --body "Preserve the original idempotency key across every retry."
-team-knowledge list
-team-knowledge check
 ```
 
-Add `--restricted` only when an item must be withheld from an agent whenever native
-admission says it is ineligible. Ordinary knowledge uses the normal visibility path while
-still requiring final validation before its body can be returned.
+Commit `.team-knowledge/` and `.agents/skills/team-knowledge/SKILL.md`, then use Codex in
+that repository. For a relevant coding task, the Skill tells Codex to inspect the knowledge
+index, choose relevant IDs, request their validated bodies, and disclose only knowledge it
+actually used:
 
-Initialization creates this Git-friendly layout:
+```text
+Used team knowledge: Settlement retry contract
+```
+
+The integration is one inspectable Agent Skill. It contains no catalog, ranking, admission,
+or validation implementation.
+
+## Everyday commands
+
+```sh
+team-knowledge add --help
+team-knowledge list
+team-knowledge show tk-<generated-id>
+team-knowledge check
+team-knowledge revoke tk-<generated-id>
+team-knowledge feedback tk-<generated-id> useful
+team-knowledge feedback tk-<generated-id> outdated
+team-knowledge feedback tk-<generated-id> incorrect
+```
+
+Feedback records a local event and never changes or revokes the item automatically.
+
+Initialization creates readable, Git-backed product files:
 
 ```text
 .team-knowledge/
@@ -39,58 +57,49 @@ Initialization creates this Git-friendly layout:
   items/
     .gitkeep
     tk-<generated-id>.md
+.agents/
+  skills/
+    team-knowledge/
+      SKILL.md
 ```
 
-Each item is readable Markdown with minimal frontmatter: generated ID, title, usefulness
-summary, owner, state, and revision. The body remains ordinary Markdown. Commit and review
-these files through the team's normal pull-request workflow.
+Local events stay in ignored `.team-knowledge/events.jsonl`. Exact exposure receipts are
+kept under private Git metadata rather than the worktree. Neither contains prompts, source
+code, model responses, or knowledge bodies.
 
-Useful commands:
+## Agent CLI contract
+
+The Skill uses two machine-readable commands:
 
 ```sh
-team-knowledge add --help
-team-knowledge list
-team-knowledge show tk-<generated-id>
-team-knowledge check
-team-knowledge revoke tk-<generated-id>
+team-knowledge index --json
+team-knowledge use --exposure exp-... --json tk-...
 ```
 
-`revoke` preserves the file and Git history while making the item unavailable. `check`
-rejects malformed content and verifies the real native catalog mapping. Local pilot events
-are written to the ignored `.team-knowledge/events.jsonl`; they contain identifiers and
-outcomes, never prompts, source code, model responses, or knowledge bodies.
+`index` returns only an exposure ID and admitted ID/revision/title/summary entries. It never
+returns bodies, owners, lifecycle details, or control traces. The model decides semantic
+relevance.
 
-## Runtime boundary in increment one
+`use` reloads that exact native exposure receipt, re-reads current Markdown, runs native
+validation, and returns bodies and citation titles only for validated resources. Changed,
+revoked, unknown, or unexposed selections appear as rejected without their bodies.
 
-`repo_adaptive_agents.shared_knowledge` translates the simple Markdown contract into the
-existing `repo_adaptive_agents.admission_control` domain model. Generic notes use the
-minimal `SHARED_KNOWLEDGE` type and content-path payload, so they do not masquerade as
-repository instructions.
+Ordinary knowledge may remain title/summary-visible when later inadmissible, but cannot
+survive final validation. Add `--restricted` when creating content that must also be
+withheld before selection.
 
-The service can expose an admitted ID/title/summary index, pass externally chosen IDs to
-native validation, and return bodies and canonical citation labels only for validated
-items. It performs no keyword matching, semantic ranking, capability inference, or other
-deterministic relevance selection.
+## Architecture and development
 
-Ordinary items map to native `ALLOW_WHEN_INADMISSIBLE`: their title and summary may remain
-visible, but their body is returned only after final validation. `exposure: restricted`
-maps to `REQUIRE_ADMISSIBLE` and withholds an ineligible item before selection.
-
-## Development
+The thin translation in `repo_adaptive_agents.shared_knowledge` maps Markdown to the native
+`SHARED_KNOWLEDGE` resource type in `repo_adaptive_agents.admission_control`. It does not
+perform keyword matching, semantic ranking, capability inference, or coverage scoring.
 
 ```sh
 python -m pytest
 ```
 
-The complete increment-one behavior and deferred work are defined in
-[`V0_1_PRODUCT_SPEC.md`](V0_1_PRODUCT_SPEC.md).
-
-## Research and legacy tooling
-
+The complete scope and limitations are in [`V0_1_PRODUCT_SPEC.md`](V0_1_PRODUCT_SPEC.md).
 The public-safe research decision record is in [`docs/research/`](docs/research/README.md).
-Private gold, raw model outputs, and complete evaluation trees remain outside normal Git
-history.
 
-The older repository profiler, capability recommender, provider flow, role renderer, and
-adapter installer remain temporarily available through commands marked `legacy`. They are
-not the shared-knowledge product path and will be considered for removal separately.
+The older profiler, provider, role, and adapter commands remain marked `legacy`; they are
+not part of the shared-knowledge product path.
