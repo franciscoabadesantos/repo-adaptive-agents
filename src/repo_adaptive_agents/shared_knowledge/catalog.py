@@ -24,6 +24,7 @@ KNOWLEDGE_DIR = ".team-knowledge"
 CONFIG_FILE = "config.json"
 ITEMS_DIR = "items"
 EVENTS_FILE = "events.jsonl"
+RUNTIME_DIR = "runtime"
 ITEM_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
 
 
@@ -122,6 +123,18 @@ def load_config(root: Path) -> KnowledgeConfig:
     )
 
 
+def _ensure_local_ignores(target: Path) -> None:
+    path = target / ".gitignore"
+    if path.is_symlink():
+        raise SharedKnowledgeError(f"team knowledge ignore file must not be a symlink: {path}")
+    existing = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    required = (f"/{EVENTS_FILE}", f"/{RUNTIME_DIR}/")
+    missing = [entry for entry in required if entry not in existing]
+    if missing:
+        content = "\n".join((*existing, *missing)).strip() + "\n"
+        path.write_text(content, encoding="utf-8")
+
+
 def initialize_repository(
     path: str | Path = ".",
     *,
@@ -152,6 +165,7 @@ def initialize_repository(
             raise SharedKnowledgeError(
                 "team knowledge is already initialized with different " + ", ".join(conflicts)
             )
+        _ensure_local_ignores(target)
         return target
     repository_id = _required_text(
         _remote_repository(root) if repository is None else repository,
@@ -168,7 +182,7 @@ def initialize_repository(
     items = target / ITEMS_DIR
     items.mkdir()
     (target / CONFIG_FILE).write_text(json.dumps(config.to_data(), indent=2) + "\n", encoding="utf-8")
-    (target / ".gitignore").write_text(f"/{EVENTS_FILE}\n", encoding="utf-8")
+    _ensure_local_ignores(target)
     (items / ".gitkeep").write_text("", encoding="utf-8")
     return target
 
@@ -191,13 +205,18 @@ class KnowledgeStore:
         )
 
     def runtime_directory(self) -> Path:
-        """Keep ephemeral exposure receipts under Git metadata, never the worktree."""
+        """Keep ephemeral exposure receipts writable but excluded from Git history."""
 
-        git_path = _git(self.root, "rev-parse", "--git-path", "team-knowledge")
-        if git_path is None:
-            raise SharedKnowledgeError("cannot locate private Git metadata for team knowledge")
-        path = Path(git_path)
-        return path.resolve() if path.is_absolute() else (self.root / path).resolve()
+        ignore_path = self.directory / ".gitignore"
+        try:
+            ignored = ignore_path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError) as error:
+            raise SharedKnowledgeError(f"cannot verify local runtime ignore rule: {error}") from error
+        if f"/{RUNTIME_DIR}/" not in ignored:
+            raise SharedKnowledgeError(
+                "team knowledge runtime is not ignored; run 'team-knowledge init' to update local safeguards"
+            )
+        return self.directory / RUNTIME_DIR
 
     @classmethod
     def open(cls, path: str | Path = ".") -> "KnowledgeStore":

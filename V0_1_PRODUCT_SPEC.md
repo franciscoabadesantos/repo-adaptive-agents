@@ -219,9 +219,11 @@ No lifecycle, scope, precedence, conflict, digest, or validation algorithm chang
 
 ## Increment-two implementation
 
-`index --json` persists the exact native exposure receipt under private Git metadata and
-returns an opaque exposure ID plus ID, revision, title, and summary. It never returns a
-knowledge body or private governance metadata.
+`index --json` persists the exact native exposure receipt under ignored
+`.team-knowledge/runtime/` and returns an opaque exposure ID plus ID, revision, title, and
+summary. It never returns a knowledge body or private governance metadata. `init` installs
+and repairs the required local ignore rule; `index` refuses to write if that safeguard is
+missing.
 
 `use --exposure ID --json RESOURCE...` reloads that receipt, re-reads the authoritative
 Markdown catalog, and invokes native validation. Its `knowledge` and `citations` arrays
@@ -234,5 +236,6 @@ records it when emitting validated content. The repository Skill requires visibl
 but v0.1 cannot reliably inspect Codex's final response, so it does not claim an automatic
 `item_cited` event.
 
-Exposure receipt files may accumulate under Git metadata during the pilot. Expiration and
-cleanup are deferred because they do not affect Git history or model-visible content.
+Exposure receipt files may accumulate in the ignored runtime directory during the pilot.
+Expiration and cleanup are deferred because they do not affect Git history or model-visible
+content.

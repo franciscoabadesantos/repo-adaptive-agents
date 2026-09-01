@@ -74,6 +74,9 @@ def test_cli_init_add_list_show_check_and_revoke(tmp_path: Path):
         for path in knowledge.rglob("*")
         if path.is_file()
     } == {".gitignore", "config.json", "items/.gitkeep"}
+    assert (knowledge / ".gitignore").read_text(encoding="utf-8") == (
+        "/events.jsonl\n/runtime/\n"
+    )
     config = json.loads((knowledge / "config.json").read_text(encoding="utf-8"))
     assert config == {
         "schema_version": 1,

@@ -91,10 +91,34 @@ def test_index_respects_exposure_and_never_leaks_bodies_or_private_metadata(tmp_
     assert withheld.id not in serialized
     assert all(set(item) == {"id", "revision", "title", "summary"} for item in payload["knowledge"])
 
-    session_path = repository / ".git" / "team-knowledge" / "exposures" / f"{payload['exposure_id']}.json"
+    session_path = repository / ".team-knowledge" / "runtime" / "exposures" / f"{payload['exposure_id']}.json"
     stored = session_path.read_text(encoding="utf-8")
     assert "SECRET-BODY" not in stored
     assert session_path.stat().st_mode & 0o777 == 0o600
+    ignored = subprocess.run(
+        ["git", "-C", str(repository), "check-ignore", "-q", str(session_path)],
+        check=False,
+    )
+    assert ignored.returncode == 0
+
+
+def test_index_requires_ignored_runtime_and_init_repairs_existing_repository(tmp_path: Path):
+    repository = _git_repo(tmp_path)
+    initialize_repository(repository)
+    store = KnowledgeStore.open(repository)
+    store.add("Retry contract", "Use for retry changes.", "Keep the idempotency key.")
+    ignore_path = repository / ".team-knowledge" / ".gitignore"
+    ignore_path.write_text("/events.jsonl\n", encoding="utf-8")
+
+    refused = _cli(repository, "index", "--json")
+
+    assert refused.returncode == 2
+    assert "run 'team-knowledge init'" in refused.stderr
+    repaired = _cli(repository, "init")
+    assert repaired.returncode == 0, repaired.stderr
+    assert ignore_path.read_text(encoding="utf-8") == "/events.jsonl\n/runtime/\n"
+    payload = _index(repository)
+    assert len(payload["knowledge"]) == 1
 
 
 def test_use_returns_multiple_valid_bodies_and_exact_citations(tmp_path: Path):

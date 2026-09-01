@@ -63,9 +63,9 @@ Initialization creates readable, Git-backed product files:
       SKILL.md
 ```
 
-Local events stay in ignored `.team-knowledge/events.jsonl`. Exact exposure receipts are
-kept under private Git metadata rather than the worktree. Neither contains prompts, source
-code, model responses, or knowledge bodies.
+Local events stay in ignored `.team-knowledge/events.jsonl`. Exact exposure receipts stay
+in ignored `.team-knowledge/runtime/`, which remains writable in the Codex workspace
+sandbox. Neither contains prompts, source code, model responses, or knowledge bodies.
 
 ## Agent CLI contract
 
