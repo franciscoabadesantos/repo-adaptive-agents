@@ -13,6 +13,7 @@ dev = ["pytest>=8,<10"]
 
 [project.scripts]
 repo-adaptive-agents = "repo_adaptive_agents.cli:main"
+team-knowledge = "repo_adaptive_agents.shared_knowledge.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
