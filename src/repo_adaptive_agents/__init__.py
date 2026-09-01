@@ -1,3 +1,3 @@
-"""Repository-adaptive agent planning MVP."""
+"""Shared team knowledge for coding agents, with retained legacy tooling."""
 
-__version__ = "0.5.0"
+__version__ = "0.13.0"

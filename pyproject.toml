@@ -4,8 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "repo-adaptive-agents"
-version = "0.12.0"
-description = "Validated native admission primitives with retained legacy bootstrapper tooling"
+version = "0.13.0"
+description = "Shared team knowledge for coding agents, backed by native validation"
+readme = "README.md"
 requires-python = ">=3.11"
 
 [project.optional-dependencies]
