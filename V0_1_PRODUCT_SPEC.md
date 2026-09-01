@@ -163,7 +163,11 @@ that:
    `team-knowledge use --json`;
 3. receives validated bodies plus canonical citation labels;
 4. instructs Codex to append the visible disclosure; and
-5. records selected, accepted/rejected, and cited events without prompt or body telemetry.
+5. records selected, accepted/rejected, and body-returned events without prompt or body
+   telemetry.
+
+The local CLI cannot reliably observe Codex's final prose, so it does not automatically
+record `item_cited`.
 
 The CLI/service remains the enforcement boundary, so the skill contains workflow guidance,
 not a duplicate implementation of admission or validation.

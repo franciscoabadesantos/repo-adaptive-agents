@@ -1,37 +1,79 @@
 # Shared team knowledge for coding agents
 
-This repository contains a one-team v0.1 for contributing useful engineering knowledge
-once and reusing it safely with Codex. Knowledge is ordinary Markdown reviewed through the
-repository's normal Git workflow.
+Capture repository-specific engineering knowledge once, review it with the team in Git, and
+let Codex reuse it during normal coding work. When knowledge influences an answer, Codex says
+which item it used so teammates can trust, correct, or retire it.
 
-## Team quickstart
+This v0.1 is deliberately small: one team, one repository, Markdown knowledge, a CLI, and one
+Codex Skill. It requires no hosted service.
 
-Python 3.11 or newer is required.
+## Five-minute quickstart
+
+You need Python 3.11 or newer, Git, and an installed and authenticated Codex CLI.
+
+### 1. Install from a fresh clone
+
+From this repository's root:
 
 ```sh
 python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
+. .venv/bin/activate
+python -m pip install .
+team-knowledge --help
+```
 
-cd /path/to/an/existing/git/repository
-team-knowledge init --team payments --codex
+Keep that virtual environment active for the remaining commands. `python -m pip install .`
+is the recommended installation path for the team pilot.
+
+### 2. Enable team knowledge in your repository
+
+```sh
+cd /path/to/your/team/repository
+team-knowledge init --codex
+```
+
+This creates `.team-knowledge/` and the repository-local Codex Skill at
+`.agents/skills/team-knowledge/SKILL.md`. The files are ordinary text and Markdown.
+
+### 3. Add one useful item
+
+```sh
 team-knowledge add \
   --title "Settlement retry contract" \
   --summary "Use when changing settlement retry behavior." \
   --body "Preserve the original idempotency key across every retry."
+team-knowledge check
 ```
 
-Commit `.team-knowledge/` and `.agents/skills/team-knowledge/SKILL.md`, then use Codex in
-that repository. For a relevant coding task, the Skill tells Codex to inspect the knowledge
-index, choose relevant IDs, request their validated bodies, and disclose only knowledge it
-actually used:
+Good items capture knowledge that teammates repeatedly explain: internal contracts,
+operational gotchas, debugging procedures, testing practices, architectural constraints,
+and repository-specific pitfalls. Keep each item concise and actionable. See
+[Writing useful team knowledge](docs/TEAM_KNOWLEDGE_GUIDE.md).
+
+### 4. Review and publish through Git
+
+```sh
+git add .team-knowledge .agents/skills/team-knowledge/SKILL.md
+git commit -m "Add settlement retry team knowledge"
+```
+
+Open a normal pull request. There is no separate approval database: knowledge is available
+when its reviewed Markdown is present in the checked-out Git revision.
+
+### 5. Ask Codex a normal coding question
+
+Start Codex in the repository and work normally. When the task may benefit from team context,
+the Skill lets Codex inspect the title/summary index, choose relevant items, and request their
+validated bodies. A response influenced by an item ends with a disclosure such as:
 
 ```text
 Used team knowledge: Settlement retry contract
 ```
 
-The integration is one inspectable Agent Skill. It contains no catalog, ranking, admission,
-or validation implementation.
+This means Codex selected that exact item and it survived current native validation. Merely
+appearing in the index is not enough to be disclosed.
+
+For a disposable two-item walkthrough, use [the teammate tryout](docs/TEAMMATE_TRYOUT.md).
 
 ## Everyday commands
 
@@ -40,22 +82,23 @@ team-knowledge add --help
 team-knowledge list
 team-knowledge show tk-<generated-id>
 team-knowledge check
-team-knowledge revoke tk-<generated-id>
 team-knowledge feedback tk-<generated-id> useful
 team-knowledge feedback tk-<generated-id> outdated
 team-knowledge feedback tk-<generated-id> incorrect
+team-knowledge revoke tk-<generated-id>
 ```
 
-Feedback records a local event and never changes or revokes the item automatically.
+`feedback` records a local signal without changing the knowledge item. If an item is wrong or
+stale, use the normal review process to correct its Markdown or use `revoke` to preserve its
+history while preventing future validated use.
 
-Initialization creates readable, Git-backed product files:
+## Files and local data
 
 ```text
 .team-knowledge/
   config.json
   .gitignore
   items/
-    .gitkeep
     tk-<generated-id>.md
 .agents/
   skills/
@@ -63,43 +106,34 @@ Initialization creates readable, Git-backed product files:
       SKILL.md
 ```
 
-Local events stay in ignored `.team-knowledge/events.jsonl`. Exact exposure receipts stay
-in ignored `.team-knowledge/runtime/`, which remains writable in the Codex workspace
-sandbox. Neither contains prompts, source code, model responses, or knowledge bodies.
+The ignored `.team-knowledge/events.jsonl` contains lightweight local pilot events with
+repository-scoped pseudonymous actors. Ignored exposure receipts live under
+`.team-knowledge/runtime/`. Neither stores prompts, repository source code, model responses,
+or knowledge bodies.
 
-## Agent CLI contract
+## How the boundary works
 
-The Skill uses two machine-readable commands:
+Codex owns semantic relevance; this package does not rank or keyword-match knowledge. The
+Skill calls two machine-readable operations:
 
 ```sh
 team-knowledge index --json
 team-knowledge use --exposure exp-... --json tk-...
 ```
 
-`index` returns only an exposure ID and admitted ID/revision/title/summary entries. It never
-returns bodies, owners, lifecycle details, or control traces. The model decides semantic
-relevance.
+`index` exposes only admitted IDs, revisions, titles, and summaries. `use` re-reads current
+Markdown and uses `repo_adaptive_agents.admission_control` to reject changed, revoked,
+invalid, unknown, or unexposed selections before returning any bodies.
 
-`use` reloads that exact native exposure receipt, re-reads current Markdown, runs native
-validation, and returns bodies and citation titles only for validated resources. Changed,
-revoked, unknown, or unexposed selections appear as rejected without their bodies.
+Ordinary knowledge uses normal visibility. Add `--restricted` only when an inadmissible item
+must also be withheld from the model-visible index.
 
-Ordinary knowledge may remain title/summary-visible when later inadmissible, but cannot
-survive final validation. Add `--restricted` when creating content that must also be
-withheld before selection.
+## More information
 
-## Architecture and development
+- [Product scope and exact behavior](V0_1_PRODUCT_SPEC.md)
+- [Writing useful team knowledge](docs/TEAM_KNOWLEDGE_GUIDE.md)
+- [Pilot operator checklist](docs/PILOT_OPERATOR.md)
+- [Public-safe research and architecture history](docs/research/README.md)
 
-The thin translation in `repo_adaptive_agents.shared_knowledge` maps Markdown to the native
-`SHARED_KNOWLEDGE` resource type in `repo_adaptive_agents.admission_control`. It does not
-perform keyword matching, semantic ranking, capability inference, or coverage scoring.
-
-```sh
-python -m pytest
-```
-
-The complete scope and limitations are in [`V0_1_PRODUCT_SPEC.md`](V0_1_PRODUCT_SPEC.md).
-The public-safe research decision record is in [`docs/research/`](docs/research/README.md).
-
-The older profiler, provider, role, and adapter commands remain marked `legacy`; they are
-not part of the shared-knowledge product path.
+The older profiler, provider, role, and adapter commands remain legacy and are not part of
+this product path.
