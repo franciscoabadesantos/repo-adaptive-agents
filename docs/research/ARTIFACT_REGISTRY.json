@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "collection": "repo-adaptive-agents-research-2026-09-01",
+  "policy": {
+    "durable_primary": "private off-repository storage",
+    "durable_secondary": "independent private backup",
+    "durable_backup_status": "pending",
+    "source_deletion_allowed": false
+  },
+  "local_collection_manifest": {
+    "location": "research-workspace://research-archives/2026-09-01/COLLECTION_MANIFEST.json",
+    "bytes": 4422,
+    "sha256": "f489038bbee62e7c139c2d1b7463d41ac5c4595cb783afd8da2e3ed575e2a44a"
+  },
+  "canonical_archives": [
+    {
+      "id": "knowledge-resolution-development-v1",
+      "filename": "repo-adaptive-agents__knowledge-resolution-development-v1__restricted__2026-09-01.tar.gz",
+      "bytes": 103662,
+      "sha256": "e8bb3f5abe8234b6fd1fd5cd7a5d9ba4c96f717629a4b763186e5f1fa9ccdd1c",
+      "sensitivity": "restricted",
+      "contains_authored_gold": true,
+      "durable_copies": 0
+    },
+    {
+      "id": "knowledge-resolution-blind-holdout-v1",
+      "filename": "repo-adaptive-agents__knowledge-resolution-blind-holdout-v1__restricted__2026-09-01.tar.gz",
+      "bytes": 635786,
+      "sha256": "326a7826fcca09fac9ee9b41f70afbb72eed8c457aac4b444319db9e3afdf5f5",
+      "sensitivity": "restricted",
+      "durable_copies": 0
+    },
+    {
+      "id": "admission-control-first-blind-evaluation-v1",
+      "filename": "repo-adaptive-agents__admission-control-first-blind-evaluation-v1__restricted__2026-09-01.tar.gz",
+      "bytes": 1748609,
+      "sha256": "35ee74a9d2219b5142d360f912c3f65369609bea3f89dcfc1a5d3c08945734e1",
+      "sensitivity": "restricted",
+      "implementation_commit": "86bc867cf63c53b74cf09e18a90f8f759a98c12e",
+      "implementation_tree": "031910328ba1bde5d78ddbe7b31817b237b8fa81",
+      "durable_copies": 0
+    },
+    {
+      "id": "native-admission-control-public-evaluation-v2",
+      "filename": "repo-adaptive-agents__native-admission-control-public-evaluation-v2__restricted__2026-09-01.tar.gz",
+      "bytes": 6534446,
+      "sha256": "dc63b746cc9ddc77cfbe2d4a56ffd461f429135ab5a3e30066d7af7bc7a9c141",
+      "sensitivity": "restricted",
+      "implementation_commit": "b610f1b1232eeb2840e5cca2ddaf450ba64fa491",
+      "implementation_tree": "a0e784208ab3df5e8889cc96c2319448ffab4687",
+      "durable_copies": 0
+    },
+    {
+      "id": "public-benchmark-packs-v1",
+      "filename": "repo-adaptive-agents__public-benchmark-packs-v1__public__2026-09-01.tar.gz",
+      "bytes": 71028,
+      "sha256": "e0d13cc498620a83a156e3831dc95d9e272096a798d13c347ca2b4ff6acd6b64",
+      "sensitivity": "public",
+      "durable_copies": 0
+    }
+  ],
+  "original_frozen_archives": [
+    {"filename": "admission-control-holdout-adapter-audit.zip", "bytes": 306040, "sha256": "6542474ac6314dec58a7d82c474abdcb4e1e99df43d4506565b6f41c0a6e1680", "sensitivity": "restricted"},
+    {"filename": "admission-control-holdout-frozen-predictions.zip", "bytes": 1363623, "sha256": "29eb1d125910e837e46deff178d50580962e8c236dc6a2b8ca5b98df0e60fec6", "sensitivity": "restricted"},
+    {"filename": "admission-control-holdout-public.zip", "bytes": 17838, "sha256": "4b334fced1b9d65be8eecf4aec9b4eff76e466a19cce1aa699e9ace6c4f109cf", "sensitivity": "public"},
+    {"filename": "knowledge-resolution-frozen-predictions.zip", "bytes": 156571, "sha256": "015658ab93419b535fabf850489b7571ad576fb011e146980273c93903bb1a62", "sensitivity": "restricted"},
+    {"filename": "native-admission-control-holdout-public.zip", "bytes": 74255, "sha256": "da2b2fb4d215da4fcbf51da376b9950bdd53276e1de5b7180c3bd6be1f0c5426", "sensitivity": "public"},
+    {"filename": "native-admission-control-public-eval-20260901-Hk8zFx.zip", "bytes": 5012159, "sha256": "552249556a3152a5c327ce26ba93ec6bd7b08a07f17002495cb2bc018ca51238", "sensitivity": "restricted"}
+  ],
+  "preserved_git_identities": [
+    {"tag": "research/pre-v0.1-legacy", "commit": "d10dcbde88d405aaf7c5eca36e3a1c44d957345a", "remote_status": "pending authentication"},
+    {"tag": "research/admission-control-v1", "commit": "86bc867cf63c53b74cf09e18a90f8f759a98c12e", "remote_status": "pending authentication"},
+    {"tag": "research/native-admission-control-v1", "commit": "b610f1b1232eeb2840e5cca2ddaf450ba64fa491", "remote_status": "pending authentication"}
+  ]
+}

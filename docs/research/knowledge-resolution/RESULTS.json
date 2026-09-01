@@ -1,0 +1,25 @@
+{
+  "development_corpus": {
+    "blind": false,
+    "warning": "Perfect deterministic scores on the authored corpus are not evidence of generality.",
+    "approaches": {
+      "deterministic_resolution": {"resource_precision": 1.0, "resource_recall": 1.0, "false_full_rate": 0.0},
+      "lexical_tfidf_search": {"resource_precision": 0.4615, "resource_recall": 0.6, "false_full_rate": 0.7692},
+      "recorded_model_direct": {"resource_precision": 1.0, "resource_recall": 0.85, "false_full_rate": 0.1111},
+      "technology_tag": {"resource_precision": 0.3519, "resource_recall": 0.95, "false_full_rate": 0.8704}
+    }
+  },
+  "blind_holdout": {
+    "final_scoring_report": "pending human-readable report",
+    "pre_gold_mean_pairwise_jaccard": {
+      "B0": 1.0,
+      "B1": 1.0,
+      "B2": 1.0,
+      "B3": 0.9307692307692308,
+      "B4-k10": 0.8076923076923077,
+      "B4-k5": 0.8935897435897436,
+      "S": 0.7599358974358975
+    }
+  }
+}
+

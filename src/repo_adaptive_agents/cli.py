@@ -1,4 +1,4 @@
-"""Command-line entry point for the MVP."""
+"""Retained command-line entry point for the legacy bootstrapper workflow."""
 
 from __future__ import annotations
 
@@ -51,18 +51,29 @@ def _parse_targets(raw: str | None) -> list[str] | None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Profile a repository and propose tailored, repository-local agentic infrastructure."
+        description=(
+            "Legacy repository-bootstrapper tooling retained during the v0.1 transition. "
+            "The shared-knowledge v0.1 product is not implemented yet."
+        )
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("profile", "plan"):
-        sub = subparsers.add_parser(command)
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True,
+        title="legacy commands",
+        description="Retained for compatibility; these commands are not the v0.1 product path.",
+    )
+    for command, command_help in (
+        ("profile", "[legacy] Profile a local repository"),
+        ("plan", "[legacy] Build an infrastructure plan for a local repository"),
+    ):
+        sub = subparsers.add_parser(command, help=command_help)
         sub.add_argument("repo", help="Local repository path")
         sub.add_argument("--request", default="", help="Optional user request to shape recommendations")
         sub.add_argument("--evidence-path-limit", type=int, default=25, help="Maximum paths shown per evidence item")
     propose = subparsers.add_parser(
         "propose",
         help=(
-            "Write a portable profile, infrastructure plan, and provider-discovery gate "
+            "[legacy] Write a portable profile, infrastructure plan, and provider-discovery gate "
             "without choosing a harness"
         ),
     )
@@ -77,7 +88,7 @@ def _parser() -> argparse.ArgumentParser:
 
     render = subparsers.add_parser(
         "render-role",
-        help="[experimental] Render a canonical role to multi-CLI wrappers (proposal only)",
+        help="[legacy experimental] Render a canonical role to multi-CLI wrappers (proposal only)",
         description=(
             "[EXPERIMENTAL] Render one canonical role into portable and target-specific "
             "wrappers (skill, codex, claude, copilot). Writes a proposal directory; never "
@@ -111,7 +122,7 @@ def _parser() -> argparse.ArgumentParser:
 
     adapters = subparsers.add_parser(
         "propose-adapters",
-        help="[experimental] Render explicitly selected role adapters for a repository",
+        help="[legacy experimental] Render explicitly selected role adapters for a repository",
         description=(
             "[EXPERIMENTAL] Profile a repository and render only the canonical read-only "
             "roles and adapter targets supplied by the caller as a tool proposal. Capability matches "
@@ -176,7 +187,7 @@ def _parser() -> argparse.ArgumentParser:
     adapter_options = subparsers.add_parser(
         "adapter-options",
         help=(
-            "Repository-aware adapter selection query; always exposes deterministic base "
+            "[legacy] Repository-aware adapter selection query; exposes deterministic base "
             "adapter options while keeping provider discovery advisory and separate"
         ),
     )
@@ -215,7 +226,7 @@ def _parser() -> argparse.ArgumentParser:
 
     provider_options = subparsers.add_parser(
         "provider-options",
-        help="Resolve capability gaps against local provider metadata without network access or writes",
+        help="[legacy] Resolve capability gaps against local provider metadata without network access or writes",
     )
     provider_options.add_argument("repo", help="Local repository path to profile")
     provider_options.add_argument(
@@ -228,7 +239,7 @@ def _parser() -> argparse.ArgumentParser:
 
     install = subparsers.add_parser(
         "install-adapters",
-        help="Preview or explicitly install a validated adapter bundle into a local repository",
+        help="[legacy] Preview or explicitly install a validated adapter bundle into a local repository",
         description=(
             "Plan installation of a generated adapter bundle into a local repository. "
             "Preview is the default and writes nothing. --apply together with "
