@@ -8,6 +8,8 @@ from .catalog import (
     initialize_repository,
 )
 from .content import KnowledgeContentError, KnowledgeItem
+from .codex import CODEX_SKILL_PATH, install_codex_skill, skill_text
+from .sessions import ExposureSession, ExposureSessions
 from .service import (
     KnowledgeCheck,
     KnowledgeExposure,
@@ -26,9 +28,14 @@ __all__ = [
     "KnowledgeItem",
     "KnowledgeResolution",
     "KnowledgeStore",
+    "CODEX_SKILL_PATH",
+    "ExposureSession",
+    "ExposureSessions",
     "SharedKnowledgeError",
     "SharedKnowledgeService",
     "ValidatedKnowledge",
     "find_repository",
     "initialize_repository",
+    "install_codex_skill",
+    "skill_text",
 ]

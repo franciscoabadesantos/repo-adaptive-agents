@@ -164,7 +164,7 @@ def test_native_boundary_exposes_and_resolves_active_item(tmp_path: Path):
     service = SharedKnowledgeService(store)
     exposure = service.expose_index(actor="second@example.com", task_id="task-1", effective_at=NOW)
     assert exposure.index == (
-        type(exposure.index[0])(item.id, item.title, item.summary),
+        type(exposure.index[0])(item.id, str(item.revision), item.title, item.summary),
     )
     resolution = service.validate_ids(
         exposure,
@@ -280,12 +280,19 @@ def test_event_log_contains_only_minimal_event_data(tmp_path: Path):
         "item_exposed",
         "item_selected",
         "validation_accepted",
+        "item_body_returned",
     ]
     assert secret_body not in text
     assert all("prompt" not in event and "body" not in event for event in events)
+    assert all(event["revision"] == "1" for event in events)
+    assert all(event["actor"].startswith("actor-") for event in events)
+    assert "reader@example.com" not in text
 
 
-@pytest.mark.parametrize("command", ["init", "add", "list", "show", "check", "revoke"])
+@pytest.mark.parametrize(
+    "command",
+    ["init", "add", "list", "show", "check", "index", "use", "feedback", "revoke"],
+)
 def test_each_command_has_help(command: str):
     environment = dict(os.environ)
     environment["PYTHONPATH"] = str(SOURCE_ROOT)

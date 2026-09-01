@@ -181,6 +181,24 @@ class KnowledgeStore:
         self.config = config
         self.events = EventLog(self.directory / EVENTS_FILE, config.repository)
 
+    def current_identity(self) -> str:
+        """Use this checkout's Git identity, falling back to initialized configuration."""
+
+        return (
+            _git(self.root, "config", "user.email")
+            or _git(self.root, "config", "user.name")
+            or self.config.default_owner
+        )
+
+    def runtime_directory(self) -> Path:
+        """Keep ephemeral exposure receipts under Git metadata, never the worktree."""
+
+        git_path = _git(self.root, "rev-parse", "--git-path", "team-knowledge")
+        if git_path is None:
+            raise SharedKnowledgeError("cannot locate private Git metadata for team knowledge")
+        path = Path(git_path)
+        return path.resolve() if path.is_absolute() else (self.root / path).resolve()
+
     @classmethod
     def open(cls, path: str | Path = ".") -> "KnowledgeStore":
         root = find_repository(path)
@@ -252,7 +270,7 @@ class KnowledgeStore:
             item_id,
             title,
             summary,
-            owner or self.config.default_owner,
+            owner or self.current_identity(),
             "active",
             "restricted" if restricted else "normal",
             1,
@@ -262,7 +280,12 @@ class KnowledgeStore:
         rendered = render_item(item)
         with path.open("x", encoding="utf-8", newline="\n") as handle:
             handle.write(rendered)
-        self.events.append("contribution_created", item.id, actor=item.owner)
+        self.events.append(
+            "contribution_created",
+            item.id,
+            revision=str(item.revision),
+            actor=item.owner,
+        )
         return item
 
     def revoke(self, item_id: str, *, actor: str | None = None) -> KnowledgeItem:

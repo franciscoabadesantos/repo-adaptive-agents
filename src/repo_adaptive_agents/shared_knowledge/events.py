@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ EVENT_TYPES = frozenset(
         "item_selected",
         "validation_accepted",
         "validation_rejected",
+        "item_body_returned",
         "item_cited",
         "feedback_recorded",
     }
@@ -33,11 +35,21 @@ class EventLog:
         self.path = path
         self.repository = repository
 
+    def actor_id(self, identity: str) -> str:
+        """Return a stable repository-scoped pseudonym without storing Git identity."""
+
+        normalized = identity.strip().casefold()
+        if not normalized:
+            raise EventError("actor identity must be non-empty")
+        digest = hashlib.sha256(f"{self.repository}\0{normalized}".encode("utf-8")).hexdigest()
+        return f"actor-{digest[:16]}"
+
     def append(
         self,
         event_type: str,
         item_id: str,
         *,
+        revision: str | None,
         actor: str,
         task_id: str | None = None,
         outcome: str | None = None,
@@ -54,12 +66,13 @@ class EventLog:
         if timestamp.tzinfo is None or timestamp.utcoffset() is None:
             raise EventError("event timestamp must be timezone-aware")
         event: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "event": event_type,
             "occurred_at": timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
             "repository": self.repository,
             "item_id": item_id,
-            "actor": actor,
+            "revision": revision,
+            "actor": self.actor_id(actor),
         }
         if task_id:
             event["task_id"] = task_id

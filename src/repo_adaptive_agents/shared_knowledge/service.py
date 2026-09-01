@@ -9,25 +9,31 @@ from pathlib import Path
 import repo_adaptive_agents.admission_control as native
 
 from .catalog import KnowledgeStore
+from .events import FEEDBACK_VALUES
+from .sessions import ExposureSession, ExposureSessions
 
 
 @dataclass(frozen=True)
 class KnowledgeIndexEntry:
     id: str
+    revision: str
     title: str
     summary: str
 
 
 @dataclass(frozen=True)
 class KnowledgeExposure:
+    id: str
     index: tuple[KnowledgeIndexEntry, ...]
     receipt: native.ExposureReceipt
     context: native.AdmissionContext
+    task_id: str | None
 
 
 @dataclass(frozen=True)
 class ValidatedKnowledge:
     id: str
+    revision: str
     title: str
     body: str
 
@@ -36,6 +42,7 @@ class ValidatedKnowledge:
 class KnowledgeResolution:
     items: tuple[ValidatedKnowledge, ...]
     citations: tuple[str, ...]
+    binding_additions: tuple[str, ...]
     validation: native.ValidationResult
 
 
@@ -93,22 +100,27 @@ class SharedKnowledgeService:
         snapshot = native.admit(context, catalog)
         receipt = snapshot.record_exposure(snapshot.exposable_resources)
         index = tuple(
-            KnowledgeIndexEntry(resource.id, resource.title, resource.summary)
+            KnowledgeIndexEntry(resource.id, resource.revision, resource.title, resource.summary)
             for resource in snapshot.exposable_resources
         )
-        event_actor = actor or self.store.config.default_owner
+        session = ExposureSessions(self.store).save(receipt, task_id=task_id)
+        event_actor = actor or self.store.current_identity()
         for entry in index:
             self.store.events.append(
                 "item_exposed",
                 entry.id,
+                revision=entry.revision,
                 actor=event_actor,
-                task_id=task_id,
+                task_id=session.task_id,
             )
-        return KnowledgeExposure(index, receipt, context)
+        return KnowledgeExposure(session.id, index, receipt, context, session.task_id)
+
+    def load_exposure(self, exposure_id: str) -> ExposureSession:
+        return ExposureSessions(self.store).load(exposure_id)
 
     def validate_ids(
         self,
-        exposure: KnowledgeExposure,
+        exposure: KnowledgeExposure | ExposureSession,
         selected_ids: tuple[str, ...],
         *,
         actor: str | None = None,
@@ -116,32 +128,77 @@ class SharedKnowledgeService:
     ) -> KnowledgeResolution:
         current_catalog, current_items = self.store.native_catalog()
         selections = tuple(native.CandidateSelection(item_id) for item_id in selected_ids)
-        event_actor = actor or self.store.config.default_owner
+        event_actor = actor or self.store.current_identity()
+        event_task_id = task_id or exposure.task_id
+        exposed_revisions = {
+            identity.resource_id: identity.revision for identity in exposure.receipt.resources
+        }
         for item_id in selected_ids:
             self.store.events.append(
                 "item_selected",
                 item_id,
+                revision=exposed_revisions.get(item_id),
                 actor=event_actor,
-                task_id=task_id,
+                task_id=event_task_id,
             )
-        result = native.validate(selections, exposure.receipt, exposure.context, current_catalog)
+        result = native.validate(
+            selections,
+            exposure.receipt,
+            exposure.receipt.context,
+            current_catalog,
+        )
         accepted = set(result.final_resource_ids)
         for decision in result.selection_decisions:
             self.store.events.append(
                 "validation_accepted" if decision.admitted else "validation_rejected",
                 decision.resource_id,
+                revision=exposed_revisions.get(decision.resource_id),
                 actor=event_actor,
-                task_id=task_id,
+                task_id=event_task_id,
                 outcome="accepted" if decision.admitted else "rejected",
             )
         items_by_id = {item.id: item for item in current_items}
         resolved = tuple(
-            ValidatedKnowledge(item_id, items_by_id[item_id].title, items_by_id[item_id].body)
+            ValidatedKnowledge(
+                item_id,
+                str(items_by_id[item_id].revision),
+                items_by_id[item_id].title,
+                items_by_id[item_id].body,
+            )
             for item_id in result.final_resource_ids
             if item_id in accepted
         )
+        for item in resolved:
+            self.store.events.append(
+                "item_body_returned",
+                item.id,
+                revision=item.revision,
+                actor=event_actor,
+                task_id=event_task_id,
+            )
         return KnowledgeResolution(
             items=resolved,
             citations=tuple(item.title for item in resolved),
+            binding_additions=result.added_mandatory_ids,
             validation=result,
+        )
+
+    def record_feedback(
+        self,
+        item_id: str,
+        feedback: str,
+        *,
+        actor: str | None = None,
+        task_id: str | None = None,
+    ) -> None:
+        if feedback not in FEEDBACK_VALUES:
+            raise ValueError("feedback must be useful, outdated, or incorrect")
+        item = self.store.get(item_id)
+        self.store.events.append(
+            "feedback_recorded",
+            item.id,
+            revision=str(item.revision),
+            actor=actor or self.store.current_identity(),
+            task_id=task_id,
+            feedback=feedback,
         )
