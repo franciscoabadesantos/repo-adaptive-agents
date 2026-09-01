@@ -1,28 +1,13 @@
 # repo-adaptive-agents
 
-This branch is the clean product baseline for the next product experiment. The upcoming
-v0.1 will test whether an engineering team will contribute useful shared knowledge and
-reuse it with coding agents. That product is **not implemented yet**.
+This branch contains the first vertical slice of **shared team knowledge for coding
+agents**. An engineer can contribute ordinary Markdown in a Git repository, inspect the
+catalog, and load it through the validated native control boundary.
 
-## Current validated surface
+Live model calls and the Codex integration are not implemented yet. Increment one proves
+the repository workflow and native enforcement before an agent is connected.
 
-The product baseline currently exposes the native deterministic admission-control package
-at `repo_adaptive_agents.admission_control`. It provides:
-
-- `admit()` for selective resource exposure when content must be withheld from a model;
-- `validate()` for deterministic post-model enforcement;
-- catalog transition validation and auditable exposure receipts.
-
-This layer handles mechanical controls such as lifecycle, scope, revocation, dependencies,
-mandatory and forbidden controls, conflicts, supersession, authority, and exact resource
-identity. It does not interpret task semantics, rank knowledge, calculate semantic coverage,
-or generate agent teams. Model/retrieval owns semantic relevance.
-
-The initial package extraction is byte-for-byte traceable to the validated frozen tree
-`b610f1b1232eeb2840e5cca2ddaf450ba64fa491`; a provenance test pins the five source-file
-SHA-256 values.
-
-## Development
+## Try the shared-knowledge workflow
 
 Python 3.11 or newer is required.
 
@@ -30,23 +15,73 @@ Python 3.11 or newer is required.
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
+
+cd /path/to/an/existing/git/repository
+team-knowledge init --team payments
+team-knowledge add \
+  --title "Settlement retry contract" \
+  --summary "Use when changing settlement retry behavior." \
+  --body "Preserve the original idempotency key across every retry."
+team-knowledge list
+team-knowledge check
+```
+
+Initialization creates this Git-friendly layout:
+
+```text
+.team-knowledge/
+  config.json
+  .gitignore
+  items/
+    .gitkeep
+    tk-<generated-id>.md
+```
+
+Each item is readable Markdown with minimal frontmatter: generated ID, title, usefulness
+summary, owner, state, and revision. The body remains ordinary Markdown. Commit and review
+these files through the team's normal pull-request workflow.
+
+Useful commands:
+
+```sh
+team-knowledge add --help
+team-knowledge list
+team-knowledge show tk-<generated-id>
+team-knowledge check
+team-knowledge revoke tk-<generated-id>
+```
+
+`revoke` preserves the file and Git history while making the item unavailable. `check`
+rejects malformed content and verifies the real native catalog mapping. Local pilot events
+are written to the ignored `.team-knowledge/events.jsonl`; they contain identifiers and
+outcomes, never prompts, source code, model responses, or knowledge bodies.
+
+## Runtime boundary in increment one
+
+`repo_adaptive_agents.shared_knowledge` translates the simple Markdown contract into the
+existing `repo_adaptive_agents.admission_control` domain model. It uses the existing
+repository-instruction payload; no new resource ontology was added.
+
+The service can expose an admitted ID/title/summary index, pass externally chosen IDs to
+native validation, and return bodies and canonical citation labels only for validated
+items. It performs no keyword matching, semantic ranking, capability inference, or other
+deterministic relevance selection.
+
+## Development
+
+```sh
 python -m pytest
 ```
 
-## Research history
+The complete increment-one behavior and deferred work are defined in
+[`V0_1_PRODUCT_SPEC.md`](V0_1_PRODUCT_SPEC.md).
 
-The concise, public-safe decision record is in [`docs/research/`](docs/research/README.md).
-It explains the experiments, supported and rejected claims, frozen identities, limitations,
-and the registry for separately archived reproducibility artifacts. Private gold, raw model
-outputs, and complete evaluation trees are deliberately excluded from normal Git history.
+## Research and legacy tooling
 
-## Legacy tooling
+The public-safe research decision record is in [`docs/research/`](docs/research/README.md).
+Private gold, raw model outputs, and complete evaluation trees remain outside normal Git
+history.
 
-The earlier deterministic repository profiler, capability recommender, provider-resolution
-flow, role renderer, and adapter installer remain temporarily available for historical
-compatibility. Their CLI commands are marked `legacy`; they are not the v0.1 product path
-and are not the primary product story. They will be evaluated for removal in a later,
-isolated cleanup after the v0.1 vertical slice exists.
-
-Use `repo-adaptive-agents --help` to inspect those retained commands. No external provider
-is downloaded, installed, or contacted by the deterministic CLI.
+The older repository profiler, capability recommender, provider flow, role renderer, and
+adapter installer remain temporarily available through commands marked `legacy`. They are
+not the shared-knowledge product path and will be considered for removal separately.
