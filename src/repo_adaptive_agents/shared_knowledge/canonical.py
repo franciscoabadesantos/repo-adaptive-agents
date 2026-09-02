@@ -19,6 +19,8 @@ RESOURCE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
 REFERENCE_SUFFIXES = frozenset({".md", ".txt", ".json", ".yaml", ".yml"})
 MAX_FILE_BYTES = 1_000_000
 MAX_SKILL_BYTES = 4_000_000
+MAX_SKILL_NAME_LENGTH = 64
+MAX_SKILL_DESCRIPTION_LENGTH = 1024
 
 
 @dataclass(frozen=True)
@@ -130,15 +132,29 @@ def _parse_skill_text(text: str) -> tuple[str, str]:
         raise SharedKnowledgeError("SKILL.md frontmatter must end with a --- delimiter") from error
     frontmatter = lines[1:closing]
     values = _frontmatter_values(frontmatter)
+    unsupported = sorted(set(values) - {"name", "description"})
+    if unsupported:
+        raise SharedKnowledgeError(
+            f"unsupported canonical Skill frontmatter field(s): {', '.join(unsupported)}"
+        )
     name = values.get("name")
     description = values.get("description")
     if name is None or not SKILL_NAME.fullmatch(name):
         raise SharedKnowledgeError("SKILL.md name must be a lowercase hyphenated Skill name")
+    if len(name) > MAX_SKILL_NAME_LENGTH:
+        raise SharedKnowledgeError(
+            f"SKILL.md name must be at most {MAX_SKILL_NAME_LENGTH} characters"
+        )
     if description is None or not description.strip():
         raise SharedKnowledgeError("SKILL.md description must be non-empty")
+    normalized_description = " ".join(description.split())
+    if len(normalized_description) > MAX_SKILL_DESCRIPTION_LENGTH:
+        raise SharedKnowledgeError(
+            f"SKILL.md description must be at most {MAX_SKILL_DESCRIPTION_LENGTH} characters"
+        )
     if not "\n".join(lines[closing + 1 :]).strip():
         raise SharedKnowledgeError("SKILL.md body must be non-empty")
-    return name, " ".join(description.split())
+    return name, normalized_description
 
 
 def package_digest(files: tuple[tuple[str, bytes], ...]) -> str:
@@ -246,6 +262,10 @@ def load_canonical_catalog(
         skill_bytes = dict(files)["SKILL.md"]
         skill_text = skill_bytes.decode("utf-8")
         name, description = _parse_skill_text(skill_text)
+        if name != directory.name:
+            raise SharedKnowledgeError(
+                f"canonical Skill directory {directory.name!r} must match Skill name {name!r}"
+            )
         source_path = PurePosixPath("skills", directory.name).as_posix()
         parsed.append(
             CanonicalSkill(

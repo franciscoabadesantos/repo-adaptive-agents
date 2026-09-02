@@ -94,7 +94,7 @@ class ConsumerConfig:
     source: ConsumerSource
     schema_version: int = 2
     mode: str = "consumer"
-    target: str = "codex"
+    target: str = "agent-skills"
 
     def to_data(self) -> dict[str, object]:
         return {
@@ -213,8 +213,14 @@ def assert_bootstrap_available(root: Path) -> None:
 def load_consumer_config(root: Path) -> ConsumerConfig:
     data = _load_json(root / STATE_DIR / CONFIG_FILE, "consumer config")
     data = _object(data, "consumer config", frozenset({"schema_version", "mode", "repository", "target", "source"}))
-    if data.get("schema_version") != 2 or data.get("mode") != "consumer" or data.get("target") != "codex":
-        raise SharedKnowledgeError("consumer config must be schema version 2, consumer mode, Codex target")
+    if (
+        data.get("schema_version") != 2
+        or data.get("mode") != "consumer"
+        or data.get("target") not in {"agent-skills", "codex"}
+    ):
+        raise SharedKnowledgeError(
+            "consumer config must be schema version 2, consumer mode, and an Agent Skills target"
+        )
     source = _object(
         data.get("source"),
         "consumer source",
@@ -377,7 +383,11 @@ def managed_exclude_content(existing: str, materialized_paths: tuple[str, ...]) 
     end = [index for index, line in enumerate(lines) if line == EXCLUDE_END]
     if len(begin) != len(end) or len(begin) > 1 or (begin and begin[0] >= end[0]):
         raise SharedKnowledgeError("local Git exclude has a malformed team-knowledge managed block")
-    block = [EXCLUDE_BEGIN, *(f"/{path.strip('/')}/" for path in sorted(materialized_paths)), EXCLUDE_END]
+    patterns = [
+        f"/{path.strip('/')}{'' if path.startswith('.claude/skills/') else '/'}"
+        for path in sorted(materialized_paths)
+    ]
+    block = [EXCLUDE_BEGIN, *patterns, EXCLUDE_END]
     if begin:
         lines[begin[0] : end[0] + 1] = block
     else:

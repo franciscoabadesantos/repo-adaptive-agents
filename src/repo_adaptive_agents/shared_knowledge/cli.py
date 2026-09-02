@@ -12,7 +12,7 @@ from .codex import install_codex_skill
 from .content import KnowledgeContentError
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
 from .consumer import default_consumer_source, external_consumer_source
-from .selector import CodexSkillSelector
+from .selector import resolve_selector_name, selector_for
 from .service import SharedKnowledgeService
 
 
@@ -42,11 +42,21 @@ def _parser() -> argparse.ArgumentParser:
         help="Override the default repo-adaptive-agents team knowledge Git source",
     )
     bootstrap.add_argument("--ref", default="main", help="Canonical Git ref (default: main)")
+    bootstrap.add_argument(
+        "--selector",
+        metavar="NAME",
+        help="Semantic selector: codex, claude, or copilot (default: TEAM_KNOWLEDGE_SELECTOR or codex)",
+    )
     bootstrap.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
 
     sync = commands.add_parser("sync", help="Safely synchronize bootstrapped canonical team Skills")
     _repo_argument(sync)
     sync.add_argument("--offline", action="store_true", help="Verify locked local state without fetching or claiming freshness")
+    sync.add_argument(
+        "--selector",
+        metavar="NAME",
+        help="Semantic selector: codex, claude, or copilot (default: TEAM_KNOWLEDGE_SELECTOR or codex)",
+    )
     sync.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
 
     init = commands.add_parser("init", help="Initialize shared team knowledge in a Git repository")
@@ -129,6 +139,12 @@ def _print_distribution_plan(plan: DistributionPlan) -> None:
     for action in visible:
         revision = f" @ {action.revision[:12]}" if action.revision else ""
         print(f"  {action.action.upper():7} {action.id} -> {action.materialized_path}{revision}")
+    for action in plan.actions:
+        if action.bridge_action != "keep":
+            print(
+                f"  {action.bridge_action.upper():7} {action.id} -> "
+                f".claude/skills/{action.name} (bridge)"
+            )
     if plan.possibly_no_longer_relevant:
         print("Possibly no longer relevant (kept installed):")
         for resource_id in plan.possibly_no_longer_relevant:
@@ -143,7 +159,7 @@ def _print_distribution_plan(plan: DistributionPlan) -> None:
         for resource_id, reason in reasons:
             print(f"  {resource_id}: {reason}")
     if plan.semantic_pending:
-        print("Semantic reassessment is pending because Codex was unavailable.")
+        print("Semantic reassessment is pending because the configured selector was unavailable.")
     if plan.offline:
         print("Offline verification only; canonical source freshness was not checked.")
 
@@ -159,7 +175,9 @@ def _confirm(yes: bool) -> bool:
 
 def _run(args: argparse.Namespace) -> int:
     if args.command in {"bootstrap", "sync"}:
-        service = TeamKnowledgeDistributionService(CodexSkillSelector())
+        service = TeamKnowledgeDistributionService(
+            selector_for(resolve_selector_name(args.selector))
+        )
         plan = (
             service.bootstrap_plan(
                 args.repo,
@@ -185,9 +203,14 @@ def _run(args: argparse.Namespace) -> int:
         for action in plan.actions:
             if action.action != "keep":
                 print(f"{past[action.action]} {action.id}: {action.materialized_path}")
+            if action.bridge_action != "keep":
+                print(
+                    f"{past[action.bridge_action]} {action.id}: "
+                    f".claude/skills/{action.name} (Claude bridge)"
+                )
         print("Recorded canonical selection in .team-knowledge/lock.json")
         print("Commit .team-knowledge/config.json, .team-knowledge/lock.json, and .team-knowledge/.gitignore")
-        print("Generated Agent Skill copies remain local and Git-excluded.")
+        print("Generated Agent Skills and Claude bridges remain local and Git-excluded.")
         return 0
     if args.command == "init":
         target = initialize_repository(

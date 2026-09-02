@@ -1,18 +1,19 @@
 # Shared team knowledge for coding agents
 
-Write a reusable Codex Skill once in a team-owned Git catalog, then let each engineering
-repository install only the Skills a model judges likely to be relevant. The source stays
+Write a reusable Agent Skill once in a team-owned Git catalog, then let each engineering
+repository install only the Skills a model judges likely to be relevant. Choose Codex,
+Claude, or Copilot for that semantic selection step. The source stays
 canonical: `team-knowledge sync` distributes central improvements and revocations without
 manual copying.
 
-This first vertical is deliberately narrow: one team, native Agent Skills, Codex selection,
-Git-backed review, and local generated copies. It has no hosted service, semantic ranking
+This first vertical is deliberately narrow: one team, native Agent Skills, one explicitly
+selected model CLI, Git-backed review, and local generated copies. It has no hosted service, semantic ranking
 engine, capability ontology, or management dashboard.
 
 ## Install
 
-Python 3.11+, Git, and an installed and authenticated Codex CLI are required. From a clone of
-this project:
+Python 3.11+, Git, and one installed and authenticated selector CLI (`codex`, `claude`, or
+`copilot`) are required. Codex is the default. From a clone of this project:
 
 ```sh
 python3 -m venv .venv
@@ -81,7 +82,17 @@ An explicit source preserves the existing external-root behavior: its catalog is
 to a different default.
 
 Bootstrap profiles factual repository evidence, gives that evidence and admitted Skill
-`id/name/description` metadata to Codex, and presents a plan. After reviewing it, answer `y`
+`id/name/description` metadata to the chosen model selector, and presents a plan. Selectors
+are explicit; there is no auto-detection or semantic fallback:
+
+```sh
+team-knowledge bootstrap --selector claude
+TEAM_KNOWLEDGE_SELECTOR=copilot team-knowledge bootstrap
+```
+
+The command-line flag takes precedence over `TEAM_KNOWLEDGE_SELECTOR`; otherwise Codex is
+used. The selector is an invocation choice, not repository state, and is not written to the
+config or lock. After reviewing the plan, answer `y`
 (or use `--yes` in automation). Then commit only the distribution state:
 
 ```sh
@@ -89,9 +100,11 @@ git add .team-knowledge/config.json .team-knowledge/lock.json .team-knowledge/.g
 git commit -m "Bootstrap shared team knowledge"
 ```
 
-Validated Skills are materialized locally at `.agents/skills/<name>/`, where Codex discovers
-them natively. Generated copies and the Git source cache remain local. Bootstrap adds only
-the exact managed Skill paths to `.git/info/exclude`; it does not hide other Agent Skills.
+Validated Skills are materialized once at `.agents/skills/<name>/`, the vendor-neutral Agent
+Skills location used directly by Codex and Copilot. Claude receives a relative directory
+symlink at `.claude/skills/<name>` pointing to that same package. Generated packages, Claude
+bridges, and the Git source cache remain local. Bootstrap adds only the exact managed paths
+to `.git/info/exclude`; it does not hide other Agent Skills.
 
 When the canonical team repository changes:
 
@@ -102,10 +115,11 @@ git commit -m "Sync shared team knowledge"
 ```
 
 The plan automatically updates already-selected Skills and removes explicitly revoked ones.
-New Skills or changed repository evidence trigger a fresh Codex selection. A previously
-selected Skill that Codex no longer selects is reported but retained for human review.
+New Skills or changed repository evidence trigger a fresh selection using the selector chosen
+for that invocation. A previously selected Skill the model no longer selects is reported but
+retained for human review. Changing only `--selector` does not itself trigger reassessment.
 
-If Codex is unavailable during sync, safe deterministic updates and revocations can still be
+If the configured selector is unavailable during sync, safe deterministic updates and revocations can still be
 applied while semantic additions are deferred. If the Git source is unavailable, existing
 local Skills and the lock remain untouched. `team-knowledge sync --offline` verifies the
 locked local state without claiming freshness.
@@ -151,7 +165,7 @@ See [the historical v0.1 product specification](docs/history/shared-knowledge-v0
 
 ## Architecture boundary
 
-Codex owns semantic relevance. The product supplies bounded factual repository evidence and
+The explicitly chosen model owns semantic relevance. The product supplies bounded factual repository evidence and
 Skill routing metadata; it contains no keyword fallback or deterministic semantic selector.
 The existing native admission layer independently enforces exposure and final exact-resource
 validation before any canonical Skill is materialized.

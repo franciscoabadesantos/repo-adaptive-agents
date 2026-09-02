@@ -56,6 +56,7 @@ class DistributionAction:
     materialized_path: str
     previous_revision: str | None
     revision: str | None
+    bridge_action: str
 
 
 @dataclass(frozen=True)
@@ -87,7 +88,7 @@ def _native_catalog(catalog: CanonicalCatalog) -> native.ResourceCatalog:
             skill.name,
             skill.description,
             skill.skill_text,
-            native.SkillPayload(("codex",), f"{skill.source_path}/SKILL.md"),
+            native.SkillPayload(("agent-skills",), f"{skill.source_path}/SKILL.md"),
         )
         records.append(
             native.ResourceRecord(
@@ -203,6 +204,48 @@ def _assert_safe_destination(root: Path, relative: str) -> Path:
     return target
 
 
+def _claude_bridge_path(name: str) -> str:
+    return f".claude/skills/{name}"
+
+
+def _claude_bridge_target(name: str) -> str:
+    return f"../../.agents/skills/{name}"
+
+
+def _assert_safe_bridge_destination(root: Path, name: str) -> Path:
+    relative = _claude_bridge_path(name)
+    target = root / relative
+    current = root
+    for part in Path(relative).parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            raise SharedKnowledgeError(
+                f"refusing to manage Claude Skill bridge through symlink: {current}"
+            )
+        if current.exists() and not current.is_dir():
+            raise SharedKnowledgeError(f"Claude Skill bridge parent is not a directory: {current}")
+    return target
+
+
+def _bridge_is_expected(path: Path, name: str) -> bool:
+    return path.is_symlink() and os.readlink(path) == _claude_bridge_target(name)
+
+
+def _verify_symlink_support(transaction: Path) -> None:
+    probe_target = transaction / "symlink-probe-target"
+    probe_link = transaction / "symlink-probe"
+    probe_target.mkdir()
+    try:
+        probe_link.symlink_to("symlink-probe-target", target_is_directory=True)
+        if not probe_link.is_symlink() or os.readlink(probe_link) != "symlink-probe-target":
+            raise OSError("created link did not preserve its relative target")
+        probe_link.unlink()
+    except OSError as error:
+        raise SharedKnowledgeError(
+            f"this filesystem cannot safely create the required Claude Skill bridge: {error}"
+        ) from error
+
+
 def _preflight(plan: DistributionPlan, *, require_present: bool = False) -> None:
     old_by_path = {
         resource.materialized_path: resource
@@ -214,16 +257,39 @@ def _preflight(plan: DistributionPlan, *, require_present: bool = False) -> None
         if not target.exists():
             if require_present:
                 raise SharedKnowledgeError(f"locked managed Agent Skill is missing: {path}")
-            continue
-        if directory_digest(target) != previous.digest_sha256:
+        elif directory_digest(target) != previous.digest_sha256:
             raise SharedKnowledgeError(
                 f"locally modified managed Agent Skill will not be overwritten or removed: {path}"
+            )
+        bridge = _assert_safe_bridge_destination(plan.root, previous.name)
+        if not (bridge.exists() or bridge.is_symlink()):
+            if require_present:
+                raise SharedKnowledgeError(
+                    f"locked managed Claude Skill bridge is missing: {_claude_bridge_path(previous.name)}"
+                )
+        elif not _bridge_is_expected(bridge, previous.name):
+            raise SharedKnowledgeError(
+                f"locally changed managed Claude Skill bridge will not be overwritten or removed: "
+                f"{_claude_bridge_path(previous.name)}"
             )
     for path in desired_paths - set(old_by_path):
         target = _assert_safe_destination(plan.root, path)
         if target.exists() or target.is_symlink():
             raise SharedKnowledgeError(
                 f"refusing to overwrite unmanaged existing Agent Skill: {path}"
+            )
+    old_by_id = {
+        resource.id: resource
+        for resource in (() if plan.previous_lock is None else plan.previous_lock.resources)
+    }
+    for skill in plan.desired_skills:
+        previous = old_by_id.get(skill.id)
+        if previous is not None and previous.name == skill.name:
+            continue
+        bridge = _assert_safe_bridge_destination(plan.root, skill.name)
+        if bridge.exists() or bridge.is_symlink():
+            raise SharedKnowledgeError(
+                f"refusing to overwrite unmanaged existing Claude Skill bridge: {_claude_bridge_path(skill.name)}"
             )
 
 
@@ -237,7 +303,17 @@ def _actions(
     actions: list[DistributionAction] = []
     for resource_id in sorted(set(old_by_id) - set(desired_by_id)):
         item = old_by_id[resource_id]
-        actions.append(DistributionAction("remove", item.id, item.name, item.materialized_path, item.revision, None))
+        actions.append(
+            DistributionAction(
+                "remove",
+                item.id,
+                item.name,
+                item.materialized_path,
+                item.revision,
+                None,
+                "remove",
+            )
+        )
     for skill in desired:
         previous = old_by_id.get(skill.id)
         if previous is None:
@@ -252,6 +328,13 @@ def _actions(
             action = "update"
         else:
             action = "keep"
+        bridge = _assert_safe_bridge_destination(root, skill.name)
+        if _bridge_is_expected(bridge, skill.name):
+            bridge_action = "keep"
+        elif bridge.exists() or bridge.is_symlink():
+            bridge_action = "collision"
+        else:
+            bridge_action = "add" if previous is None else "restore"
         actions.append(
             DistributionAction(
                 action,
@@ -260,6 +343,7 @@ def _actions(
                 skill.materialized_path,
                 previous.revision if previous else None,
                 skill.revision,
+                bridge_action,
             )
         )
     return tuple(actions)
@@ -396,6 +480,7 @@ class TeamKnowledgeDistributionService:
             excluded_paths=(
                 ".team-knowledge",
                 *(resource.materialized_path for resource in previous.resources),
+                *(_claude_bridge_path(resource.name) for resource in previous.resources),
             ),
         )
         catalog = _native_catalog(canonical)
@@ -558,6 +643,7 @@ class TeamKnowledgeDistributionService:
         backups = transaction / "backups"
         staged.mkdir(parents=True)
         backups.mkdir(parents=True)
+        _verify_symlink_support(transaction)
         old_by_id = {
             item.id: item for item in (() if plan.previous_lock is None else plan.previous_lock.resources)
         }
@@ -584,7 +670,17 @@ class TeamKnowledgeDistributionService:
         }
         moved: dict[str, Path] = {}
         installed: list[Path] = []
+        removed_bridges: dict[Path, str] = {}
+        created_bridges: list[Path] = []
         try:
+            for resource_id, previous in old_by_id.items():
+                desired = desired_by_id.get(resource_id)
+                if desired is not None and desired.name == previous.name:
+                    continue
+                bridge = _assert_safe_bridge_destination(root, previous.name)
+                if bridge.is_symlink():
+                    removed_bridges[bridge] = os.readlink(bridge)
+                    bridge.unlink()
             for resource_id, previous in old_by_id.items():
                 desired = desired_by_id.get(resource_id)
                 replace = (
@@ -604,18 +700,32 @@ class TeamKnowledgeDistributionService:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(staged / skill.name, destination)
                 installed.append(destination)
+            for skill in plan.desired_skills:
+                bridge = _assert_safe_bridge_destination(root, skill.name)
+                if bridge.is_symlink():
+                    continue
+                bridge.parent.mkdir(parents=True, exist_ok=True)
+                bridge.symlink_to(_claude_bridge_target(skill.name), target_is_directory=True)
+                created_bridges.append(bridge)
             existing_exclude = originals[exclude_path].decode("utf-8") if originals[exclude_path] is not None else ""
             exclude_path.parent.mkdir(parents=True, exist_ok=True)
             _atomic_text(
                 exclude_path,
                 managed_exclude_content(
                     existing_exclude,
-                    tuple(skill.materialized_path for skill in plan.desired_skills),
+                    tuple(
+                        path
+                        for skill in plan.desired_skills
+                        for path in (skill.materialized_path, _claude_bridge_path(skill.name))
+                    ),
                 ),
             )
             write_json_atomic(config_path, plan.config.to_data())
             write_json_atomic(lock_path, plan.lock.to_data())
         except Exception:
+            for bridge in reversed(created_bridges):
+                if bridge.is_symlink():
+                    bridge.unlink()
             for destination in reversed(installed):
                 if destination.exists():
                     shutil.rmtree(destination)
@@ -624,6 +734,10 @@ class TeamKnowledgeDistributionService:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if backup.exists():
                     os.replace(backup, target)
+            for bridge, target in removed_bridges.items():
+                bridge.parent.mkdir(parents=True, exist_ok=True)
+                if not (bridge.exists() or bridge.is_symlink()):
+                    bridge.symlink_to(target, target_is_directory=True)
             for path, content in originals.items():
                 if content is None:
                     try:
