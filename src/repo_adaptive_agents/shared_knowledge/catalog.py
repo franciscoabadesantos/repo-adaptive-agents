@@ -87,6 +87,12 @@ def _remote_repository(root: Path) -> str:
     return "/".join(parts[-2:]) if len(parts) >= 2 else (parts[0] if parts else root.name)
 
 
+def repository_identity(root: Path) -> str:
+    """Return the existing Git-remote-derived repository identity."""
+
+    return _remote_repository(root)
+
+
 def _default_owner(root: Path) -> str:
     return (
         _git(root, "config", "user.email")

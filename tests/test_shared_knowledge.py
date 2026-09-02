@@ -294,7 +294,7 @@ def test_event_log_contains_only_minimal_event_data(tmp_path: Path):
 
 @pytest.mark.parametrize(
     "command",
-    ["init", "add", "list", "show", "check", "index", "use", "feedback", "revoke"],
+    ["bootstrap", "sync", "init", "add", "list", "show", "check", "index", "use", "feedback", "revoke"],
 )
 def test_each_command_has_help(command: str):
     environment = dict(os.environ)
