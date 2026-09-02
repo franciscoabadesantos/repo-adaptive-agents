@@ -10,6 +10,8 @@ from pathlib import Path
 from .catalog import KnowledgeStore, SharedKnowledgeError, initialize_repository
 from .codex import install_codex_skill
 from .content import KnowledgeContentError
+from .distribution import DistributionPlan, TeamKnowledgeDistributionService
+from .selector import CodexSkillSelector
 from .service import SharedKnowledgeService
 
 
@@ -28,6 +30,20 @@ def _parser() -> argparse.ArgumentParser:
         description="Share repository knowledge with your team's coding agents.",
     )
     commands = parser.add_subparsers(dest="command", required=True, title="commands")
+
+    bootstrap = commands.add_parser(
+        "bootstrap",
+        help="Select and install canonical team Skills from a Git repository",
+    )
+    _repo_argument(bootstrap)
+    bootstrap.add_argument("--source", required=True, help="Canonical team knowledge Git URL or relative path")
+    bootstrap.add_argument("--ref", default="main", help="Canonical Git ref (default: main)")
+    bootstrap.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
+
+    sync = commands.add_parser("sync", help="Safely synchronize bootstrapped canonical team Skills")
+    _repo_argument(sync)
+    sync.add_argument("--offline", action="store_true", help="Verify locked local state without fetching or claiming freshness")
+    sync.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
 
     init = commands.add_parser("init", help="Initialize shared team knowledge in a Git repository")
     _repo_argument(init)
@@ -99,7 +115,69 @@ def _read_body(args: argparse.Namespace) -> str:
     return args.body
 
 
+def _print_distribution_plan(plan: DistributionPlan) -> None:
+    print(f"Team knowledge source: {plan.source_id} @ {plan.source_commit[:12]}")
+    print(f"Repository: {plan.repository_id}")
+    print("Plan:")
+    visible = [action for action in plan.actions if action.action != "keep"]
+    if not visible:
+        print("  no materialized Skill changes")
+    for action in visible:
+        revision = f" @ {action.revision[:12]}" if action.revision else ""
+        print(f"  {action.action.upper():7} {action.id} -> {action.materialized_path}{revision}")
+    if plan.possibly_no_longer_relevant:
+        print("Possibly no longer relevant (kept installed):")
+        for resource_id in plan.possibly_no_longer_relevant:
+            print(f"  {resource_id}")
+    if plan.rejected_ids:
+        print("Rejected by native validation:")
+        for resource_id in plan.rejected_ids:
+            print(f"  {resource_id}")
+    reasons = [(resource_id, reason) for resource_id, reason in plan.selection_reasons if reason]
+    if reasons:
+        print("Model selection rationale (not stored in the lock):")
+        for resource_id, reason in reasons:
+            print(f"  {resource_id}: {reason}")
+    if plan.semantic_pending:
+        print("Semantic reassessment is pending because Codex was unavailable.")
+    if plan.offline:
+        print("Offline verification only; canonical source freshness was not checked.")
+
+
+def _confirm(yes: bool) -> bool:
+    if yes:
+        return True
+    try:
+        return input("Apply? [y/N] ").strip().casefold() in {"y", "yes"}
+    except EOFError:
+        return False
+
+
 def _run(args: argparse.Namespace) -> int:
+    if args.command in {"bootstrap", "sync"}:
+        service = TeamKnowledgeDistributionService(CodexSkillSelector())
+        plan = (
+            service.bootstrap_plan(args.repo, source_url=args.source, ref=args.ref)
+            if args.command == "bootstrap"
+            else service.sync_plan(args.repo, offline=args.offline)
+        )
+        _print_distribution_plan(plan)
+        if plan.offline:
+            service.apply(plan)
+            print("Locked team Skills are present and match their recorded digests.")
+            return 0
+        if not _confirm(args.yes):
+            print("No committed or materialized team knowledge changes were applied.")
+            return 0
+        service.apply(plan)
+        past = {"add": "Added", "update": "Updated", "restore": "Restored", "remove": "Removed"}
+        for action in plan.actions:
+            if action.action != "keep":
+                print(f"{past[action.action]} {action.id}: {action.materialized_path}")
+        print("Recorded canonical selection in .team-knowledge/lock.json")
+        print("Commit .team-knowledge/config.json, .team-knowledge/lock.json, and .team-knowledge/.gitignore")
+        print("Generated Agent Skill copies remain local and Git-excluded.")
+        return 0
     if args.command == "init":
         target = initialize_repository(
             args.repo,

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_distribution_version_and_product_metadata_are_consistent():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
 
-    assert project["version"] == __version__ == "0.13.0"
+    assert project["version"] == __version__ == "0.14.0"
     assert project["readme"] == "README.md"
     assert project["scripts"]["team-knowledge"] == (
         "repo_adaptive_agents.shared_knowledge.cli:main"

@@ -121,9 +121,14 @@ def _looks_like_virtualenv(path: Path) -> bool:
     )
 
 
-def _files(root: Path) -> tuple[list[Path], list[Evidence]]:
+def _files(root: Path, excluded_paths: tuple[str, ...] = ()) -> tuple[list[Path], list[Evidence]]:
     found: list[Path] = []
     warnings: list[Evidence] = []
+    excluded = tuple(path.strip("/") for path in excluded_paths)
+
+    def explicitly_excluded(path: Path) -> bool:
+        relative = path.relative_to(root).as_posix()
+        return any(relative == prefix or relative.startswith(prefix + "/") for prefix in excluded)
 
     def onerror(error: OSError) -> None:
         if error.filename:
@@ -139,7 +144,7 @@ def _files(root: Path) -> tuple[list[Path], list[Evidence]]:
         safe_dirs: list[str] = []
         for name in sorted(dirs):
             path = Path(current) / name
-            if _ignored_directory(name) or _is_installed_dependency_path(path.relative_to(root)) or _looks_like_virtualenv(path):
+            if explicitly_excluded(path) or _ignored_directory(name) or _is_installed_dependency_path(path.relative_to(root)) or _looks_like_virtualenv(path):
                 continue
             if path.is_symlink():
                 resolved = _resolve_candidate(path, root)
@@ -151,7 +156,7 @@ def _files(root: Path) -> tuple[list[Path], list[Evidence]]:
         for name in sorted(names):
             path = Path(current) / name
             relative = _rel(path, root)
-            if name in IGNORED_FILES:
+            if explicitly_excluded(path) or name in IGNORED_FILES:
                 continue
             if path.is_symlink():
                 resolved = _resolve_candidate(path, root)
@@ -693,7 +698,12 @@ def _packaging_signal(prefix: str, local_paths: list[str], manifest: str | None,
     return any(Path(path).name == "__init__.py" and not any(part in {"tests", "test", "scripts"} for part in Path(_local(path, prefix)).parts) for path in local_paths)
 
 
-def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT_EVIDENCE_PATH_LIMIT) -> RepoProfile:
+def profile_repository(
+    repo_path: str | Path,
+    evidence_path_limit: int = DEFAULT_EVIDENCE_PATH_LIMIT,
+    *,
+    excluded_paths: tuple[str, ...] = (),
+) -> RepoProfile:
     if evidence_path_limit < 1:
         raise ValueError("evidence_path_limit must be at least 1")
     root = Path(repo_path).expanduser().resolve()
@@ -703,7 +713,7 @@ def profile_repository(repo_path: str | Path, evidence_path_limit: int = DEFAULT
         raise PermissionError(f"Repository path is not readable: {root}")
     evidence_limit_token = _EVIDENCE_PATH_LIMIT.set(evidence_path_limit)
 
-    paths, scan_evidence = _files(root)
+    paths, scan_evidence = _files(root, excluded_paths)
     rel_paths = [_rel(path, root) for path in paths]
     by_rel = dict(zip(rel_paths, paths))
     all_evidence: list[Evidence] = list(scan_evidence)
