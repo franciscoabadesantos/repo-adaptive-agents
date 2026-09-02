@@ -218,11 +218,18 @@ def load_canonical_catalog(
         return CanonicalCatalog(descriptor, source_commit, ())
     if skills_root.is_symlink() or not skills_root.is_dir():
         raise SharedKnowledgeError("canonical source must contain a safe skills/ directory")
-    stray = [path.name for path in skills_root.iterdir() if path.is_symlink() or not path.is_dir()]
+    stray = [
+        path.name
+        for path in skills_root.iterdir()
+        if path.name != ".gitkeep" and (path.is_symlink() or not path.is_dir())
+    ]
     if stray:
         raise SharedKnowledgeError(f"canonical skills/ contains unsafe entry: {sorted(stray)[0]}")
     parsed: list[CanonicalSkill] = []
-    for directory in sorted(skills_root.iterdir(), key=lambda item: item.name):
+    for directory in sorted(
+        (path for path in skills_root.iterdir() if path.name != ".gitkeep"),
+        key=lambda item: item.name,
+    ):
         sidecar = _json_object(
             directory / "team-knowledge.json",
             allowed=frozenset({"schema_version", "id", "state"}),

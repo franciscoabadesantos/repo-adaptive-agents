@@ -34,6 +34,7 @@ from .consumer import (
     load_consumer_config,
     load_consumer_lock,
     managed_exclude_content,
+    validate_catalog_path,
     validate_source_url,
     write_json_atomic,
 )
@@ -122,12 +123,20 @@ def _context(catalog: CanonicalCatalog, repository_id: str, now: datetime | None
     )
 
 
-def _read_catalog(source: GitKnowledgeSource, commit: str) -> CanonicalCatalog:
-    with source.snapshot(commit) as snapshot:
+def _read_catalog(
+    source: GitKnowledgeSource,
+    commit: str,
+    catalog_path: str,
+) -> CanonicalCatalog:
+    with source.snapshot(commit, catalog_path=catalog_path) as snapshot:
         return load_canonical_catalog(
             snapshot,
             commit,
-            lambda path: source.revision_for(commit, path),
+            lambda path: source.revision_for(
+                commit,
+                path,
+                catalog_path=catalog_path,
+            ),
         )
 
 
@@ -165,6 +174,7 @@ def _locked(
     source_id: str,
     source_url: str,
     source_ref: str,
+    source_catalog_path: str,
     source_commit: str,
 ) -> LockedResource:
     return LockedResource(
@@ -179,6 +189,7 @@ def _locked(
         skill.digest_sha256,
         skill.materialized_path,
         evidence_sha256,
+        source_catalog_path,
     )
 
 
@@ -262,18 +273,30 @@ class TeamKnowledgeDistributionService:
         self,
         repository: str | Path,
         *,
-        source_url: str,
+        source: ConsumerSource | None = None,
+        source_url: str | None = None,
         ref: str = "main",
     ) -> DistributionPlan:
         root = find_repository(repository)
         assert_bootstrap_available(root)
-        source_url = validate_source_url(source_url)
-        if not ref.strip() or ref.startswith("-"):
+        if source is not None and source_url is not None:
+            raise SharedKnowledgeError("provide either a source specification or source_url, not both")
+        if source is None:
+            if source_url is None:
+                raise SharedKnowledgeError("a canonical team knowledge source is required")
+            source = ConsumerSource(source_url, ref, ".")
+        if source.type != "git":
+            raise SharedKnowledgeError("consumer source type must be git")
+        source_url = validate_source_url(source.url)
+        ref = source.ref.strip()
+        catalog_path = validate_catalog_path(source.catalog_path)
+        if not ref or ref.startswith("-"):
             raise SharedKnowledgeError("source ref must be a non-empty Git ref")
+        source_spec = ConsumerSource(source_url, ref, catalog_path)
         ensure_consumer_layout(root)
-        source = GitKnowledgeSource(root)
-        commit = source.acquire(source_url, ref)
-        canonical = _read_catalog(source, commit)
+        git_source = GitKnowledgeSource(root)
+        commit = git_source.acquire(source_url, ref, catalog_path=catalog_path)
+        canonical = _read_catalog(git_source, commit, catalog_path)
         repository_id = repository_identity(root)
         evidence = collect_skill_bootstrap_evidence(root, repository_id)
         catalog = _native_catalog(canonical)
@@ -287,7 +310,7 @@ class TeamKnowledgeDistributionService:
         rejected = tuple(
             decision.resource_id for decision in validation.selection_decisions if not decision.admitted
         )
-        config = ConsumerConfig(repository_id, ConsumerSource(source_url, ref))
+        config = ConsumerConfig(repository_id, source_spec)
         lock = ConsumerLock(
             canonical.descriptor.source_id,
             source_url,
@@ -304,10 +327,12 @@ class TeamKnowledgeDistributionService:
                     source_id=canonical.descriptor.source_id,
                     source_url=source_url,
                     source_ref=ref,
+                    source_catalog_path=catalog_path,
                     source_commit=commit,
                 )
                 for skill in desired
             ),
+            catalog_path,
         )
         plan = DistributionPlan(
             "bootstrap",
@@ -337,6 +362,7 @@ class TeamKnowledgeDistributionService:
             config.repository != previous.repository_id
             or config.source.url != previous.source_url
             or config.source.ref != previous.source_ref
+            or config.source.catalog_path != previous.catalog_path
         ):
             raise SharedKnowledgeError("consumer config and lock disagree")
         if repository_identity(root) != config.repository:
@@ -346,6 +372,7 @@ class TeamKnowledgeDistributionService:
             commit = source.acquire(
                 config.source.url,
                 config.source.ref,
+                catalog_path=config.source.catalog_path,
                 offline=offline,
                 commit=previous.resolved_commit,
             )
@@ -353,7 +380,7 @@ class TeamKnowledgeDistributionService:
             raise SourceUnavailable(
                 f"{error}. Current locked Skills remain available from {previous.resolved_commit}; no local state was changed"
             ) from error
-        canonical = _read_catalog(source, commit)
+        canonical = _read_catalog(source, commit, config.source.catalog_path)
         if canonical.descriptor.source_id != previous.source_id:
             raise SharedKnowledgeError("canonical source_id changed; current local state was left unchanged")
         current_by_id = canonical.by_id()
@@ -411,7 +438,11 @@ class TeamKnowledgeDistributionService:
             _preflight(plan, require_present=True)
             return plan
 
-        old_canonical = _read_catalog(source, previous.evaluated_source_commit)
+        old_canonical = _read_catalog(
+            source,
+            previous.evaluated_source_commit,
+            config.source.catalog_path,
+        )
         old_by_id = old_canonical.by_id()
         new_active = {
             skill.id
@@ -482,10 +513,12 @@ class TeamKnowledgeDistributionService:
                     source_id=previous.source_id,
                     source_url=config.source.url,
                     source_ref=config.source.ref,
+                    source_catalog_path=config.source.catalog_path,
                     source_commit=commit,
                 )
                 for skill in desired
             ),
+            config.source.catalog_path,
         )
         plan = DistributionPlan(
             "sync",

@@ -1,6 +1,6 @@
 # Shared team knowledge for coding agents
 
-Write a reusable Codex Skill once in a team-owned Git repository, then let each engineering
+Write a reusable Codex Skill once in a team-owned Git catalog, then let each engineering
 repository install only the Skills a model judges likely to be relevant. The source stays
 canonical: `team-knowledge sync` distributes central improvements and revocations without
 manual copying.
@@ -21,18 +21,15 @@ python -m pip install .
 team-knowledge --help
 ```
 
-## Canonical team repository
+## Canonical team catalog
 
-The team maintains ordinary Agent Skills in a separate Git repository:
+For the first team trial, the canonical catalog lives alongside this product's code in the
+`team-knowledge/` subtree:
 
 ```text
-team-knowledge.json
-skills/
-  dns/
-    SKILL.md
-    team-knowledge.json
-    references/
-      review.md
+team-knowledge/
+  team-knowledge.json
+  skills/
 ```
 
 The root descriptor identifies the source and its team:
@@ -40,9 +37,9 @@ The root descriptor identifies the source and its team:
 ```json
 {
   "schema_version": 1,
-  "source_id": "platform-team-knowledge",
-  "organization": "example-company",
-  "team": "platform"
+  "source_id": "repo-adaptive-agents-team-knowledge",
+  "organization": "repo-adaptive-agents",
+  "team": "engineering"
 }
 ```
 
@@ -66,10 +63,22 @@ UTF-8 text packages: `SKILL.md` plus optional text references. Symlinks, executa
 In an existing engineering repository, run:
 
 ```sh
-team-knowledge bootstrap \
-  --source https://github.example/platform/team-knowledge.git \
-  --ref main
+team-knowledge bootstrap
 ```
+
+By default, the tool fetches the `main` branch of `repo-adaptive-agents` and reads only its
+`team-knowledge/` catalog. Product code and team knowledge share Git hosting for this trial,
+but remain separate logical assets with independent source paths, revisions, and lifecycle.
+
+To use a different dedicated canonical Git repository, override the source:
+
+```sh
+team-knowledge bootstrap --source <git-repository>
+```
+
+An explicit source preserves the existing external-root behavior: its catalog is read from
+`.`. The chosen URL, ref, and catalog path are recorded so later syncs never silently migrate
+to a different default.
 
 Bootstrap profiles factual repository evidence, gives that evidence and admitted Skill
 `id/name/description` metadata to Codex, and presents a plan. After reviewing it, answer `y`
@@ -101,7 +110,9 @@ applied while semantic additions are deferred. If the Git source is unavailable,
 local Skills and the lock remain untouched. `team-knowledge sync --offline` verifies the
 locked local state without claiming freshness.
 
-See [Cross-repository team knowledge](docs/CROSS_REPOSITORY_TEAM_KNOWLEDGE.md) for the exact
+Unrelated product-code commits do not advance the effective team-knowledge revision or churn
+consumer locks. Commits under `team-knowledge/` do. See
+[Cross-repository team knowledge](docs/CROSS_REPOSITORY_TEAM_KNOWLEDGE.md) for the exact
 formats, safety rules, and sync behavior.
 
 ## Repository-local knowledge
@@ -134,7 +145,8 @@ team-knowledge feedback tk-<id> incorrect
 team-knowledge revoke tk-<id>
 ```
 
-See [Writing useful team knowledge](docs/TEAM_KNOWLEDGE_GUIDE.md) and the
+See [the historical v0.1 product specification](docs/history/shared-knowledge-v0.1.md),
+[Writing useful team knowledge](docs/TEAM_KNOWLEDGE_GUIDE.md), and the
 [pilot operator checklist](docs/PILOT_OPERATOR.md).
 
 ## Architecture boundary
