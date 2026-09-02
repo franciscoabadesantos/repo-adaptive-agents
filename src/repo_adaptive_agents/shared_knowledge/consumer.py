@@ -7,7 +7,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
 from repo_adaptive_agents.shared_knowledge.catalog import SharedKnowledgeError, _git
@@ -22,6 +22,9 @@ EXCLUDE_END = "# END team-knowledge managed Skills"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GIT_REVISION = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+DEFAULT_SOURCE_URL = "git@github.com:franciscoabadesantos/repo-adaptive-agents.git"
+DEFAULT_SOURCE_REF = "main"
+DEFAULT_CATALOG_PATH = "team-knowledge"
 
 
 def _text(value: object, field: str) -> str:
@@ -49,14 +52,40 @@ def validate_source_url(value: str) -> str:
     return source
 
 
+def validate_catalog_path(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise SharedKnowledgeError("catalog path must be a non-empty relative POSIX path")
+    raw = value.strip()
+    if raw == ".":
+        return raw
+    path = PurePosixPath(raw)
+    if "\\" in raw or path.is_absolute() or ".." in path.parts or path.as_posix() != raw:
+        raise SharedKnowledgeError("catalog path must be '.' or a normalized relative POSIX path")
+    return raw
+
+
 @dataclass(frozen=True)
 class ConsumerSource:
     url: str
     ref: str
+    catalog_path: str = "."
     type: str = "git"
 
     def to_data(self) -> dict[str, str]:
-        return {"type": self.type, "url": self.url, "ref": self.ref}
+        return {
+            "type": self.type,
+            "url": self.url,
+            "ref": self.ref,
+            "catalog_path": self.catalog_path,
+        }
+
+
+def default_consumer_source(ref: str = DEFAULT_SOURCE_REF) -> ConsumerSource:
+    return ConsumerSource(DEFAULT_SOURCE_URL, _text(ref, "source ref"), DEFAULT_CATALOG_PATH)
+
+
+def external_consumer_source(url: str, ref: str = DEFAULT_SOURCE_REF) -> ConsumerSource:
+    return ConsumerSource(validate_source_url(url), _text(ref, "source ref"), ".")
 
 
 @dataclass(frozen=True)
@@ -90,12 +119,14 @@ class LockedResource:
     digest_sha256: str
     materialized_path: str
     repository_evidence_sha256: str
+    source_catalog_path: str = "."
 
     def to_data(self) -> dict[str, str]:
         return {
             "source_id": self.source_id,
             "source_url": self.source_url,
             "source_ref": self.source_ref,
+            "source_catalog_path": self.source_catalog_path,
             "resolved_source_commit": self.resolved_source_commit,
             "id": self.id,
             "name": self.name,
@@ -118,6 +149,7 @@ class ConsumerLock:
     evaluated_source_commit: str
     evaluated_evidence_sha256: str
     resources: tuple[LockedResource, ...]
+    catalog_path: str = "."
     schema_version: int = 1
 
     def to_data(self) -> dict[str, object]:
@@ -127,6 +159,7 @@ class ConsumerLock:
                 "source_id": self.source_id,
                 "url": self.source_url,
                 "ref": self.source_ref,
+                "catalog_path": self.catalog_path,
                 "resolved_commit": self.resolved_commit,
             },
             "repository": {"id": self.repository_id, "evidence_sha256": self.evidence_sha256},
@@ -182,12 +215,20 @@ def load_consumer_config(root: Path) -> ConsumerConfig:
     data = _object(data, "consumer config", frozenset({"schema_version", "mode", "repository", "target", "source"}))
     if data.get("schema_version") != 2 or data.get("mode") != "consumer" or data.get("target") != "codex":
         raise SharedKnowledgeError("consumer config must be schema version 2, consumer mode, Codex target")
-    source = _object(data.get("source"), "consumer source", frozenset({"type", "url", "ref"}))
+    source = _object(
+        data.get("source"),
+        "consumer source",
+        frozenset({"type", "url", "ref", "catalog_path"}),
+    )
     if source.get("type") != "git":
         raise SharedKnowledgeError("consumer source type must be git")
     return ConsumerConfig(
         _text(data.get("repository"), "consumer repository"),
-        ConsumerSource(validate_source_url(_text(source.get("url"), "source URL")), _text(source.get("ref"), "source ref")),
+        ConsumerSource(
+            validate_source_url(_text(source.get("url"), "source URL")),
+            _text(source.get("ref"), "source ref"),
+            validate_catalog_path(source.get("catalog_path", ".")),
+        ),
     )
 
 
@@ -196,7 +237,11 @@ def load_consumer_lock(root: Path) -> ConsumerLock:
     data = _object(data, "consumer lock", frozenset({"schema_version", "source", "repository", "selection", "resources"}))
     if data.get("schema_version") != 1:
         raise SharedKnowledgeError("consumer lock schema_version must be 1")
-    source = _object(data.get("source"), "lock source", frozenset({"source_id", "url", "ref", "resolved_commit"}))
+    source = _object(
+        data.get("source"),
+        "lock source",
+        frozenset({"source_id", "url", "ref", "catalog_path", "resolved_commit"}),
+    )
     repository = _object(data.get("repository"), "lock repository", frozenset({"id", "evidence_sha256"}))
     selection = _object(data.get("selection"), "lock selection", frozenset({"evaluated_source_commit", "evidence_sha256"}))
     raw_resources = data.get("resources")
@@ -204,15 +249,30 @@ def load_consumer_lock(root: Path) -> ConsumerLock:
         raise SharedKnowledgeError("lock resources must be an array")
     resources: list[LockedResource] = []
     allowed = frozenset({
-        "source_id", "source_url", "source_ref", "resolved_source_commit", "id", "name",
+        "source_id", "source_url", "source_ref", "source_catalog_path", "resolved_source_commit", "id", "name",
         "source_path", "revision", "digest_sha256", "materialized_path", "repository_evidence_sha256",
     })
     for raw in raw_resources:
         item = _object(raw, "locked resource", allowed)
-        resource = LockedResource(*(_text(item.get(field), f"locked resource {field}") for field in (
-            "source_id", "source_url", "source_ref", "resolved_source_commit", "id", "name",
-            "source_path", "revision", "digest_sha256", "materialized_path", "repository_evidence_sha256"
-        )))
+        resource = LockedResource(
+            source_id=_text(item.get("source_id"), "locked resource source_id"),
+            source_url=_text(item.get("source_url"), "locked resource source_url"),
+            source_ref=_text(item.get("source_ref"), "locked resource source_ref"),
+            resolved_source_commit=_text(
+                item.get("resolved_source_commit"), "locked resource resolved_source_commit"
+            ),
+            id=_text(item.get("id"), "locked resource id"),
+            name=_text(item.get("name"), "locked resource name"),
+            source_path=_text(item.get("source_path"), "locked resource source_path"),
+            revision=_text(item.get("revision"), "locked resource revision"),
+            digest_sha256=_text(item.get("digest_sha256"), "locked resource digest_sha256"),
+            materialized_path=_text(item.get("materialized_path"), "locked resource materialized_path"),
+            repository_evidence_sha256=_text(
+                item.get("repository_evidence_sha256"),
+                "locked resource repository_evidence_sha256",
+            ),
+            source_catalog_path=validate_catalog_path(item.get("source_catalog_path", ".")),
+        )
         validate_source_url(resource.source_url)
         if not _SKILL_NAME.fullmatch(resource.name):
             raise SharedKnowledgeError(f"locked resource has invalid Skill name: {resource.name}")
@@ -241,6 +301,7 @@ def load_consumer_lock(root: Path) -> ConsumerLock:
         _text(selection.get("evaluated_source_commit"), "lock evaluated source commit"),
         _text(selection.get("evidence_sha256"), "lock selection evidence digest"),
         tuple(resources),
+        validate_catalog_path(source.get("catalog_path", ".")),
     )
     if not _GIT_REVISION.fullmatch(lock.resolved_commit) or not _GIT_REVISION.fullmatch(lock.evaluated_source_commit):
         raise SharedKnowledgeError("consumer lock contains an invalid Git commit")
@@ -249,8 +310,20 @@ def load_consumer_lock(root: Path) -> ConsumerLock:
     if any(resource.repository_evidence_sha256 != lock.evidence_sha256 for resource in lock.resources):
         raise SharedKnowledgeError("locked resource evidence digest does not match repository lock")
     if any(
-        (resource.source_id, resource.source_url, resource.source_ref, resource.resolved_source_commit)
-        != (lock.source_id, lock.source_url, lock.source_ref, lock.resolved_commit)
+        (
+            resource.source_id,
+            resource.source_url,
+            resource.source_ref,
+            resource.source_catalog_path,
+            resource.resolved_source_commit,
+        )
+        != (
+            lock.source_id,
+            lock.source_url,
+            lock.source_ref,
+            lock.catalog_path,
+            lock.resolved_commit,
+        )
         for resource in lock.resources
     ):
         raise SharedKnowledgeError("locked resource source provenance does not match repository lock")

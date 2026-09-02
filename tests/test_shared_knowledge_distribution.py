@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import repo_adaptive_agents.shared_knowledge.distribution as distribution
+import repo_adaptive_agents.shared_knowledge.cli as shared_cli
 from repo_adaptive_agents.shared_knowledge import (
     CodexSkillSelector,
     SelectorUnavailable,
@@ -19,7 +20,14 @@ from repo_adaptive_agents.shared_knowledge import (
     SkillSelectionEntry,
     TeamKnowledgeDistributionService,
 )
-from repo_adaptive_agents.shared_knowledge.consumer import load_consumer_lock
+from repo_adaptive_agents.shared_knowledge.consumer import (
+    DEFAULT_CATALOG_PATH,
+    DEFAULT_SOURCE_REF,
+    DEFAULT_SOURCE_URL,
+    ConsumerSource,
+    load_consumer_config,
+    load_consumer_lock,
+)
 from repo_adaptive_agents.shared_knowledge.evidence import RepositoryKnowledgeEvidence
 from repo_adaptive_agents.shared_knowledge.selector import SkillRoutingEntry, parse_selection
 
@@ -85,6 +93,31 @@ def _canonical(parent: Path) -> Path:
     _write_skill(source)
     _git(source, "add", ".")
     _git(source, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Add canonical DNS Skill")
+    return source
+
+
+def _bundled_source(parent: Path) -> Path:
+    source = _repo(parent / "product-source")
+    catalog = source / "team-knowledge"
+    catalog.mkdir()
+    (catalog / "team-knowledge.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_id": "repo-adaptive-agents-team-knowledge",
+                "organization": "repo-adaptive-agents",
+                "team": "engineering",
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_skill(catalog)
+    (source / "src").mkdir()
+    (source / "src/product.py").write_text("VERSION = 1\n", encoding="utf-8")
+    _git(source, "add", ".")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Add bundled team knowledge")
     return source
 
 
@@ -156,6 +189,14 @@ class SelectAllStub:
 
 def _bootstrap(service: TeamKnowledgeDistributionService, root: Path) -> None:
     plan = service.bootstrap_plan(root, source_url="../canonical")
+    service.apply(plan)
+
+
+def _bootstrap_bundled(service: TeamKnowledgeDistributionService, root: Path) -> None:
+    plan = service.bootstrap_plan(
+        root,
+        source=ConsumerSource("../product-source", "main", "team-knowledge"),
+    )
     service.apply(plan)
 
 
@@ -243,6 +284,184 @@ def test_cross_repository_bootstrap_update_and_revocation_vertical(tmp_path: Pat
     service.apply(reactivation)
     assert (repo_a / ".agents/skills/dns/SKILL.md").is_file()
     assert len(selector.calls) == selector_calls + 1
+
+
+def test_default_bootstrap_without_source_uses_bundled_catalog(monkeypatch, tmp_path: Path):
+    source = _bundled_source(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    selector = EvidenceRoutingStub()
+    native_calls = {"admit": 0, "receipt": 0, "validate": 0}
+    original_admit = distribution.native.admit
+    original_validate = distribution.native.validate
+    original_receipt = distribution.native.AdmissionSnapshot.record_exposure
+
+    def admit(*args, **kwargs):
+        native_calls["admit"] += 1
+        return original_admit(*args, **kwargs)
+
+    def validate(*args, **kwargs):
+        native_calls["validate"] += 1
+        return original_validate(*args, **kwargs)
+
+    def receipt(*args, **kwargs):
+        native_calls["receipt"] += 1
+        return original_receipt(*args, **kwargs)
+
+    monkeypatch.setattr(distribution.native, "admit", admit)
+    monkeypatch.setattr(distribution.native, "validate", validate)
+    monkeypatch.setattr(distribution.native.AdmissionSnapshot, "record_exposure", receipt)
+    monkeypatch.setattr(
+        shared_cli,
+        "default_consumer_source",
+        lambda ref="main": ConsumerSource("../product-source", ref, "team-knowledge"),
+    )
+    monkeypatch.setattr(shared_cli, "CodexSkillSelector", lambda: selector)
+
+    result = shared_cli.main(["bootstrap", "--yes", "--repo", str(repository)])
+
+    assert result == 0
+    assert source.is_dir()
+    assert (repository / ".agents/skills/dns/SKILL.md").is_file()
+    config = load_consumer_config(repository)
+    lock = load_consumer_lock(repository)
+    assert config.source == ConsumerSource("../product-source", "main", "team-knowledge")
+    assert lock.source_url == "../product-source"
+    assert lock.source_ref == "main"
+    assert lock.catalog_path == "team-knowledge"
+    assert lock.resources[0].source_path == "skills/dns"
+    assert lock.resources[0].source_catalog_path == "team-knowledge"
+    assert len(selector.calls) == 1
+    assert native_calls == {"admit": 1, "receipt": 1, "validate": 1}
+    assert (DEFAULT_SOURCE_URL, DEFAULT_SOURCE_REF, DEFAULT_CATALOG_PATH) == (
+        "git@github.com:franciscoabadesantos/repo-adaptive-agents.git",
+        "main",
+        "team-knowledge",
+    )
+
+
+def test_explicit_external_source_remains_root_catalog(tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+
+    _bootstrap(service, repository)
+
+    assert load_consumer_config(repository).source.catalog_path == "."
+    lock = load_consumer_lock(repository)
+    assert lock.catalog_path == "."
+    assert lock.resources[0].source_catalog_path == "."
+    assert lock.resources[0].source_path == "skills/dns"
+
+
+def test_old_v02_source_state_without_catalog_path_syncs_as_root(tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+    _bootstrap(service, repository)
+    for name in ("config.json", "lock.json"):
+        path = repository / ".team-knowledge" / name
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["source"].pop("catalog_path", None)
+        if name == "lock.json":
+            for resource in data["resources"]:
+                resource.pop("source_catalog_path", None)
+        path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    cache_metadata = repository / ".team-knowledge/cache/source.json"
+    metadata = json.loads(cache_metadata.read_text(encoding="utf-8"))
+    metadata.pop("catalog_path", None)
+    cache_metadata.write_text(json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8")
+
+    config = load_consumer_config(repository)
+    previous = load_consumer_lock(repository)
+    plan = service.sync_plan(repository)
+
+    assert config.source.catalog_path == previous.catalog_path == "."
+    assert all(action.action == "keep" for action in plan.actions)
+    assert plan.selection_reasons == ()
+    service.apply(plan)
+    assert load_consumer_lock(repository).catalog_path == "."
+
+
+def test_product_only_commit_does_not_churn_bundled_knowledge(tmp_path: Path):
+    source = _bundled_source(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    selector = EvidenceRoutingStub()
+    service = TeamKnowledgeDistributionService(selector)
+    _bootstrap_bundled(service, repository)
+    before = (repository / ".team-knowledge/lock.json").read_bytes()
+    locked = load_consumer_lock(repository)
+    selector_calls = len(selector.calls)
+    (source / "src/product.py").write_text("VERSION = 2\n", encoding="utf-8")
+    _git(source, "add", "src/product.py")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Change product code only")
+
+    plan = service.sync_plan(repository)
+
+    assert plan.source_commit == locked.resolved_commit
+    assert plan.lock == locked
+    assert all(action.action == "keep" for action in plan.actions)
+    assert len(selector.calls) == selector_calls
+    service.apply(plan)
+    assert (repository / ".team-knowledge/lock.json").read_bytes() == before
+
+
+def test_bundled_skill_change_and_new_skill_sync_normally(tmp_path: Path):
+    source = _bundled_source(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    selector = EvidenceRoutingStub()
+    service = TeamKnowledgeDistributionService(selector)
+    _bootstrap_bundled(service, repository)
+    old_lock = load_consumer_lock(repository)
+    selector_calls = len(selector.calls)
+    catalog = source / "team-knowledge"
+    _write_skill(catalog, body="Use the centrally improved DNS workflow.")
+    _git(source, "add", "team-knowledge/skills/dns")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Improve bundled DNS Skill")
+
+    update = service.sync_plan(repository)
+    service.apply(update)
+
+    updated = load_consumer_lock(repository)
+    assert any(action.action == "update" for action in update.actions)
+    assert updated.resolved_commit != old_lock.resolved_commit
+    assert updated.resources[0].revision == updated.resolved_commit
+    assert updated.resources[0].source_path == "skills/dns"
+    assert len(selector.calls) == selector_calls
+
+    _write_skill(
+        catalog,
+        name="postgres",
+        resource_id="postgres",
+        body="Use reviewed migrations.",
+        description="Use for PostgreSQL schema and migration work.",
+    )
+    _git(source, "add", "team-knowledge/skills/postgres")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Add bundled Postgres Skill")
+    selection = TeamKnowledgeDistributionService(SelectAllStub())
+    new_plan = selection.sync_plan(repository)
+
+    assert any(action.id == "postgres" and action.action == "add" for action in new_plan.actions)
+    assert new_plan.selection_reasons
+
+
+def test_bundled_revocation_remains_deterministic(tmp_path: Path):
+    source = _bundled_source(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    selector = EvidenceRoutingStub()
+    service = TeamKnowledgeDistributionService(selector)
+    _bootstrap_bundled(service, repository)
+    calls = len(selector.calls)
+    _write_skill(source / "team-knowledge", state="revoked")
+    _git(source, "add", "team-knowledge/skills/dns/team-knowledge.json")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Revoke bundled DNS Skill")
+
+    plan = service.sync_plan(repository)
+    service.apply(plan)
+
+    assert any(action.action == "remove" for action in plan.actions)
+    assert load_consumer_lock(repository).resources == ()
+    assert not (repository / ".agents/skills/dns").exists()
+    assert len(selector.calls) == calls
 
 
 def test_new_skill_can_be_semantically_added_and_nonselection_never_prunes(tmp_path: Path):
@@ -523,6 +742,37 @@ def test_fresh_checkout_hydrates_generated_skill_from_committed_config_and_lock(
     assert hydrated.resources[0].revision == original.resources[0].revision
     assert hydrated.resources[0].digest_sha256 == original.resources[0].digest_sha256
     assert distribution.directory_digest(fresh / ".agents/skills/dns") == original.resources[0].digest_sha256
+
+
+def test_fresh_checkout_hydrates_default_catalog_without_semantic_reselection(tmp_path: Path):
+    _bundled_source(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    remote = tmp_path / "company/default-consumer.git"
+    remote.parent.mkdir()
+    _git(tmp_path, "init", "--bare", "-q", str(remote))
+    _git(repository, "remote", "add", "origin", str(remote))
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+    _bootstrap_bundled(service, repository)
+    original = load_consumer_lock(repository)
+    _git(repository, "add", ".team-knowledge/.gitignore", ".team-knowledge/config.json", ".team-knowledge/lock.json")
+    _git(repository, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Bootstrap default team knowledge")
+    _git(repository, "push", "-q", "-u", "origin", "main")
+    _git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+    fresh = tmp_path / "fresh-default-consumer"
+    _git(tmp_path, "clone", "-q", str(remote), str(fresh))
+    assert not (fresh / ".team-knowledge/cache").exists()
+    assert not (fresh / ".agents/skills/dns").exists()
+    selector = UnavailableSelector()
+
+    plan = TeamKnowledgeDistributionService(selector).sync_plan(fresh)
+    TeamKnowledgeDistributionService(selector).apply(plan)
+
+    hydrated = load_consumer_lock(fresh)
+    assert next(action for action in plan.actions if action.id == "dns").action == "restore"
+    assert hydrated.catalog_path == "team-knowledge"
+    assert hydrated.resources[0].revision == original.resources[0].revision
+    assert hydrated.resources[0].digest_sha256 == original.resources[0].digest_sha256
+    assert (fresh / ".agents/skills/dns/SKILL.md").is_file()
 
 
 def test_codex_selector_uses_read_only_structured_noninteractive_contract(tmp_path: Path):

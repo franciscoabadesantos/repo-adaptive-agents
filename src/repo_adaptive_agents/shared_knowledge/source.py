@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Iterator
 
 from repo_adaptive_agents.shared_knowledge.catalog import SharedKnowledgeError
+from repo_adaptive_agents.shared_knowledge.consumer import validate_catalog_path
 
 
 class SourceUnavailable(SharedKnowledgeError):
@@ -43,7 +44,16 @@ class GitKnowledgeSource:
         self.cache_metadata = self.state / "cache" / "source.json"
         self.runtime = self.state / "runtime"
 
-    def acquire(self, source_url: str, ref: str, *, offline: bool = False, commit: str | None = None) -> str:
+    def acquire(
+        self,
+        source_url: str,
+        ref: str,
+        *,
+        catalog_path: str = ".",
+        offline: bool = False,
+        commit: str | None = None,
+    ) -> str:
+        catalog_path = validate_catalog_path(catalog_path)
         if self.cache.parent.is_symlink() or self.runtime.is_symlink():
             raise SharedKnowledgeError("team knowledge cache and runtime paths must not be symlinks")
         if self.cache.is_symlink():
@@ -59,7 +69,15 @@ class GitKnowledgeSource:
                 detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "git clone failed"
                 raise SourceUnavailable(f"could not acquire canonical team knowledge: {detail}")
             self.cache_metadata.write_text(
-                json.dumps({"schema_version": 1, "source_url": source_url}, sort_keys=True) + "\n",
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "source_url": source_url,
+                        "catalog_path": catalog_path,
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
                 encoding="utf-8",
             )
         if not self.cache.is_dir():
@@ -68,7 +86,13 @@ class GitKnowledgeSource:
             metadata = json.loads(self.cache_metadata.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
             raise SharedKnowledgeError("team knowledge source cache provenance is missing or invalid") from error
-        if metadata != {"schema_version": 1, "source_url": source_url}:
+        if isinstance(metadata, dict) and "catalog_path" not in metadata:
+            metadata["catalog_path"] = "."
+        if metadata != {
+            "schema_version": 1,
+            "source_url": source_url,
+            "catalog_path": catalog_path,
+        }:
             raise SharedKnowledgeError("team knowledge source cache belongs to a different canonical source")
         if offline:
             if commit is None:
@@ -90,11 +114,33 @@ class GitKnowledgeSource:
         )
         if resolved.returncode != 0 or not resolved.stdout.strip():
             raise SourceUnavailable(f"canonical ref could not be resolved: {ref}")
-        return resolved.stdout.strip()
+        fetched_commit = resolved.stdout.strip()
+        if catalog_path == ".":
+            return fetched_commit
+        knowledge_revision = _run_git(
+            [
+                "--git-dir",
+                str(self.cache),
+                "log",
+                "-1",
+                "--format=%H",
+                fetched_commit,
+                "--",
+                catalog_path,
+            ],
+            cwd=self.consumer_root,
+        )
+        if knowledge_revision.returncode != 0 or not knowledge_revision.stdout.strip():
+            raise SourceUnavailable(
+                f"canonical catalog path has no revision at requested ref: {catalog_path}"
+            )
+        return knowledge_revision.stdout.strip()
 
-    def revision_for(self, commit: str, source_path: str) -> str:
+    def revision_for(self, commit: str, source_path: str, *, catalog_path: str = ".") -> str:
+        catalog_path = validate_catalog_path(catalog_path)
+        git_path = source_path if catalog_path == "." else f"{catalog_path}/{source_path}"
         result = _run_git(
-            ["--git-dir", str(self.cache), "log", "-1", "--format=%H", commit, "--", source_path],
+            ["--git-dir", str(self.cache), "log", "-1", "--format=%H", commit, "--", git_path],
             cwd=self.consumer_root,
         )
         if result.returncode != 0 or not result.stdout.strip():
@@ -102,12 +148,16 @@ class GitKnowledgeSource:
         return result.stdout.strip()
 
     @contextmanager
-    def snapshot(self, commit: str) -> Iterator[Path]:
+    def snapshot(self, commit: str, *, catalog_path: str = ".") -> Iterator[Path]:
+        catalog_path = validate_catalog_path(catalog_path)
         self.runtime.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="source-", dir=self.runtime) as temporary:
             root = Path(temporary)
+            arguments = ["--git-dir", str(self.cache), "archive", "--format=tar", commit]
+            if catalog_path != ".":
+                arguments.extend(["--", catalog_path])
             result = _run_git(
-                ["--git-dir", str(self.cache), "archive", "--format=tar", commit],
+                arguments,
                 cwd=self.consumer_root,
                 binary=True,
             )
@@ -115,7 +165,7 @@ class GitKnowledgeSource:
                 detail = result.stderr.decode("utf-8", errors="replace").strip()
                 raise SharedKnowledgeError(f"cannot read pinned canonical source {commit}: {detail}")
             self._extract(result.stdout, root)
-            yield root
+            yield root if catalog_path == "." else root.joinpath(*PurePosixPath(catalog_path).parts)
 
     @staticmethod
     def _extract(archive: bytes, destination: Path) -> None:

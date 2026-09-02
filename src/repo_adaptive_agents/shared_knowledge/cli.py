@@ -11,6 +11,7 @@ from .catalog import KnowledgeStore, SharedKnowledgeError, initialize_repository
 from .codex import install_codex_skill
 from .content import KnowledgeContentError
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
+from .consumer import default_consumer_source, external_consumer_source
 from .selector import CodexSkillSelector
 from .service import SharedKnowledgeService
 
@@ -36,7 +37,10 @@ def _parser() -> argparse.ArgumentParser:
         help="Select and install canonical team Skills from a Git repository",
     )
     _repo_argument(bootstrap)
-    bootstrap.add_argument("--source", required=True, help="Canonical team knowledge Git URL or relative path")
+    bootstrap.add_argument(
+        "--source",
+        help="Override the default repo-adaptive-agents team knowledge Git source",
+    )
     bootstrap.add_argument("--ref", default="main", help="Canonical Git ref (default: main)")
     bootstrap.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
 
@@ -157,7 +161,14 @@ def _run(args: argparse.Namespace) -> int:
     if args.command in {"bootstrap", "sync"}:
         service = TeamKnowledgeDistributionService(CodexSkillSelector())
         plan = (
-            service.bootstrap_plan(args.repo, source_url=args.source, ref=args.ref)
+            service.bootstrap_plan(
+                args.repo,
+                source=(
+                    external_consumer_source(args.source, args.ref)
+                    if args.source is not None
+                    else default_consumer_source(args.ref)
+                ),
+            )
             if args.command == "bootstrap"
             else service.sync_plan(args.repo, offline=args.offline)
         )

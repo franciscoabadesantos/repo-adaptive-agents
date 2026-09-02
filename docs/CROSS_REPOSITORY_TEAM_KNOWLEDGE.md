@@ -3,7 +3,22 @@
 This vertical proves one property: a team can author a Codex Skill once, select it for
 multiple relevant repositories, and keep every managed copy current from one Git source.
 
-## Source contract
+## Default source and source contract
+
+The normal team-trial command is:
+
+```sh
+team-knowledge bootstrap
+```
+
+It uses the `repo-adaptive-agents` Git repository at ref `main`, with catalog path
+`team-knowledge`. Product code and team knowledge share a repository for the trial but remain
+separate logical assets: the effective knowledge revision is the latest commit that changed
+the catalog subtree, not necessarily the product repository's HEAD.
+
+`team-knowledge bootstrap --source <git-repository>` remains the override for a dedicated
+canonical Git source and reads its catalog from `.`. Config and lock provenance persist the
+chosen URL, ref, and catalog path; sync always uses those recorded coordinates.
 
 The canonical repository has a root `team-knowledge.json` with exactly
 `schema_version`, `source_id`, `organization`, and `team`. Each
@@ -21,7 +36,7 @@ files over 1 MB, Skill packages over 4 MB, and source archives over 20 MB.
 
 ## Bootstrap boundary
 
-`team-knowledge bootstrap --source <git-repository> [--ref <ref>]`:
+`team-knowledge bootstrap [--source <git-repository>] [--ref <ref>]`:
 
 1. clones/fetches the source into ignored `.team-knowledge/cache/` and pins a commit;
 2. reads and validates an immutable Git archive;
@@ -40,7 +55,7 @@ but are deliberately absent from the lock.
 
 Commit:
 
-- `.team-knowledge/config.json`: repository identity and canonical Git URL/ref;
+- `.team-knowledge/config.json`: repository identity and canonical Git URL/ref/catalog path;
 - `.team-knowledge/lock.json`: pinned source and selection identities, Git revisions,
   full-package digests, materialized paths, and factual-evidence digest;
 - `.team-knowledge/.gitignore`: exact local state categories.
@@ -69,7 +84,8 @@ cached pinned commit and never claims the source is current.
 
 ## Current limits
 
-This is one Git source, one team scope, and one Codex target. It does not publish Skills,
+This is one Git source, one team scope, and one Codex target. The bundled catalog is not wheel
+package data; Git remains its canonical update and revision mechanism. The product does not publish Skills,
 merge repository instructions, execute Skill bundles, authenticate users, rank knowledge,
 serve MCP, or manage organization-wide policy. Source cache sharing, hosted distribution,
 and additional agent targets are intentionally out of scope.
