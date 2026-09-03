@@ -6,86 +6,83 @@ Work only inside this repository unless the user explicitly authorizes another p
 
 ## Product direction
 
-This repository builds a repo-adaptive agent-infrastructure bootstrapper. It must analyze
-different types of repositories, preserve their native contracts, recommend useful
-capabilities and optional roles, identify optional integrations, ask for missing decisions,
-and generate portable, auditable proposals. Harness-specific adapters are opt-in outputs.
+This repository provides shared team knowledge for coding agents. Its current architecture is:
 
-Do not assume that repositories are frontend applications. Support different stacks,
-architectures, workflows, risks, and organizational preferences.
+```text
+canonical Git-backed team knowledge
+        ↓
+portable standard Agent Skills
+        ↓
+factual repository evidence
+        ↓
+model-owned semantic Skill relevance
+        ↓
+native deterministic admission / exposure / validation
+        ↓
+vendor-independent repository knowledge selection
+        ↓
+derived local Agent Skills
+```
 
-## Workflow
+`team-knowledge/` is the canonical, team-owned Skill bank for the current trial. Canonical
+knowledge is stored as portable standard Agent Skills, not as vendor-specific copies. See
+`README.md` and `docs/CROSS_REPOSITORY_TEAM_KNOWLEDGE.md` for the current user workflow and
+detailed behavior.
 
-- Inspect before editing.
-- Keep the deterministic core separate from optional LLM-assisted behavior.
-- When preparing another repository, treat `propose` as the canonical assessment output.
-  Provider gaps are advisory and must remain visible, but they do not block deterministic
-  base adapter choices. Offer public provider research only for capabilities the user wants
-  to investigate. Record actual searches of provider marketplaces, skill/plugin repositories,
-  code indexes, or the public web; product documentation alone is not provider discovery.
-- Any plausible installable provider named in a search result must appear as a structured
-  candidate with `suitable`, `partial_only`, or `reject` coverage. Do not hide candidates in
-  prose. A user may explicitly select a partial provider, but the unresolved remainder must
-  stay visible and must not be reported as full capability coverage.
-- Provider research is advisory. For each gap the user elects to investigate, record evidence,
-  candidates, coverage limits, and a recommendation in `provider_research`, present it, then
-  stop for the user's decisions. Unresearched gaps remain visible and adapter choices remain
-  available independently. Do not embed incomplete research
-  in a bundle: after the user responds, record the separate resolution or omit the entire
-  provider branch from the base bundle.
-  Lack of permission to download or install a provider is not evidence that public research
-  is unavailable. Do not bypass the gate with raw outcomes or invented roles.
-- `decompose_capability` must declare two to six narrower, evidence-backed capabilities in
-  `provider_resolution`. Research and resolve those subcapabilities in separate artifacts;
-  this optional branch does not block base adapters. Do not recurse into another decomposition
-  automatically.
-- Treat `adapter-options <repo>` as the only adoption-time role/target query; global renderer
-  catalogs are implementation details, not repository recommendations.
-- Present `adapter-options` role and target choices together with unresolved provider gaps and
-  stop for the user's selection. Do not choose every target, infer a preferred harness, or
-  force provider research before a base adapter bundle.
-- Model capabilities before mapping them to agents.
-- Use subagents only when they materially help.
-- Prefer one implementation owner per file area.
+## Architectural contract
+
+- Keep source acquisition, catalog parsing, factual evidence collection, semantic selection,
+  native validation, and local materialization as separate responsibilities.
+- Semantic repository-to-Skill relevance belongs to the explicitly chosen model selector.
+  Codex, Claude, or Copilot may perform selection. Do not add deterministic keyword matching,
+  capability ontologies, requirement inference, or another fuzzy-relevance fallback.
+- Selector and consumer are independent concepts. Changing the coding agent that later
+  consumes a materialized Skill does not itself trigger semantic reselection. Selector
+  identity is a developer-local invocation choice, not committed repository semantic state.
+- Native deterministic code owns lifecycle, scope, revocation, exposure and admission,
+  integrity, exact resource identity, and post-model validation. Do not duplicate or weaken
+  those rules in selectors, distribution code, integrations, or documentation.
+- `.agents/skills/<name>/` contains generated physical Skill packages used by supported
+  consumers. `.claude/skills/<name>` is a generated discovery bridge to the same package.
+  Generated packages, bridges, caches, events, and runtime state are derived and disposable.
+- `.team-knowledge/config.json` and `.team-knowledge/lock.json` are the durable committed
+  consumer state. Local materialization must remain safely reconstructible from their
+  committed provenance and the canonical source.
+- Central Skill changes and explicit revocations propagate through sync. Preserve integrity,
+  collision protection, locally modified-copy protection, and deterministic revocation.
+
+The repository still contains profiler, recommender, provider-resolution, role, and adapter
+code from the earlier product direction. Treat it as legacy: do not extend it, revive it as
+the product architecture, or route new shared-knowledge behavior through it unless the user
+explicitly requests that work.
+
+## Maintenance workflow
+
+- Inspect relevant code, contracts, documentation, and tests before editing.
+- Keep changes narrowly scoped and preserve native repository conventions.
+- Do not overwrite, revert, or otherwise disturb unrelated local work.
 - Keep generated changes auditable, reversible, and reviewable.
-- Never commit, push, deploy, install integrations, or write to external systems unless explicitly requested.
-- Never store credentials, tokens, secrets, or personal preferences in the repository.
-- Distinguish shared repository configuration, team policy, and local user preferences.
-- Ask before introducing external integrations or permanent repo-level agents.
-- Treat every generated bundle as an unconfirmed tool proposal. The exact installation
-  preview is the decision packet for its proposed roles, targets, and file additions.
-- After presenting that preview, stop and ask the user before applying it. Approval of an
-  earlier role/target discussion is insufficient, but approval of the exact preview accepts
-  both its selection and its file plan; regeneration is required only when that plan changes.
-- Do not hide validation failures by weakening checks.
+- Do not weaken validation or architectural boundaries to make tests pass.
+- Prefer one implementation owner per overlapping file area.
+- Distinguish committed repository or team state from developer-local preferences and runtime
+  state.
+- Never store credentials, tokens, secrets, or personal or local provider preferences in the
+  repository.
+- Do not commit, push, deploy, install integrations, or mutate external systems unless the
+  user explicitly authorizes that action.
+- Report uncertainty, unverified provider behavior, unsupported assumptions, and unavailable
+  validation honestly.
 
-## MVP boundaries
+## Delegation
 
-The first MVP should:
-- analyze a local repository;
-- create a structured repository profile;
-- detect stack, architecture, tests, deploy tooling, and integrations;
-- recommend capabilities and optional roles;
-- identify useful but unavailable external capabilities;
-- resolve capability gaps against optional local provider metadata without network access;
-- emit a deterministic research brief for unresolved provider gaps so an authorized agent
-  can compare public candidates without changing repository state;
-- generate a portable repository profile and infrastructure plan;
-- optionally render explicit, auditable harness adapters;
-- preview and explicitly install new adapter files without overwriting repository state.
-
-The first MVP should not:
-- integrate with Jira, Confluence, Dify, or Cloudflare APIs;
-- manage credentials;
-- deploy remotely;
-- create pull requests automatically;
-- require an LLM for deterministic repository profiling;
-- download, execute, or install knowledge providers.
-- perform network research inside the deterministic CLI; external research remains an
-  optional agent action governed by the generated brief and runtime policy.
+Use delegation only when it materially helps. Read-only exploration can be delegated for
+unfamiliar areas; implementation ownership should be explicit and non-overlapping;
+independent review is useful for risky or boundary-sensitive changes. Keep delegated tasks
+narrow. Do not require an Explorer → Builder → Reviewer pipeline, and do not treat any
+vendor-specific helper-agent configuration as the repository architecture.
 
 ## Validation
 
-Run focused tests for changed code.
-Use fixtures representing materially different repositories.
-Report uncertainty and unsupported detections honestly.
+Run focused validation for changed behavior. Run broader regression checks when a change
+touches architecture boundaries, shared contracts, packaging, generated state, or multiple
+subsystems. Use fixtures representing materially different repositories where relevant.
