@@ -36,11 +36,29 @@ def test_bundled_lets_encrypt_dns01_skill_is_safe_and_canonical():
     )
 
     assert [(skill.id, skill.name, skill.state) for skill in catalog.skills] == [
-        ("lets-encrypt-dns01-octodns-renewal", "lets-encrypt-dns01-octodns-renewal", "active")
+        ("dify-dsl-trace-repair", "dify-dsl-trace-repair", "active"),
+        ("dify-evidence-first-workflow-build", "dify-evidence-first-workflow-build", "active"),
+        ("dify-external-integration-readiness", "dify-external-integration-readiness", "active"),
+        ("dify-iteration-and-batch-safety", "dify-iteration-and-batch-safety", "active"),
+        ("dify-knowledge-retrieval-validation", "dify-knowledge-retrieval-validation", "active"),
+        ("dify-portable-dsl-migration", "dify-portable-dsl-migration", "active"),
+        ("dify-structured-output-gates", "dify-structured-output-gates", "active"),
+        ("dify-workflow-state-and-lifecycle", "dify-workflow-state-and-lifecycle", "active"),
+        ("lets-encrypt-dns01-octodns-renewal", "lets-encrypt-dns01-octodns-renewal", "active"),
     ]
-    skill = catalog.skills[0]
-    assert "Let's Encrypt" in skill.description
-    assert "private key" in skill.skill_text.lower()
-    assert "CLOUDFLARE_TOKEN" not in skill.skill_text
-    assert "/home/user/" not in skill.skill_text
-    assert "BEGIN PRIVATE KEY" not in skill.skill_text
+    skills = {skill.name: skill for skill in catalog.skills}
+    renewal = skills["lets-encrypt-dns01-octodns-renewal"]
+    assert "Let's Encrypt" in renewal.description
+    assert "private key" in renewal.skill_text.lower()
+    for skill in catalog.skills:
+        assert "CLOUDFLARE_TOKEN" not in skill.skill_text
+        assert "/home/user/" not in skill.skill_text
+        assert "BEGIN PRIVATE KEY" not in skill.skill_text
+    assert "Workspace-dependent" in skills["dify-evidence-first-workflow-build"].skill_text
+    assert "first divergence" in skills["dify-dsl-trace-repair"].skill_text
+    assert "deterministic gates" in skills["dify-structured-output-gates"].skill_text
+    assert "postcondition" in skills["dify-external-integration-readiness"].skill_text
+    assert "per-item" in skills["dify-iteration-and-batch-safety"].skill_text
+    assert "conflicting-evidence" in skills["dify-knowledge-retrieval-validation"].skill_text
+    assert "target-bound" in skills["dify-portable-dsl-migration"].skill_text
+    assert "unknown" in skills["dify-workflow-state-and-lifecycle"].skill_text
