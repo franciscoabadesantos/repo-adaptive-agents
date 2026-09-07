@@ -11,6 +11,12 @@ from .catalog import (
 from .canonical import CanonicalCatalog, CanonicalSkill, SourceDescriptor
 from .content import KnowledgeContentError, KnowledgeItem
 from .codex import CODEX_SKILL_PATH, install_codex_skill, skill_text
+from .onboarding import (
+    ONBOARDING_SKILL_NAME,
+    install_onboarding_skills,
+    onboarding_destinations,
+    onboarding_skill_text,
+)
 from .sessions import ExposureSession, ExposureSessions
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
 from .evidence import RepositoryKnowledgeEvidence, collect_skill_bootstrap_evidence
@@ -48,6 +54,7 @@ __all__ = [
     "KnowledgeResolution",
     "KnowledgeStore",
     "CODEX_SKILL_PATH",
+    "ONBOARDING_SKILL_NAME",
     "CanonicalCatalog",
     "CanonicalSkill",
     "ClaudeSkillSelector",
@@ -77,5 +84,8 @@ __all__ = [
     "selector_for",
     "collect_skill_bootstrap_evidence",
     "install_codex_skill",
+    "install_onboarding_skills",
+    "onboarding_destinations",
+    "onboarding_skill_text",
     "skill_text",
 ]

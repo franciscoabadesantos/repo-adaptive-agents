@@ -20,7 +20,7 @@ team-knowledge = "repo_adaptive_agents.shared_knowledge.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"repo_adaptive_agents.shared_knowledge" = ["skill_template/team-knowledge/SKILL.md"]
+"repo_adaptive_agents.shared_knowledge" = ["skill_template/*/SKILL.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

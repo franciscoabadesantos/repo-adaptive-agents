@@ -22,6 +22,9 @@ from repo_adaptive_agents.shared_knowledge import (
     SkillSelection,
     SkillSelectionEntry,
     TeamKnowledgeDistributionService,
+    install_onboarding_skills,
+    onboarding_destinations,
+    onboarding_skill_text,
 )
 from repo_adaptive_agents.shared_knowledge.consumer import (
     DEFAULT_CATALOG_PATH,
@@ -194,6 +197,15 @@ class RevokedSelector:
 class SelectAllStub:
     def select(self, evidence, skills):
         return SkillSelection(tuple(SkillSelectionEntry(skill.id, "Plausibly useful.") for skill in skills))
+
+
+@dataclass
+class TaskRoutingStub:
+    received_task: str | None = None
+
+    def select(self, evidence, skills, *, task=None):
+        self.received_task = task
+        return SkillSelection((SkillSelectionEntry("dns", "Useful for the declared DNS work."),))
 
 
 def _bootstrap(service: TeamKnowledgeDistributionService, root: Path) -> None:
@@ -394,6 +406,41 @@ def test_declined_bootstrap_leaves_no_consumer_state(monkeypatch, tmp_path: Path
     assert not (repository / ".team-knowledge").exists()
     assert not (repository / ".agents/skills").exists()
     assert not (repository / ".claude/skills").exists()
+
+
+def test_task_scoped_bootstrap_gives_only_transient_task_to_selector(tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _unrelated_repo(tmp_path, "consumer")
+    selector = TaskRoutingStub()
+
+    plan = TeamKnowledgeDistributionService(selector).bootstrap_plan(
+        repository,
+        source_url="../canonical",
+        task="Implement DNS-01 certificate renewal.",
+    )
+
+    assert selector.received_task == "Implement DNS-01 certificate renewal."
+    assert [action.id for action in plan.actions] == ["dns"]
+    assert "Implement DNS-01" not in json.dumps(plan.config.to_data())
+    assert "Implement DNS-01" not in json.dumps(plan.lock.to_data())
+
+
+def test_onboarding_skill_installs_all_supported_user_locations(tmp_path: Path):
+    home = tmp_path / "home"
+    environment = {"CODEX_HOME": str(home / "codex")}
+    destinations = onboarding_destinations(home=home, environ=environment)
+
+    installed = install_onboarding_skills(
+        ("codex", "claude", "copilot"), home=home, environ=environment
+    )
+
+    assert [consumer for consumer, _path, created in installed if created] == ["codex", "claude", "copilot"]
+    assert all(
+        path == destinations[consumer] and path.read_text(encoding="utf-8") == onboarding_skill_text()
+        for consumer, path, _created in installed
+    )
+    repeated = install_onboarding_skills(("codex", "claude", "copilot"), home=home, environ=environment)
+    assert all(not created for _consumer, _path, created in repeated)
 
 
 def test_explicit_external_source_remains_root_catalog(tmp_path: Path):

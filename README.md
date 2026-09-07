@@ -111,6 +111,25 @@ git commit -m "Bootstrap shared team knowledge"
 Declining the bootstrap plan leaves no `.team-knowledge/` state or generated Skill package in
 the consumer repository.
 
+To prepare a repository for work it does not yet contain, provide the concrete goal as transient
+model input. It is never written to the config, lock, or generated Skill package:
+
+```sh
+team-knowledge bootstrap --task "Implement Jira issue automation for this service"
+```
+
+For natural-language onboarding in every supported coding agent, install the same portable
+preparation Skill once at the user-level locations for Codex, Claude, and Copilot:
+
+```sh
+team-knowledge install-onboarding --dry-run
+team-knowledge install-onboarding
+```
+
+After that, in any repository, a request such as “prepare this repository to implement Jira
+automation; ask if a material detail is missing” invokes the local onboarding Skill. It shows a
+plan and never applies, commits, or pushes without confirmation.
+
 Validated Skills are materialized once at `.agents/skills/<name>/`, the vendor-neutral Agent
 Skills location used directly by Codex and Copilot. Claude receives a relative directory
 symlink at `.claude/skills/<name>` pointing to that same package. Generated packages, Claude

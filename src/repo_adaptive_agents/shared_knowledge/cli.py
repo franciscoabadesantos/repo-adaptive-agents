@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .catalog import KnowledgeStore, SharedKnowledgeError, initialize_repository
 from .codex import install_codex_skill
+from .onboarding import install_onboarding_skills
 from .content import KnowledgeContentError
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
 from .consumer import default_consumer_source, external_consumer_source
@@ -51,6 +52,11 @@ def _parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="Semantic selector: codex, claude, or copilot (default: TEAM_KNOWLEDGE_SELECTOR or codex)",
     )
+    bootstrap.add_argument(
+        "--task",
+        metavar="TEXT",
+        help="Select Skills for this declared implementation task without recording the task text",
+    )
     bootstrap.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
 
     sync = commands.add_parser("sync", help="Safely synchronize bootstrapped canonical team Skills")
@@ -62,6 +68,18 @@ def _parser() -> argparse.ArgumentParser:
         help="Semantic selector: codex, claude, or copilot (default: TEAM_KNOWLEDGE_SELECTOR or codex)",
     )
     sync.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
+
+    onboarding = commands.add_parser(
+        "install-onboarding",
+        help="Install the portable team-knowledge preparation Skill for coding agents",
+    )
+    onboarding.add_argument(
+        "--consumer",
+        choices=("all", "codex", "claude", "copilot"),
+        default="all",
+        help="User-level coding agent to configure (default: all)",
+    )
+    onboarding.add_argument("--dry-run", action="store_true", help="Show destinations without writing files")
 
     init = commands.add_parser("init", help="Initialize shared team knowledge in a Git repository")
     _repo_argument(init)
@@ -178,6 +196,17 @@ def _confirm(yes: bool) -> bool:
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.command == "install-onboarding":
+        installed = install_onboarding_skills(
+            ("codex", "claude", "copilot") if args.consumer == "all" else (args.consumer,),
+            dry_run=args.dry_run,
+        )
+        for consumer, path, created in installed:
+            action = "Would install" if created else "Already current at"
+            print(f"{action} {consumer} onboarding Skill: {path}")
+        if args.dry_run:
+            print("No files were written.")
+        return 0
     if args.command in {"bootstrap", "sync"}:
         if args.command == "bootstrap" and args.catalog_path is not None and args.source is None:
             raise SharedKnowledgeError("--catalog-path requires --source")
@@ -196,6 +225,7 @@ def _run(args: argparse.Namespace) -> int:
                     if args.source is not None
                     else default_consumer_source(args.ref)
                 ),
+                task=args.task,
             )
             if args.command == "bootstrap"
             else service.sync_plan(args.repo, offline=args.offline)

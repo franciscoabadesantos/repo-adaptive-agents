@@ -41,6 +41,8 @@ class SkillSelector(Protocol):
         self,
         evidence: RepositoryKnowledgeEvidence,
         skills: tuple[SkillRoutingEntry, ...],
+        *,
+        task: str | None = None,
     ) -> SkillSelection: ...
 
 
@@ -80,7 +82,9 @@ SELECTION_INSTRUCTION = (
     "minimal set. A Skill should have a plausible ongoing relationship to the repository, its "
     "systems, dependencies, deployment or runtime environment, or normal engineering workflows. "
     "Do not invent Skills. Return only supplied IDs. Do not decide approval, lifecycle, revocation, "
-    "permissions, or hard eligibility; those are validated separately. Do not inspect the filesystem "
+    "permissions, or hard eligibility; those are validated separately. When a task is supplied, select "
+    "only Skills plausibly useful for that declared work in this repository; do not infer an unrelated "
+    "roadmap. Do not inspect the filesystem "
     "or use tools. Respond only with the requested structured JSON."
 )
 
@@ -88,12 +92,17 @@ SELECTION_INSTRUCTION = (
 def build_selection_request(
     evidence: RepositoryKnowledgeEvidence,
     skills: tuple[SkillRoutingEntry, ...],
+    *,
+    task: str | None = None,
 ) -> dict[str, object]:
-    return {
+    request: dict[str, object] = {
         "schema_version": 1,
         "repository": evidence.data,
         "available_skills": [skill.to_data() for skill in skills],
     }
+    if task is not None:
+        request["task"] = task
+    return request
 
 
 def build_selection_prompt(request: Mapping[str, object]) -> str:
@@ -122,8 +131,10 @@ class CodexSkillSelector:
         self,
         evidence: RepositoryKnowledgeEvidence,
         skills: tuple[SkillRoutingEntry, ...],
+        *,
+        task: str | None = None,
     ) -> SkillSelection:
-        prompt = build_selection_prompt(build_selection_request(evidence, skills))
+        prompt = build_selection_prompt(build_selection_request(evidence, skills, task=task))
         with tempfile.TemporaryDirectory(prefix="team-knowledge-selector-") as temporary:
             root = Path(temporary)
             subprocess.run(
@@ -190,8 +201,10 @@ class ClaudeSkillSelector:
         self,
         evidence: RepositoryKnowledgeEvidence,
         skills: tuple[SkillRoutingEntry, ...],
+        *,
+        task: str | None = None,
     ) -> SkillSelection:
-        prompt = build_selection_prompt(build_selection_request(evidence, skills))
+        prompt = build_selection_prompt(build_selection_request(evidence, skills, task=task))
         schema = json.dumps(OUTPUT_SCHEMA, sort_keys=True, separators=(",", ":"))
         command = [
             self.executable,
@@ -250,8 +263,10 @@ class CopilotSkillSelector:
         self,
         evidence: RepositoryKnowledgeEvidence,
         skills: tuple[SkillRoutingEntry, ...],
+        *,
+        task: str | None = None,
     ) -> SkillSelection:
-        prompt = build_selection_prompt(build_selection_request(evidence, skills))
+        prompt = build_selection_prompt(build_selection_request(evidence, skills, task=task))
         try:
             return self._invoke(prompt)
         except SelectorResponseError:

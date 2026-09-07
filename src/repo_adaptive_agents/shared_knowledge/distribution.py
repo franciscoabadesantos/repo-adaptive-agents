@@ -145,13 +145,22 @@ def _select(
     selector: SkillSelector,
     evidence: RepositoryKnowledgeEvidence,
     snapshot: native.AdmissionSnapshot,
+    *,
+    task: str | None = None,
 ) -> tuple[SkillSelection, native.ExposureReceipt]:
     exposed = snapshot.exposable_resources
     receipt = snapshot.record_exposure(exposed)
     routing = tuple(
         SkillRoutingEntry(resource.id, resource.title, resource.summary) for resource in exposed
     )
-    return selector.select(evidence, routing), receipt
+    # Task intent is model input, never a deterministic relevance rule or persisted state.
+    # The ordinary call keeps existing repository-only selectors compatible.
+    selection = (
+        selector.select(evidence, routing)
+        if task is None
+        else selector.select(evidence, routing, task=task)
+    )
+    return selection, receipt
 
 
 def _validate(
@@ -225,6 +234,14 @@ def _assert_safe_bridge_destination(root: Path, name: str) -> Path:
         if current.exists() and not current.is_dir():
             raise SharedKnowledgeError(f"Claude Skill bridge parent is not a directory: {current}")
     return target
+
+
+def _assert_bootstrap_state_safe(root: Path) -> None:
+    """Reject unsafe pre-existing local cache paths without creating consumer state."""
+    state = root / STATE_DIR
+    for path in (state / "cache", state / "runtime"):
+        if path.is_symlink():
+            raise SharedKnowledgeError("team knowledge cache and runtime paths must not be symlinks")
 
 
 def _bridge_is_expected(path: Path, name: str) -> bool:
@@ -360,9 +377,11 @@ class TeamKnowledgeDistributionService:
         source: ConsumerSource | None = None,
         source_url: str | None = None,
         ref: str = "main",
+        task: str | None = None,
     ) -> DistributionPlan:
         root = find_repository(repository)
         assert_bootstrap_available(root)
+        _assert_bootstrap_state_safe(root)
         if source is not None and source_url is not None:
             raise SharedKnowledgeError("provide either a source specification or source_url, not both")
         if source is None:
@@ -376,6 +395,12 @@ class TeamKnowledgeDistributionService:
         catalog_path = validate_catalog_path(source.catalog_path)
         if not ref or ref.startswith("-"):
             raise SharedKnowledgeError("source ref must be a non-empty Git ref")
+        if task is not None:
+            task = task.strip()
+            if not task:
+                raise SharedKnowledgeError("task must not be empty")
+            if len(task) > 4_000:
+                raise SharedKnowledgeError("task must be at most 4,000 characters")
         source_spec = ConsumerSource(source_url, ref, catalog_path)
         with tempfile.TemporaryDirectory(prefix="team-knowledge-bootstrap-") as temporary:
             git_source = GitKnowledgeSource(root, state=Path(temporary) / "state")
@@ -386,7 +411,7 @@ class TeamKnowledgeDistributionService:
         catalog = _native_catalog(canonical)
         context = _context(canonical, repository_id)
         snapshot = native.admit(context, catalog)
-        selection, receipt = _select(self.selector, evidence, snapshot)
+        selection, receipt = _select(self.selector, evidence, snapshot, task=task)
         selected_ids = tuple(item.id for item in selection.selected)
         validation = _validate(selected_ids, receipt, context, catalog)
         accepted = set(validation.final_resource_ids)
@@ -638,6 +663,16 @@ class TeamKnowledgeDistributionService:
             return
         root = plan.root
         state = ensure_consumer_layout(root)
+        source = GitKnowledgeSource(root)
+        resolved = source.acquire(
+            plan.config.source.url,
+            plan.config.source.ref,
+            catalog_path=plan.config.source.catalog_path,
+        )
+        if resolved != plan.source_commit:
+            raise SharedKnowledgeError(
+                "canonical source changed after planning; review a newly generated bootstrap plan"
+            )
         transaction = state / "runtime" / "transactions" / uuid.uuid4().hex
         staged = transaction / "staged"
         backups = transaction / "backups"

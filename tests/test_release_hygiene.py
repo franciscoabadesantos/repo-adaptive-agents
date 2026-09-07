@@ -20,12 +20,12 @@ def test_distribution_version_and_product_metadata_are_consistent():
     )
 
 
-def test_codex_skill_is_declared_as_wheel_package_data():
+def test_bundled_agent_skills_are_declared_as_wheel_package_data():
     configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert configuration["tool"]["setuptools"]["package-data"][
         "repo_adaptive_agents.shared_knowledge"
-    ] == ["skill_template/team-knowledge/SKILL.md"]
+    ] == ["skill_template/*/SKILL.md"]
 
 
 def test_canonical_skill_catalog_is_safe_and_portable():

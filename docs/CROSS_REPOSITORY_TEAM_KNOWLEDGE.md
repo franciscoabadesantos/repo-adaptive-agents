@@ -43,7 +43,7 @@ files over 1 MB, Skill packages over 4 MB, and source archives over 20 MB.
 
 ## Bootstrap boundary
 
-`team-knowledge bootstrap [--source <git-repository>] [--catalog-path <relative-path>] [--ref <ref>] [--selector <name>]`:
+`team-knowledge bootstrap [--source <git-repository>] [--catalog-path <relative-path>] [--ref <ref>] [--selector <name>] [--task <text>]`:
 
 1. clones/fetches the source into ignored `.team-knowledge/cache/` and pins a commit;
 2. reads and validates an immutable Git archive;
@@ -69,6 +69,19 @@ custom instructions, sessions, and MCP disabled; Copilot uses programmatic silen
 custom instructions, built-in MCP, experimental features, and available tools disabled.
 Malformed Copilot text gets at most one serialization-only retry. Provider unavailability is
 reported; one provider is never silently substituted for another.
+
+`--task` is optional, transient semantic context for a declared future implementation task. It
+is sent only to the selected model alongside the same factual evidence and routing metadata. It
+is not deterministic matching input and is never recorded in the consumer config or lock. This
+lets a repository prepare for a capability it does not yet demonstrate without making a task
+description part of durable repository state.
+
+`team-knowledge install-onboarding [--consumer <all|codex|claude|copilot>]` installs a single
+portable `team-knowledge-prepare` Skill in the standard user-level Skill directory of each
+selected agent. It refuses to overwrite a different existing Skill. The installed Skill turns a
+natural-language request into task-scoped bootstrap, asks only material clarification questions,
+and always previews before application. It does not provide organization-wide managed deployment;
+that remains a vendor administrator concern.
 
 ## Committed and local state
 
