@@ -28,7 +28,7 @@ def test_codex_skill_is_declared_as_wheel_package_data():
     ] == ["skill_template/team-knowledge/SKILL.md"]
 
 
-def test_bundled_lets_encrypt_dns01_skill_is_safe_and_canonical():
+def test_canonical_skill_catalog_is_safe_and_portable():
     catalog = load_canonical_catalog(
         ROOT / "team-knowledge",
         "test-source-commit",
@@ -36,14 +36,9 @@ def test_bundled_lets_encrypt_dns01_skill_is_safe_and_canonical():
     )
 
     assert [(skill.id, skill.name, skill.state) for skill in catalog.skills] == [
-        ("dify-dsl-trace-repair", "dify-dsl-trace-repair", "active"),
-        ("dify-evidence-first-workflow-build", "dify-evidence-first-workflow-build", "active"),
-        ("dify-external-integration-readiness", "dify-external-integration-readiness", "active"),
-        ("dify-iteration-and-batch-safety", "dify-iteration-and-batch-safety", "active"),
-        ("dify-knowledge-retrieval-validation", "dify-knowledge-retrieval-validation", "active"),
-        ("dify-portable-dsl-migration", "dify-portable-dsl-migration", "active"),
-        ("dify-structured-output-gates", "dify-structured-output-gates", "active"),
-        ("dify-workflow-state-and-lifecycle", "dify-workflow-state-and-lifecycle", "active"),
+        ("canonical-team-skill-authoring", "canonical-team-skill-authoring", "active"),
+        ("dify-workflow-operations", "dify-workflow-operations", "active"),
+        ("jira-data-center-operations", "jira-data-center-operations", "active"),
         ("lets-encrypt-dns01-octodns-renewal", "lets-encrypt-dns01-octodns-renewal", "active"),
     ]
     skills = {skill.name: skill for skill in catalog.skills}
@@ -54,11 +49,21 @@ def test_bundled_lets_encrypt_dns01_skill_is_safe_and_canonical():
         assert "CLOUDFLARE_TOKEN" not in skill.skill_text
         assert "/home/user/" not in skill.skill_text
         assert "BEGIN PRIVATE KEY" not in skill.skill_text
-    assert "Workspace-dependent" in skills["dify-evidence-first-workflow-build"].skill_text
-    assert "first divergence" in skills["dify-dsl-trace-repair"].skill_text
-    assert "deterministic gates" in skills["dify-structured-output-gates"].skill_text
-    assert "postcondition" in skills["dify-external-integration-readiness"].skill_text
-    assert "per-item" in skills["dify-iteration-and-batch-safety"].skill_text
-    assert "conflicting-evidence" in skills["dify-knowledge-retrieval-validation"].skill_text
-    assert "target-bound" in skills["dify-portable-dsl-migration"].skill_text
-    assert "unknown" in skills["dify-workflow-state-and-lifecycle"].skill_text
+    authoring = skills["canonical-team-skill-authoring"]
+    assert "progressive references" in authoring.skill_text
+    assert "revocation" in authoring.skill_text
+    assert "research-and-refresh.md" in authoring.skill_text
+    authoring_contract = (
+        ROOT
+        / "team-knowledge/skills/canonical-team-skill-authoring/references/evidence-and-lifecycle.md"
+    ).read_text(encoding="utf-8")
+    assert "schema_version" in authoring_contract
+    assert "package digest" in authoring_contract
+    dify = skills["dify-workflow-operations"]
+    assert "Workspace-dependent" in dify.skill_text
+    assert "trace-repair.md" in dify.skill_text
+    assert "structured-output-and-effects.md" in dify.skill_text
+    assert "unknown outcome" in dify.skill_text
+    jira = skills["jira-data-center-operations"]
+    assert "unknown outcome" in jira.skill_text
+    assert "workflow-transitions.md" in jira.skill_text
