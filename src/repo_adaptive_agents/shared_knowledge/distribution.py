@@ -6,9 +6,10 @@ import os
 import shutil
 import tempfile
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 import repo_adaptive_agents.admission_control as native
 
@@ -43,6 +44,7 @@ from .selector import (
     SelectorUnavailable,
     SkillRoutingEntry,
     SkillSelection,
+    SkillSelectionEntry,
     SkillSelector,
 )
 from .source import GitKnowledgeSource, SourceUnavailable
@@ -147,6 +149,8 @@ def _select(
     snapshot: native.AdmissionSnapshot,
     *,
     task: str | None = None,
+    organization_default_skill_ids: tuple[str, ...] = (),
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[SkillSelection, native.ExposureReceipt]:
     exposed = snapshot.exposable_resources
     receipt = snapshot.record_exposure(exposed)
@@ -154,12 +158,16 @@ def _select(
         SkillRoutingEntry(resource.id, resource.title, resource.summary) for resource in exposed
     )
     # Task intent is model input, never a deterministic relevance rule or persisted state.
-    # The ordinary call keeps existing repository-only selectors compatible.
-    selection = (
-        selector.select(evidence, routing)
-        if task is None
-        else selector.select(evidence, routing, task=task)
-    )
+    if progress is not None:
+        progress("Calling the configured AI selector with read-only factual evidence")
+    selector_arguments: dict[str, object] = {}
+    if task is not None:
+        selector_arguments["task"] = task
+    if organization_default_skill_ids:
+        selector_arguments["organization_default_skill_ids"] = organization_default_skill_ids
+    selection = selector.select(evidence, routing, **selector_arguments)
+    if progress is not None:
+        progress("AI selector completed; validating its proposed Skill IDs")
     return selection, receipt
 
 
@@ -175,6 +183,11 @@ def _validate(
         context,
         catalog,
     )
+
+
+def _repository_organization(repository_id: str) -> str | None:
+    owner, separator, _name = repository_id.partition("/")
+    return owner if separator and owner else None
 
 
 def _locked(
@@ -378,8 +391,11 @@ class TeamKnowledgeDistributionService:
         source_url: str | None = None,
         ref: str = "main",
         task: str | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> DistributionPlan:
         root = find_repository(repository)
+        if progress is not None:
+            progress("Checking local bootstrap safety")
         assert_bootstrap_available(root)
         _assert_bootstrap_state_safe(root)
         if source is not None and source_url is not None:
@@ -402,17 +418,49 @@ class TeamKnowledgeDistributionService:
             if len(task) > 4_000:
                 raise SharedKnowledgeError("task must be at most 4,000 characters")
         source_spec = ConsumerSource(source_url, ref, catalog_path)
+        if progress is not None:
+            progress("Fetching and validating the canonical team knowledge catalog")
         with tempfile.TemporaryDirectory(prefix="team-knowledge-bootstrap-") as temporary:
             git_source = GitKnowledgeSource(root, state=Path(temporary) / "state")
             commit = git_source.acquire(source_url, ref, catalog_path=catalog_path)
             canonical = _read_catalog(git_source, commit, catalog_path)
         repository_id = repository_identity(root)
+        if progress is not None:
+            progress("Collecting factual repository evidence")
         evidence = collect_skill_bootstrap_evidence(root, repository_id)
         catalog = _native_catalog(canonical)
         context = _context(canonical, repository_id)
+        if progress is not None:
+            progress("Checking which canonical Skills are natively admissible")
         snapshot = native.admit(context, catalog)
-        selection, receipt = _select(self.selector, evidence, snapshot, task=task)
+        organization_defaults = (
+            canonical.descriptor.organization_default_skill_ids
+            if task is None
+            and _repository_organization(repository_id) == canonical.descriptor.organization
+            else ()
+        )
+        selection, receipt = _select(
+            self.selector,
+            evidence,
+            snapshot,
+            task=task,
+            organization_default_skill_ids=organization_defaults,
+            progress=progress,
+        )
+        if organization_defaults:
+            selected_ids = {item.id for item in selection.selected}
+            added_defaults = tuple(
+                SkillSelectionEntry(
+                    resource_id,
+                    f"Organization default for {canonical.descriptor.organization} repositories.",
+                )
+                for resource_id in organization_defaults
+                if resource_id not in selected_ids
+            )
+            selection = SkillSelection((*selection.selected, *added_defaults))
         selected_ids = tuple(item.id for item in selection.selected)
+        if progress is not None:
+            progress("Running deterministic validation and preparing the local plan")
         validation = _validate(selected_ids, receipt, context, catalog)
         accepted = set(validation.final_resource_ids)
         desired = tuple(skill for skill in canonical.skills if skill.id in accepted)
@@ -461,7 +509,44 @@ class TeamKnowledgeDistributionService:
             None,
         )
         _preflight(plan)
+        if progress is not None:
+            progress("Plan ready; no repository files have been changed")
         return plan
+
+    def retain_bootstrap_skills(
+        self,
+        plan: DistributionPlan,
+        resource_ids: tuple[str, ...],
+    ) -> DistributionPlan:
+        """Limit an un-applied bootstrap plan to explicit user-approved recommendations."""
+        if plan.operation != "bootstrap" or plan.previous_lock is not None:
+            raise SharedKnowledgeError("only a new bootstrap plan can be limited by user choice")
+        available = {skill.id for skill in plan.desired_skills}
+        recommended = {resource_id for resource_id, _reason in plan.selection_reasons}.intersection(available)
+        requested = set(resource_ids)
+        unknown = sorted(requested - recommended)
+        if unknown:
+            raise SharedKnowledgeError(f"requested Skill is not a validated recommendation: {unknown[0]}")
+        # Mandatory native resources were not model recommendations and cannot be deselected here.
+        retained = requested | (available - recommended)
+        desired = tuple(skill for skill in plan.desired_skills if skill.id in retained)
+        lock = replace(
+            plan.lock,
+            resources=tuple(resource for resource in plan.lock.resources if resource.id in retained),
+        )
+        limited = replace(
+            plan,
+            actions=_actions(plan.root, None, desired),
+            selection_reasons=tuple(
+                (resource_id, reason)
+                for resource_id, reason in plan.selection_reasons
+                if resource_id in retained
+            ),
+            lock=lock,
+            desired_skills=desired,
+        )
+        _preflight(limited)
+        return limited
 
     def sync_plan(self, repository: str | Path, *, offline: bool = False) -> DistributionPlan:
         root = find_repository(repository)

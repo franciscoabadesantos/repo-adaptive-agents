@@ -208,6 +208,15 @@ class TaskRoutingStub:
         return SkillSelection((SkillSelectionEntry("dns", "Useful for the declared DNS work."),))
 
 
+@dataclass
+class OrganizationDefaultStub:
+    calls: list[tuple[str | None, tuple[str, ...]]] = field(default_factory=list)
+
+    def select(self, evidence, skills, *, task=None, organization_default_skill_ids=()):
+        self.calls.append((task, organization_default_skill_ids))
+        return SkillSelection(())
+
+
 def _bootstrap(service: TeamKnowledgeDistributionService, root: Path) -> None:
     plan = service.bootstrap_plan(root, source_url="../canonical")
     service.apply(plan)
@@ -391,7 +400,7 @@ def test_explicit_source_accepts_a_nested_catalog_path(monkeypatch, tmp_path: Pa
     assert (repository / ".agents/skills/dns/SKILL.md").is_file()
 
 
-def test_declined_bootstrap_leaves_no_consumer_state(monkeypatch, tmp_path: Path):
+def test_declined_bootstrap_leaves_no_consumer_state(monkeypatch, tmp_path: Path, capsys):
     _canonical(tmp_path)
     repository = _dns_repo(tmp_path, "consumer", 1)
     selector = EvidenceRoutingStub()
@@ -406,6 +415,10 @@ def test_declined_bootstrap_leaves_no_consumer_state(monkeypatch, tmp_path: Path
     assert not (repository / ".team-knowledge").exists()
     assert not (repository / ".agents/skills").exists()
     assert not (repository / ".claude/skills").exists()
+    output = capsys.readouterr().out
+    assert "Recommended action: APPLY" in output
+    assert "[1] Apply the recommended local plan" in output
+    assert "Never: commits, pushes, deploys, or edits application source files" in output
 
 
 def test_task_scoped_bootstrap_gives_only_transient_task_to_selector(tmp_path: Path):
@@ -423,6 +436,92 @@ def test_task_scoped_bootstrap_gives_only_transient_task_to_selector(tmp_path: P
     assert [action.id for action in plan.actions] == ["dns"]
     assert "Implement DNS-01" not in json.dumps(plan.config.to_data())
     assert "Implement DNS-01" not in json.dumps(plan.lock.to_data())
+
+
+def test_bootstrap_progress_reports_ai_selection_before_any_apply(tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _unrelated_repo(tmp_path, "consumer")
+    progress: list[str] = []
+
+    TeamKnowledgeDistributionService(TaskRoutingStub()).bootstrap_plan(
+        repository,
+        source_url="../canonical",
+        task="Implement DNS-01 certificate renewal.",
+        progress=progress.append,
+    )
+
+    assert progress == [
+        "Checking local bootstrap safety",
+        "Fetching and validating the canonical team knowledge catalog",
+        "Collecting factual repository evidence",
+        "Checking which canonical Skills are natively admissible",
+        "Calling the configured AI selector with read-only factual evidence",
+        "AI selector completed; validating its proposed Skill IDs",
+        "Running deterministic validation and preparing the local plan",
+        "Plan ready; no repository files have been changed",
+    ]
+
+
+def test_user_can_retain_only_some_validated_bootstrap_recommendations(monkeypatch, tmp_path: Path):
+    source = _canonical(tmp_path)
+    _write_skill(
+        source,
+        name="dify",
+        resource_id="dify",
+        description="Use for building, testing, and operating Dify workflows.",
+    )
+    _git(source, "add", ".")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Add Dify Skill")
+    repository = _unrelated_repo(tmp_path, "consumer")
+    service = TeamKnowledgeDistributionService(SelectAllStub())
+    plan = service.bootstrap_plan(repository, source_url="../canonical")
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+    selected = shared_cli._choose_bootstrap_skills(plan)
+    limited = service.retain_bootstrap_skills(plan, selected or ())
+
+    assert selected == ("dify",)
+    assert [skill.id for skill in limited.desired_skills] == ["dify"]
+    assert [resource.id for resource in limited.lock.resources] == ["dify"]
+    assert [action.id for action in limited.actions] == ["dify"]
+
+
+def test_organization_defaults_are_recommended_only_for_matching_repository_owner(tmp_path: Path):
+    source = _canonical(tmp_path)
+    descriptor = json.loads((source / "team-knowledge.json").read_text(encoding="utf-8"))
+    descriptor.update(
+        {
+            "schema_version": 2,
+            "organization": "example",
+            "organization_default_skill_ids": ["dns"],
+        }
+    )
+    (source / "team-knowledge.json").write_text(
+        json.dumps(descriptor, indent=2) + "\n", encoding="utf-8"
+    )
+    _git(source, "add", ".")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Set organization default")
+    organization_repo = _unrelated_repo(tmp_path, "organization-repo")
+    _git(organization_repo, "remote", "add", "origin", "https://github.com/example/service.git")
+    external_repo = _unrelated_repo(tmp_path, "external-repo")
+    _git(external_repo, "remote", "add", "origin", "https://github.com/another/service.git")
+    selector = OrganizationDefaultStub()
+    service = TeamKnowledgeDistributionService(selector)
+
+    organization_plan = service.bootstrap_plan(organization_repo, source_url="../canonical")
+    external_plan = service.bootstrap_plan(external_repo, source_url="../canonical")
+    explicit_selector = TaskRoutingStub()
+    explicit_plan = TeamKnowledgeDistributionService(explicit_selector).bootstrap_plan(
+        external_repo,
+        source_url="../canonical",
+        task="Use the organization ticket workflow explicitly.",
+    )
+
+    assert selector.calls == [(None, ("dns",)), (None, ())]
+    assert [skill.id for skill in organization_plan.desired_skills] == ["dns"]
+    assert external_plan.desired_skills == ()
+    assert explicit_selector.received_task == "Use the organization ticket workflow explicitly."
+    assert [skill.id for skill in explicit_plan.desired_skills] == ["dns"]
 
 
 def test_onboarding_skill_installs_all_supported_user_locations(tmp_path: Path):

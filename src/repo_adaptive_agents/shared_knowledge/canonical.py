@@ -28,6 +28,7 @@ class SourceDescriptor:
     source_id: str
     organization: str
     team: str
+    organization_default_skill_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -83,14 +84,28 @@ def _text(value: object, field: str) -> str:
 def _parse_source(root: Path) -> SourceDescriptor:
     data = _json_object(
         root / "team-knowledge.json",
-        allowed=frozenset({"schema_version", "source_id", "organization", "team"}),
+        allowed=frozenset(
+            {"schema_version", "source_id", "organization", "team", "organization_default_skill_ids"}
+        ),
     )
-    if data.get("schema_version") != 1:
-        raise SharedKnowledgeError("canonical source schema_version must be 1")
+    schema_version = data.get("schema_version")
+    if schema_version not in {1, 2}:
+        raise SharedKnowledgeError("canonical source schema_version must be 1 or 2")
+    raw_defaults = data.get("organization_default_skill_ids", [])
+    if schema_version == 1 and "organization_default_skill_ids" in data:
+        raise SharedKnowledgeError("organization_default_skill_ids requires canonical source schema_version 2")
+    if not isinstance(raw_defaults, list) or any(
+        not isinstance(skill_id, str) or not RESOURCE_ID.fullmatch(skill_id) for skill_id in raw_defaults
+    ):
+        raise SharedKnowledgeError("organization_default_skill_ids must be an array of valid Skill IDs")
+    defaults = tuple(raw_defaults)
+    if len(defaults) != len(set(defaults)):
+        raise SharedKnowledgeError("organization_default_skill_ids must not contain duplicates")
     return SourceDescriptor(
         _text(data.get("source_id"), "source_id"),
         _text(data.get("organization"), "organization"),
         _text(data.get("team"), "team"),
+        defaults,
     )
 
 
@@ -286,4 +301,17 @@ def load_canonical_catalog(
         raise SharedKnowledgeError("canonical Skill IDs must be unique")
     if len(names) != len(set(names)):
         raise SharedKnowledgeError("canonical Skill names must be unique")
+    defaults = set(descriptor.organization_default_skill_ids)
+    unknown_defaults = defaults - set(ids)
+    if unknown_defaults:
+        raise SharedKnowledgeError(
+            f"organization default Skill is missing from catalog: {sorted(unknown_defaults)[0]}"
+        )
+    revoked_defaults = {
+        skill.id for skill in parsed if skill.id in defaults and skill.state != "active"
+    }
+    if revoked_defaults:
+        raise SharedKnowledgeError(
+            f"organization default Skill must be active: {sorted(revoked_defaults)[0]}"
+        )
     return CanonicalCatalog(descriptor, source_commit, tuple(parsed))

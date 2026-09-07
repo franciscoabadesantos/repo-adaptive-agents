@@ -186,11 +186,83 @@ def _print_distribution_plan(plan: DistributionPlan) -> None:
         print("Offline verification only; canonical source freshness was not checked.")
 
 
-def _confirm(yes: bool) -> bool:
+def _approval_recommendation(plan: DistributionPlan) -> tuple[str, str]:
+    planned = [action for action in plan.actions if action.action != "keep"]
+    if plan.semantic_pending:
+        return "CANCEL", "the AI selector was unavailable, so no fresh semantic assessment exists"
+    if plan.rejected_ids:
+        return "CANCEL", "native validation rejected one or more proposed Skills"
+    if not planned:
+        return "CANCEL", "the reviewed plan does not materialize any Skill changes"
+    return "APPLY", "the proposed local changes passed native validation"
+
+
+def _print_approval_form(plan: DistributionPlan) -> None:
+    planned = [action for action in plan.actions if action.action != "keep"]
+    recommendation, reason = _approval_recommendation(plan)
+    skill_count = len({action.id for action in planned})
+    print()
+    print("╭─ Team knowledge decision ──────────────────────────────────────────────╮")
+    print(f"│ Recommended action: {recommendation:<49}│")
+    print(f"│ Why: {reason[:62]:<62}│")
+    print("├───────────────────────────────────────────────────────────────────────┤")
+    print(f"│ Planned Skill changes: {skill_count:<48}│")
+    print("│ Writes: .team-knowledge config, lock, and local ignore rules          │")
+    print("│ Never: commits, pushes, deploys, or edits application source files     │")
+    print("╰───────────────────────────────────────────────────────────────────────╯")
+    if recommendation == "APPLY":
+        print("  [1] Apply the recommended local plan")
+        print("  [2] Cancel — make no changes (default)")
+    else:
+        print("  [1] Apply anyway")
+        print("  [2] Cancel as recommended — make no changes (default)")
+
+
+def _choose_bootstrap_skills(plan: DistributionPlan) -> tuple[str, ...] | None:
+    """Let a person retain only some validated recommendations before final approval."""
+    recommended_ids = {resource_id for resource_id, _reason in plan.selection_reasons}
+    candidates = tuple(skill for skill in plan.desired_skills if skill.id in recommended_ids)
+    if len(candidates) < 2:
+        return tuple(skill.id for skill in candidates)
+    reasons = dict(plan.selection_reasons)
+    print()
+    print("Recommended Skills — choose the ones you want in this repository:")
+    for index, skill in enumerate(candidates, start=1):
+        print(f"  [{index}] {skill.name}: {skill.description}")
+        if reason := reasons.get(skill.id):
+            print(f"      Why recommended: {reason}")
+    print("  [all] Keep every recommendation (default)")
+    print("  [cancel] Stop without changing the repository")
+    while True:
+        try:
+            raw = input("Choose Skill numbers, separated by commas: ").strip().casefold()
+        except EOFError:
+            return None
+        if raw in {"", "all"}:
+            return tuple(skill.id for skill in candidates)
+        if raw in {"cancel", "c", "none", "n"}:
+            return None
+        selected: list[str] = []
+        valid = True
+        for value in (part.strip() for part in raw.split(",")):
+            if not value.isdecimal() or not 1 <= int(value) <= len(candidates):
+                valid = False
+                break
+            skill_id = candidates[int(value) - 1].id
+            if skill_id not in selected:
+                selected.append(skill_id)
+        if valid and selected:
+            return tuple(selected)
+        print(f"Enter numbers from 1 to {len(candidates)}, for example: 1,2. No files were changed.")
+
+
+def _confirm(yes: bool, plan: DistributionPlan) -> bool:
     if yes:
         return True
+    _print_approval_form(plan)
     try:
-        return input("Apply? [y/N] ").strip().casefold() in {"y", "yes"}
+        choice = input("Choose [1/2] (default 2): ").strip().casefold()
+        return choice in {"1", "y", "yes"}
     except EOFError:
         return False
 
@@ -210,9 +282,14 @@ def _run(args: argparse.Namespace) -> int:
     if args.command in {"bootstrap", "sync"}:
         if args.command == "bootstrap" and args.catalog_path is not None and args.source is None:
             raise SharedKnowledgeError("--catalog-path requires --source")
-        service = TeamKnowledgeDistributionService(
-            selector_for(resolve_selector_name(args.selector))
-        )
+        selector_name = resolve_selector_name(args.selector)
+        service = TeamKnowledgeDistributionService(selector_for(selector_name))
+
+        def progress(message: str) -> None:
+            if message.startswith("Calling the configured AI selector"):
+                message = f"Starting {selector_name} AI selection with read-only factual evidence"
+            print(f"[team-knowledge] {message}...", flush=True)
+
         plan = (
             service.bootstrap_plan(
                 args.repo,
@@ -226,16 +303,23 @@ def _run(args: argparse.Namespace) -> int:
                     else default_consumer_source(args.ref)
                 ),
                 task=args.task,
+                progress=progress,
             )
             if args.command == "bootstrap"
             else service.sync_plan(args.repo, offline=args.offline)
         )
+        if args.command == "bootstrap" and not args.yes:
+            selected = _choose_bootstrap_skills(plan)
+            if selected is None:
+                print("No committed or materialized team knowledge changes were applied.")
+                return 0
+            plan = service.retain_bootstrap_skills(plan, selected)
         _print_distribution_plan(plan)
         if plan.offline:
             service.apply(plan)
             print("Locked team Skills are present and match their recorded digests.")
             return 0
-        if not _confirm(args.yes):
+        if not _confirm(args.yes, plan):
             print("No committed or materialized team knowledge changes were applied.")
             return 0
         service.apply(plan)

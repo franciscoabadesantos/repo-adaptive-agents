@@ -23,8 +23,12 @@ canonical Git source and reads its catalog from `.` by default. Use
 provenance persist the chosen URL, ref, and catalog path; sync always uses those recorded
 coordinates.
 
-The canonical repository has a root `team-knowledge.json` with exactly
-`schema_version`, `source_id`, `organization`, and `team`. Each
+The canonical repository has a root `team-knowledge.json` with `schema_version`, `source_id`,
+`organization`, and `team`. Schema version 2 may additionally contain
+`organization_default_skill_ids`: active Skill IDs sent to the selected model and added as
+auditable organization-default recommendations before native validation during a normal bootstrap
+of a repository whose Git remote owner exactly matches `organization`. They are not injected for
+other owners or for explicit task-scoped bootstrap. Each
 `skills/<directory>/team-knowledge.json` has exactly `schema_version`, a stable `id`, and
 `state` (`active` or `revoked`). Semantic routing comes only from the standard Agent Skill
 `name` and `description` in `SKILL.md`.

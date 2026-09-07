@@ -98,6 +98,21 @@ team-knowledge bootstrap --selector claude
 TEAM_KNOWLEDGE_SELECTOR=copilot team-knowledge bootstrap
 ```
 
+The CLI prints each phase, including when it starts and finishes the isolated AI selection.
+Before an interactive approval it repeats the exact local write boundary; approval never commits,
+pushes, deploys, or changes application source files.
+
+When more than one validated Skill is recommended during an interactive bootstrap, the CLI first
+offers numbered choices. Keep all recommendations or select a subset (for example, only Dify and
+not Jira); only that subset is then written to the lock and shown in the final approval form.
+`--yes` is explicit automation consent for the complete validated recommendation set.
+
+A canonical source may opt into schema version 2 and declare
+`organization_default_skill_ids`. During a normal bootstrap, those active Skill IDs are presented
+and enforced as auditable defaults only when the repository's Git remote owner exactly matches the
+descriptor's `organization`. They are never cross-organization defaults and are not injected for an
+explicit `--task`, which remains a separate semantic request.
+
 The command-line flag takes precedence over `TEAM_KNOWLEDGE_SELECTOR`; otherwise Codex is
 used. The selector is an invocation choice, not repository state, and is not written to the
 config or lock. After reviewing the plan, answer `y`
