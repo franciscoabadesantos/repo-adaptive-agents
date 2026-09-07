@@ -17,11 +17,10 @@ Claude does not require the teammate to consume them with Claude, for example.
   Copilot.
 - Ensure Git can access the configured canonical source. The current default uses the
   `repo-adaptive-agents` Git repository over SSH.
-- Ensure at least one reviewed real canonical Skill has been merged under
-  `team-knowledge/skills/`.
-
-The catalog currently contains no real Skills; it contains only its placeholder. This
-walkthrough becomes end-to-end runnable when the first reviewed canonical Skill is merged.
+- Ensure the reviewed canonical Skill is appropriate for the repository and operator. The
+  bundled catalog currently includes the `lets-encrypt-dns01-octodns-renewal` operational
+  Skill; it is relevant only where the required getssl, DNS, and authorization preconditions
+  exist.
 
 ## Bootstrap
 

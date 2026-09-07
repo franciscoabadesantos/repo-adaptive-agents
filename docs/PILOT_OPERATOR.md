@@ -8,9 +8,10 @@ Copilot?
 
 ## Before inviting the team
 
-Prepare a small real canonical corpus under `team-knowledge/skills/` through ordinary Git
-review. The current catalog contains only its placeholder, so the teammate walkthrough is not
-yet end-to-end runnable.
+Prepare and review a small real canonical corpus under `team-knowledge/skills/` through
+ordinary Git review. The catalog starts with `lets-encrypt-dns01-octodns-renewal`; it is an
+operational Skill and must be trialled only with authorized participants in repositories where
+the documented preconditions genuinely exist.
 
 For the first useful proof, aim for:
 

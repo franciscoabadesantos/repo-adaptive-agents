@@ -4,6 +4,7 @@ import tomllib
 from pathlib import Path
 
 from repo_adaptive_agents import __version__
+from repo_adaptive_agents.shared_knowledge.canonical import load_canonical_catalog
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,3 +26,21 @@ def test_codex_skill_is_declared_as_wheel_package_data():
     assert configuration["tool"]["setuptools"]["package-data"][
         "repo_adaptive_agents.shared_knowledge"
     ] == ["skill_template/team-knowledge/SKILL.md"]
+
+
+def test_bundled_lets_encrypt_dns01_skill_is_safe_and_canonical():
+    catalog = load_canonical_catalog(
+        ROOT / "team-knowledge",
+        "test-source-commit",
+        lambda _path: "test-skill-revision",
+    )
+
+    assert [(skill.id, skill.name, skill.state) for skill in catalog.skills] == [
+        ("lets-encrypt-dns01-octodns-renewal", "lets-encrypt-dns01-octodns-renewal", "active")
+    ]
+    skill = catalog.skills[0]
+    assert "Let's Encrypt" in skill.description
+    assert "private key" in skill.skill_text.lower()
+    assert "CLOUDFLARE_TOKEN" not in skill.skill_text
+    assert "/home/user/" not in skill.skill_text
+    assert "BEGIN PRIVATE KEY" not in skill.skill_text

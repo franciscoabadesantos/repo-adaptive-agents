@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "id": "lets-encrypt-dns01-octodns-renewal",
+  "state": "active"
+}
