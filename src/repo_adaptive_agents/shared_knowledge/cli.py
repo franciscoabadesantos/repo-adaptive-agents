@@ -41,6 +41,10 @@ def _parser() -> argparse.ArgumentParser:
         "--source",
         help="Override the default repo-adaptive-agents team knowledge Git source",
     )
+    bootstrap.add_argument(
+        "--catalog-path",
+        help="Relative canonical catalog path inside --source (default: .)",
+    )
     bootstrap.add_argument("--ref", default="main", help="Canonical Git ref (default: main)")
     bootstrap.add_argument(
         "--selector",
@@ -175,6 +179,8 @@ def _confirm(yes: bool) -> bool:
 
 def _run(args: argparse.Namespace) -> int:
     if args.command in {"bootstrap", "sync"}:
+        if args.command == "bootstrap" and args.catalog_path is not None and args.source is None:
+            raise SharedKnowledgeError("--catalog-path requires --source")
         service = TeamKnowledgeDistributionService(
             selector_for(resolve_selector_name(args.selector))
         )
@@ -182,7 +188,11 @@ def _run(args: argparse.Namespace) -> int:
             service.bootstrap_plan(
                 args.repo,
                 source=(
-                    external_consumer_source(args.source, args.ref)
+                    external_consumer_source(
+                        args.source,
+                        args.ref,
+                        args.catalog_path or ".",
+                    )
                     if args.source is not None
                     else default_consumer_source(args.ref)
                 ),

@@ -18,8 +18,10 @@ separate logical assets: the effective knowledge revision is the latest commit t
 the catalog subtree, not necessarily the product repository's HEAD.
 
 `team-knowledge bootstrap --source <git-repository>` remains the override for a dedicated
-canonical Git source and reads its catalog from `.`. Config and lock provenance persist the
-chosen URL, ref, and catalog path; sync always uses those recorded coordinates.
+canonical Git source and reads its catalog from `.` by default. Use
+`--catalog-path <relative-path>` when the catalog is below the source root. Config and lock
+provenance persist the chosen URL, ref, and catalog path; sync always uses those recorded
+coordinates.
 
 The canonical repository has a root `team-knowledge.json` with exactly
 `schema_version`, `source_id`, `organization`, and `team`. Each
@@ -41,7 +43,7 @@ files over 1 MB, Skill packages over 4 MB, and source archives over 20 MB.
 
 ## Bootstrap boundary
 
-`team-knowledge bootstrap [--source <git-repository>] [--ref <ref>] [--selector <name>]`:
+`team-knowledge bootstrap [--source <git-repository>] [--catalog-path <relative-path>] [--ref <ref>] [--selector <name>]`:
 
 1. clones/fetches the source into ignored `.team-knowledge/cache/` and pins a commit;
 2. reads and validates an immutable Git archive;

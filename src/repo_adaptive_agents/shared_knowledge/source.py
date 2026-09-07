@@ -37,9 +37,9 @@ def _run_git(
 
 
 class GitKnowledgeSource:
-    def __init__(self, consumer_root: Path) -> None:
+    def __init__(self, consumer_root: Path, *, state: Path | None = None) -> None:
         self.consumer_root = consumer_root
-        self.state = consumer_root / ".team-knowledge"
+        self.state = state if state is not None else consumer_root / ".team-knowledge"
         self.cache = self.state / "cache" / "source.git"
         self.cache_metadata = self.state / "cache" / "source.json"
         self.runtime = self.state / "runtime"

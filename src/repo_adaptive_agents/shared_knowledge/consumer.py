@@ -22,7 +22,7 @@ EXCLUDE_END = "# END team-knowledge managed Skills"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GIT_REVISION = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-DEFAULT_SOURCE_URL = "git@github.com:franciscoabadesantos/repo-adaptive-agents.git"
+DEFAULT_SOURCE_URL = "https://github.com/franciscoabadesantos/repo-adaptive-agents.git"
 DEFAULT_SOURCE_REF = "main"
 DEFAULT_CATALOG_PATH = "team-knowledge"
 
@@ -84,8 +84,16 @@ def default_consumer_source(ref: str = DEFAULT_SOURCE_REF) -> ConsumerSource:
     return ConsumerSource(DEFAULT_SOURCE_URL, _text(ref, "source ref"), DEFAULT_CATALOG_PATH)
 
 
-def external_consumer_source(url: str, ref: str = DEFAULT_SOURCE_REF) -> ConsumerSource:
-    return ConsumerSource(validate_source_url(url), _text(ref, "source ref"), ".")
+def external_consumer_source(
+    url: str,
+    ref: str = DEFAULT_SOURCE_REF,
+    catalog_path: str = ".",
+) -> ConsumerSource:
+    return ConsumerSource(
+        validate_source_url(url),
+        _text(ref, "source ref"),
+        validate_catalog_path(catalog_path),
+    )
 
 
 @dataclass(frozen=True)

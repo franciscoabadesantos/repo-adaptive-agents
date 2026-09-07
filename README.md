@@ -71,15 +71,23 @@ By default, the tool fetches the `main` branch of `repo-adaptive-agents` and rea
 `team-knowledge/` catalog. Product code and team knowledge share Git hosting for this trial,
 but remain separate logical assets with independent source paths, revisions, and lifecycle.
 
-To use a different dedicated canonical Git repository, override the source:
+To use a different dedicated canonical Git repository whose catalog is at the repository root,
+override the source:
 
 ```sh
 team-knowledge bootstrap --source <git-repository>
 ```
 
-An explicit source preserves the existing external-root behavior: its catalog is read from
-`.`. The chosen URL, ref, and catalog path are recorded so later syncs never silently migrate
-to a different default.
+For a catalog in a subdirectory, provide that path explicitly:
+
+```sh
+team-knowledge bootstrap \
+  --source <git-repository> \
+  --catalog-path team-knowledge
+```
+
+An explicit source defaults to the external-root behavior (`.`). The chosen URL, ref, and
+catalog path are recorded so later syncs never silently migrate to a different default.
 
 Bootstrap profiles factual repository evidence, gives that evidence and admitted Skill
 `id/name/description` metadata to the chosen model selector, and presents a plan. Selectors
@@ -99,6 +107,9 @@ config or lock. After reviewing the plan, answer `y`
 git add .team-knowledge/config.json .team-knowledge/lock.json .team-knowledge/.gitignore
 git commit -m "Bootstrap shared team knowledge"
 ```
+
+Declining the bootstrap plan leaves no `.team-knowledge/` state or generated Skill package in
+the consumer repository.
 
 Validated Skills are materialized once at `.agents/skills/<name>/`, the vendor-neutral Agent
 Skills location used directly by Codex and Copilot. Claude receives a relative directory

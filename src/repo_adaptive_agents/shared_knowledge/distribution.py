@@ -377,10 +377,10 @@ class TeamKnowledgeDistributionService:
         if not ref or ref.startswith("-"):
             raise SharedKnowledgeError("source ref must be a non-empty Git ref")
         source_spec = ConsumerSource(source_url, ref, catalog_path)
-        ensure_consumer_layout(root)
-        git_source = GitKnowledgeSource(root)
-        commit = git_source.acquire(source_url, ref, catalog_path=catalog_path)
-        canonical = _read_catalog(git_source, commit, catalog_path)
+        with tempfile.TemporaryDirectory(prefix="team-knowledge-bootstrap-") as temporary:
+            git_source = GitKnowledgeSource(root, state=Path(temporary) / "state")
+            commit = git_source.acquire(source_url, ref, catalog_path=catalog_path)
+            canonical = _read_catalog(git_source, commit, catalog_path)
         repository_id = repository_identity(root)
         evidence = collect_skill_bootstrap_evidence(root, repository_id)
         catalog = _native_catalog(canonical)
@@ -637,7 +637,7 @@ class TeamKnowledgeDistributionService:
         if plan.offline:
             return
         root = plan.root
-        state = root / STATE_DIR
+        state = ensure_consumer_layout(root)
         transaction = state / "runtime" / "transactions" / uuid.uuid4().hex
         staged = transaction / "staged"
         backups = transaction / "backups"

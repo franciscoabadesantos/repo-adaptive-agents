@@ -346,10 +346,54 @@ def test_default_bootstrap_without_source_uses_bundled_catalog(monkeypatch, tmp_
     assert len(selector.calls) == 1
     assert native_calls == {"admit": 1, "receipt": 1, "validate": 1}
     assert (DEFAULT_SOURCE_URL, DEFAULT_SOURCE_REF, DEFAULT_CATALOG_PATH) == (
-        "git@github.com:franciscoabadesantos/repo-adaptive-agents.git",
+        "https://github.com/franciscoabadesantos/repo-adaptive-agents.git",
         "main",
         "team-knowledge",
     )
+
+
+def test_explicit_source_accepts_a_nested_catalog_path(monkeypatch, tmp_path: Path):
+    _bundled_source(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    selector = EvidenceRoutingStub()
+    monkeypatch.setattr(shared_cli, "selector_for", lambda _name: selector)
+
+    result = shared_cli.main(
+        [
+            "bootstrap",
+            "--yes",
+            "--repo",
+            str(repository),
+            "--source",
+            "../product-source",
+            "--catalog-path",
+            "team-knowledge",
+        ]
+    )
+
+    assert result == 0
+    assert load_consumer_config(repository).source == ConsumerSource(
+        "../product-source", "main", "team-knowledge"
+    )
+    assert load_consumer_lock(repository).catalog_path == "team-knowledge"
+    assert (repository / ".agents/skills/dns/SKILL.md").is_file()
+
+
+def test_declined_bootstrap_leaves_no_consumer_state(monkeypatch, tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    selector = EvidenceRoutingStub()
+    monkeypatch.setattr(shared_cli, "selector_for", lambda _name: selector)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+
+    result = shared_cli.main(
+        ["bootstrap", "--repo", str(repository), "--source", "../canonical"]
+    )
+
+    assert result == 0
+    assert not (repository / ".team-knowledge").exists()
+    assert not (repository / ".agents/skills").exists()
+    assert not (repository / ".claude/skills").exists()
 
 
 def test_explicit_external_source_remains_root_catalog(tmp_path: Path):
