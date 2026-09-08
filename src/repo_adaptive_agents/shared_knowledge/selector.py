@@ -353,9 +353,14 @@ class CopilotSkillSelector:
             ) from error
 
 
-def resolve_selector_name(explicit: str | None, environ: Mapping[str, str] | None = None) -> str:
+def resolve_selector_name(
+    explicit: str | None,
+    environ: Mapping[str, str] | None = None,
+    *,
+    preference: str | None = None,
+) -> str:
     environment = os.environ if environ is None else environ
-    name = (explicit or environment.get("TEAM_KNOWLEDGE_SELECTOR") or "codex").strip().casefold()
+    name = (explicit or environment.get("TEAM_KNOWLEDGE_SELECTOR") or preference or "codex").strip().casefold()
     if name not in SELECTOR_NAMES:
         raise SharedKnowledgeError(f"selector must be one of: {', '.join(SELECTOR_NAMES)}")
     return name

@@ -137,13 +137,41 @@ For natural-language onboarding in every supported coding agent, install the sam
 preparation Skill once at the user-level locations for Codex, Claude, and Copilot:
 
 ```sh
-team-knowledge install-onboarding --dry-run
-team-knowledge install-onboarding
+team-knowledge setup --dry-run
+team-knowledge setup
 ```
 
 After that, in any repository, a request such as “prepare this repository to implement Jira
 automation; ask if a material detail is missing” invokes the local onboarding Skill. It shows a
 plan and never applies, commits, or pushes without confirmation.
+
+### New-machine setup
+
+The CLI is the shared foundation: it is independent of Codex, Claude, and Copilot. Install Python
+3.11+, Git, and the coding agents a person will use, then install the organization’s canonical
+distribution once. With access to a private organization source, a typical isolated install is:
+
+```sh
+pipx install "git+https://github.com/<organization>/<team-knowledge-repository>.git@main"
+team-knowledge setup
+```
+
+`setup` installs the same portable onboarding Skill for all three agents and reports whether their
+CLIs are currently available on `PATH`; it does not install, authenticate, configure, or silently
+substitute any coding agent. A person needs Git access to the private source and must sign in to the
+agent they choose. By default it prepares all three agents, including ones installed later. Use
+`team-knowledge setup --selector claude --only` to limit onboarding to one agent. A Codex plugin can later package the same conversational onboarding, but it is optional:
+the CLI remains the cross-agent installation path.
+
+Set the user-level default semantic selector during setup; it is stored in the person's local
+configuration, never in a repository or lock:
+
+```sh
+team-knowledge setup --selector claude
+```
+
+For one command only, `--selector` wins; `TEAM_KNOWLEDGE_SELECTOR` wins next, then the saved user
+preference, with Codex as the final fallback.
 
 Validated Skills are materialized once at `.agents/skills/<name>/`, the vendor-neutral Agent
 Skills location used directly by Codex and Copilot. Claude receives a relative directory

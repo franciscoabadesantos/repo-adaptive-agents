@@ -15,8 +15,10 @@ from .onboarding import (
     ONBOARDING_SKILL_NAME,
     install_onboarding_skills,
     onboarding_destinations,
+    onboarding_readiness,
     onboarding_skill_text,
 )
+from .preferences import load_selector_preference, preferences_path, save_selector_preference
 from .sessions import ExposureSession, ExposureSessions
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
 from .evidence import RepositoryKnowledgeEvidence, collect_skill_bootstrap_evidence
@@ -86,6 +88,10 @@ __all__ = [
     "install_codex_skill",
     "install_onboarding_skills",
     "onboarding_destinations",
+    "onboarding_readiness",
     "onboarding_skill_text",
+    "load_selector_preference",
+    "preferences_path",
+    "save_selector_preference",
     "skill_text",
 ]

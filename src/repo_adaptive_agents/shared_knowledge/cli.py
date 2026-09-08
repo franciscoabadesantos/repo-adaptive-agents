@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from .catalog import KnowledgeStore, SharedKnowledgeError, initialize_repository
 from .codex import install_codex_skill
-from .onboarding import install_onboarding_skills
+from .onboarding import install_onboarding_skills, onboarding_readiness
+from .preferences import load_selector_preference, save_selector_preference
 from .content import KnowledgeContentError
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
 from .consumer import default_consumer_source, external_consumer_source
@@ -80,6 +82,22 @@ def _parser() -> argparse.ArgumentParser:
         help="User-level coding agent to configure (default: all)",
     )
     onboarding.add_argument("--dry-run", action="store_true", help="Show destinations without writing files")
+
+    setup = commands.add_parser(
+        "setup",
+        help="Prepare and diagnose user-level onboarding for Codex, Claude, and Copilot",
+    )
+    setup.add_argument(
+        "--only",
+        action="store_true",
+        help="Install onboarding only for --selector instead of every supported agent",
+    )
+    setup.add_argument("--dry-run", action="store_true", help="Show readiness and destinations without writing files")
+    setup.add_argument(
+        "--selector",
+        choices=("codex", "claude", "copilot"),
+        help="Save this user-level default selector for future bootstrap and sync commands",
+    )
 
     init = commands.add_parser("init", help="Initialize shared team knowledge in a Git repository")
     _repo_argument(init)
@@ -268,6 +286,43 @@ def _confirm(yes: bool, plan: DistributionPlan) -> bool:
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.command == "setup":
+        if args.only and args.selector is None:
+            raise SharedKnowledgeError("--only requires --selector")
+        consumers = (args.selector,) if args.only else ("codex", "claude", "copilot")
+        readiness = dict(onboarding_readiness(consumers))
+        preference_path = None
+        if args.selector is not None:
+            if args.dry_run:
+                print(f"Would save default selector: {args.selector}")
+            else:
+                preference_path = save_selector_preference(args.selector)
+        installed = install_onboarding_skills(consumers, dry_run=args.dry_run)
+        print("Team knowledge machine setup")
+        print("Agent CLI availability:")
+        for consumer in consumers:
+            status = "available" if readiness[consumer] else "not found on PATH"
+            print(f"  {consumer}: {status}")
+        print("Onboarding Skills:")
+        for consumer, path, created in installed:
+            action = "Would install" if args.dry_run and created else "Installed" if created else "Already current at"
+            print(f"  {action} {consumer}: {path}")
+        if args.dry_run:
+            print("No files were written.")
+            return 0
+        if preference_path is not None:
+            print(f"Saved default selector: {args.selector} ({preference_path})")
+        missing = [consumer for consumer in consumers if not readiness[consumer]]
+        if missing:
+            print(
+                "Note: onboarding was installed, but these agent CLIs are not currently on PATH: "
+                + ", ".join(missing)
+                + ". Install or sign in to them before using them as a selector."
+            )
+        print(
+            "Ready. In any Git repository, ask your coding agent to prepare team knowledge for the work you want to do."
+        )
+        return 0
     if args.command == "install-onboarding":
         installed = install_onboarding_skills(
             ("codex", "claude", "copilot") if args.consumer == "all" else (args.consumer,),
@@ -282,7 +337,10 @@ def _run(args: argparse.Namespace) -> int:
     if args.command in {"bootstrap", "sync"}:
         if args.command == "bootstrap" and args.catalog_path is not None and args.source is None:
             raise SharedKnowledgeError("--catalog-path requires --source")
-        selector_name = resolve_selector_name(args.selector)
+        preference = None
+        if args.selector is None and not os.environ.get("TEAM_KNOWLEDGE_SELECTOR"):
+            preference = load_selector_preference()
+        selector_name = resolve_selector_name(args.selector, preference=preference)
         service = TeamKnowledgeDistributionService(selector_for(selector_name))
 
         def progress(message: str) -> None:

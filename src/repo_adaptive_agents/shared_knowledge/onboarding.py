@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from importlib.resources import files
 from pathlib import Path
 from typing import Iterable, Mapping
@@ -12,6 +13,7 @@ from .catalog import SharedKnowledgeError
 
 ONBOARDING_SKILL_NAME = "team-knowledge-prepare"
 _CONSUMERS = ("codex", "claude", "copilot")
+_CONSUMER_EXECUTABLES = {"codex": "codex", "claude": "claude", "copilot": "copilot"}
 
 
 def onboarding_skill_text() -> str:
@@ -34,6 +36,24 @@ def onboarding_destinations(
         "claude": user_home / ".claude" / "skills" / ONBOARDING_SKILL_NAME / "SKILL.md",
         "copilot": user_home / ".agents" / "skills" / ONBOARDING_SKILL_NAME / "SKILL.md",
     }
+
+
+def onboarding_readiness(
+    consumers: Iterable[str] = _CONSUMERS,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[tuple[str, bool], ...]:
+    """Report whether the selected agent CLIs are on PATH without changing the machine."""
+    requested = tuple(dict.fromkeys(consumers))
+    unknown = tuple(consumer for consumer in requested if consumer not in _CONSUMER_EXECUTABLES)
+    if unknown:
+        raise SharedKnowledgeError(f"unknown onboarding consumer: {unknown[0]}")
+    environment = os.environ if environ is None else environ
+    path = environment.get("PATH")
+    return tuple(
+        (consumer, shutil.which(_CONSUMER_EXECUTABLES[consumer], path=path) is not None)
+        for consumer in requested
+    )
 
 
 def install_onboarding_skills(

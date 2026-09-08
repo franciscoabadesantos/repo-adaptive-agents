@@ -80,12 +80,24 @@ is not deterministic matching input and is never recorded in the consumer config
 lets a repository prepare for a capability it does not yet demonstrate without making a task
 description part of durable repository state.
 
-`team-knowledge install-onboarding [--consumer <all|codex|claude|copilot>]` installs a single
-portable `team-knowledge-prepare` Skill in the standard user-level Skill directory of each
-selected agent. It refuses to overwrite a different existing Skill. The installed Skill turns a
-natural-language request into task-scoped bootstrap, asks only material clarification questions,
-and always previews before application. It does not provide organization-wide managed deployment;
-that remains a vendor administrator concern.
+`team-knowledge setup` is the new-machine entry point. It installs a single portable
+`team-knowledge-prepare` Skill in the standard user-level Skill directory of Codex, Claude, and
+Copilot, reports whether their CLIs are available on `PATH`, and refuses to overwrite a different
+existing Skill. `--dry-run` diagnoses without writing. `--only` limits onboarding to the agent named
+by `--selector`. The CLI does not install or authenticate a coding agent and never silently
+substitutes one for another.
+
+Install the CLI itself once from the organization’s approved Git distribution (for example using
+`pipx install "git+https://github.com/<organization>/<team-knowledge-repository>.git@main"`), then
+run `team-knowledge setup`. The installed Skill turns a natural-language request into task-scoped
+bootstrap, asks only material clarification questions, and always previews before application. A
+Codex plugin may package this conversational entry point as an optional user interface, but the CLI
+remains the vendor-neutral installation path.
+
+`team-knowledge setup --selector <codex|claude|copilot>` saves the person's default semantic selector
+in a user-local configuration file, never in repository state. Resolution order is explicit
+`--selector`, `TEAM_KNOWLEDGE_SELECTOR`, saved user preference, then Codex. This is a local invocation
+choice only and is not written to a consumer config or lock.
 
 ## Committed and local state
 

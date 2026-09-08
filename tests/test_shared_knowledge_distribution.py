@@ -24,7 +24,11 @@ from repo_adaptive_agents.shared_knowledge import (
     TeamKnowledgeDistributionService,
     install_onboarding_skills,
     onboarding_destinations,
+    onboarding_readiness,
     onboarding_skill_text,
+    load_selector_preference,
+    preferences_path,
+    save_selector_preference,
 )
 from repo_adaptive_agents.shared_knowledge.consumer import (
     DEFAULT_CATALOG_PATH,
@@ -540,6 +544,75 @@ def test_onboarding_skill_installs_all_supported_user_locations(tmp_path: Path):
     )
     repeated = install_onboarding_skills(("codex", "claude", "copilot"), home=home, environ=environment)
     assert all(not created for _consumer, _path, created in repeated)
+
+
+def test_onboarding_readiness_reports_each_requested_agent(monkeypatch):
+    commands = {"codex": "/bin/codex", "copilot": "/bin/copilot"}
+    monkeypatch.setattr(
+        "repo_adaptive_agents.shared_knowledge.onboarding.shutil.which",
+        lambda command, path=None: commands.get(command),
+    )
+
+    assert onboarding_readiness(("codex", "claude", "copilot"), environ={"PATH": "/bin"}) == (
+        ("codex", True),
+        ("claude", False),
+        ("copilot", True),
+    )
+
+
+def test_setup_installs_onboarding_and_reports_missing_agent(monkeypatch, tmp_path: Path, capsys):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(home / "codex"))
+    monkeypatch.setattr(
+        "repo_adaptive_agents.shared_knowledge.onboarding.shutil.which",
+        lambda command, path=None: "/bin/codex" if command == "codex" else None,
+    )
+
+    result = shared_cli.main(["setup"])
+    output = capsys.readouterr().out
+
+    assert result == 0
+    assert "codex: available" in output
+    assert "claude: not found on PATH" in output
+    assert "copilot: not found on PATH" in output
+    assert "Note: onboarding was installed" in output
+    destinations = onboarding_destinations(home=home, environ={"CODEX_HOME": str(home / "codex")})
+    assert all(path.exists() for path in destinations.values())
+
+
+def test_setup_only_requires_and_limits_to_its_selector(monkeypatch, tmp_path: Path, capsys):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(home / "codex"))
+    monkeypatch.setattr(
+        "repo_adaptive_agents.shared_knowledge.onboarding.shutil.which",
+        lambda command, path=None: "/bin/claude" if command == "claude" else None,
+    )
+
+    assert shared_cli.main(["setup", "--only"]) == 2
+    assert "--only requires --selector" in capsys.readouterr().err
+    assert shared_cli.main(["setup", "--selector", "claude", "--only"]) == 0
+    output = capsys.readouterr().out
+    assert "claude: available" in output
+    assert "codex:" not in output
+    destinations = onboarding_destinations(home=home, environ={"CODEX_HOME": str(home / "codex")})
+    assert destinations["claude"].exists()
+    assert not destinations["codex"].exists()
+    assert not destinations["copilot"].exists()
+
+
+def test_user_selector_preference_is_local_and_has_lower_precedence_than_explicit_or_environment(tmp_path: Path):
+    home = tmp_path / "home"
+    environment = {"XDG_CONFIG_HOME": str(tmp_path / "config")}
+
+    path = save_selector_preference("claude", home=home, environ=environment)
+
+    assert path == preferences_path(home=home, environ=environment)
+    assert load_selector_preference(home=home, environ=environment) == "claude"
+    assert resolve_selector_name(None, {}, preference="claude") == "claude"
+    assert resolve_selector_name(None, {"TEAM_KNOWLEDGE_SELECTOR": "copilot"}, preference="claude") == "copilot"
+    assert resolve_selector_name("codex", {"TEAM_KNOWLEDGE_SELECTOR": "copilot"}, preference="claude") == "codex"
 
 
 def test_explicit_external_source_remains_root_catalog(tmp_path: Path):
