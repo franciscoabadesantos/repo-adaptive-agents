@@ -202,40 +202,6 @@ consumer locks. Commits under `team-knowledge/` do. See
 [Cross-repository team knowledge](docs/CROSS_REPOSITORY_TEAM_KNOWLEDGE.md) for the exact
 formats, safety rules, and sync behavior.
 
-## Repository-local knowledge
-
-The earlier one-repository workflow remains available for teams that are not yet distributing
-canonical Skills:
-
-```sh
-team-knowledge init --codex
-team-knowledge add \
-  --title "Settlement retry contract" \
-  --summary "Use when changing settlement retry behavior." \
-  --body "Preserve the original idempotency key across every retry."
-team-knowledge check
-```
-
-Its repository-local Codex Skill uses `index --json` and `use --exposure ... --json` to expose
-metadata, request native-validated bodies, and disclose successful use as:
-
-```text
-Used team knowledge: Settlement retry contract
-```
-
-Feedback remains lightweight and local:
-
-```sh
-team-knowledge feedback tk-<id> useful
-team-knowledge feedback tk-<id> outdated
-team-knowledge feedback tk-<id> incorrect
-team-knowledge revoke tk-<id>
-```
-
-See [the historical v0.1 product specification](docs/history/shared-knowledge-v0.1.md),
-[Writing useful team knowledge](docs/TEAM_KNOWLEDGE_GUIDE.md), and the
-[pilot operator checklist](docs/PILOT_OPERATOR.md).
-
 ## Architecture boundary
 
 The explicitly chosen model owns semantic relevance. The product supplies bounded factual repository evidence and

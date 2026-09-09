@@ -12,6 +12,8 @@ import pytest
 
 import repo_adaptive_agents.shared_knowledge.distribution as distribution
 import repo_adaptive_agents.shared_knowledge.cli as shared_cli
+from repo_adaptive_agents.shared_knowledge.skill_quality import SkillAssessment, assessment_prompt
+from repo_adaptive_agents.shared_knowledge.skill_validation import load_candidate
 from repo_adaptive_agents.shared_knowledge import (
     ClaudeSkillSelector,
     CodexSkillSelector,
@@ -600,6 +602,36 @@ def test_setup_only_requires_and_limits_to_its_selector(monkeypatch, tmp_path: P
     assert destinations["claude"].exists()
     assert not destinations["codex"].exists()
     assert not destinations["copilot"].exists()
+
+
+def test_validate_skill_uses_only_the_installed_copy_and_its_locked_predecessor(monkeypatch, tmp_path: Path, capsys):
+    repository = _repo(tmp_path / "consumer")
+    candidate = repository / ".agents" / "skills" / "jira-data-center-operations"
+    candidate.mkdir(parents=True)
+    (candidate / "SKILL.md").write_text(
+        "---\nname: jira-data-center-operations\ndescription: Use for safe Jira operations.\n---\n\n# Jira\n",
+        encoding="utf-8",
+    )
+    seen = []
+
+    def assess(selector, candidate_package):
+        assert selector == "codex"
+        seen.append(assessment_prompt(candidate_package))
+        return SkillAssessment("ready", "Narrow enough.", (), (), "Create one Jira issue.", "Renew a certificate.")
+
+    baseline = load_candidate(candidate)
+    monkeypatch.setattr(shared_cli, "consumer_validation_targets", lambda _root: ((
+        type("Baseline", (), {"id": "jira-data-center-operations", "name": baseline.name,
+            "description": baseline.description, "files": baseline.files, "digest_sha256": baseline.digest_sha256,
+            "source_path": "skills/jira-data-center-operations"})(), candidate),))
+    monkeypatch.setattr(shared_cli, "assess_candidate", assess)
+    assert shared_cli.main(["validate", "jira-data-center-operations", "--repo", str(repository)]) == 0
+    output = capsys.readouterr().out
+
+    assert len(seen) == 1
+    assert "jira-data-center-operations" in seen[0]
+    assert "dify-workflow-operations" not in seen[0]
+    assert "Status: READY" in output
 
 
 def test_user_selector_preference_is_local_and_has_lower_precedence_than_explicit_or_environment(tmp_path: Path):

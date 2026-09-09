@@ -30,6 +30,26 @@ personal paths, or provider-specific frontmatter. They may explain how to decide
 operator has the required access, where to stop, and which maintained automation is the source
 of truth.
 
+## Validate a proposed canonical change
+
+Inside a bootstrapped consumer repository, validate a changed local materialization without
+typing a path, source URL, or a second semantic-validation command:
+
+```sh
+team-knowledge validate
+```
+
+The menu lists only Skills installed in that repository. For each chosen Skill it discovers the
+local `.agents/skills/...` package and its exact canonical URL, commit, and path from the locked
+provenance. It compares only that pair, checks the portable package boundary and common
+secret/personal-path markers, then runs the isolated semantic assessment with the person's saved
+selector. It never publishes, replaces, or commits a Skill.
+
+The evaluator receives only the selected package, not a repository or other Skills. Its
+recommendation and two boundary exercises are evidence for improvement, never authorization to
+publish. A candidate is not a new canonical version until its contents are deliberately copied
+into the catalog, reviewed through the normal Git workflow, and committed.
+
 Add knowledge that another engineer's coding agent would genuinely benefit from and that the
 repository itself does not make obvious.
 
@@ -50,22 +70,3 @@ Avoid copying source code, temporary incident detail, secrets, personal preferen
 information already clear in maintained repository documentation. Do not add speculative
 advice as an established team contract. For privileged operations, make authorization and
 missing-access stop conditions explicit; a Skill informs an operator but never grants access.
-
-## Repository-local legacy knowledge
-
-The commands below create the earlier repository-local knowledge format. Use them only for
-that legacy workflow, not to add to the canonical `team-knowledge/` catalog.
-
-Example:
-
-```sh
-team-knowledge add \
-  --title "Settlement retry contract" \
-  --summary "Use when changing settlement retry behavior." \
-  --body "Preserve the original idempotency key across every retry."
-```
-
-Review the generated Markdown in a normal pull request. Edit an item and increment its
-`revision` when the guidance changes. Use `team-knowledge revoke ID` when it must no longer
-survive validation. `useful`, `outdated`, and `incorrect` feedback are signals for human
-review; they never change an item automatically.

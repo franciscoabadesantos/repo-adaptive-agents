@@ -9,14 +9,18 @@ import sys
 from pathlib import Path
 
 from .catalog import KnowledgeStore, SharedKnowledgeError, initialize_repository
+from .canonical import CanonicalSkill
 from .codex import install_codex_skill
 from .onboarding import install_onboarding_skills, onboarding_readiness
 from .preferences import load_selector_preference, save_selector_preference
+from .proposals import prepare_new, prepare_update, proposal_root
 from .content import KnowledgeContentError
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
 from .consumer import default_consumer_source, external_consumer_source
 from .selector import resolve_selector_name, selector_for
 from .service import SharedKnowledgeService
+from .skill_quality import assess_candidate
+from .skill_validation import consumer_validation_targets, load_candidate, local_canonical_skills, validate_skill
 
 
 def _repo_argument(parser: argparse.ArgumentParser) -> None:
@@ -83,6 +87,19 @@ def _parser() -> argparse.ArgumentParser:
     )
     onboarding.add_argument("--dry-run", action="store_true", help="Show destinations without writing files")
 
+    validate_skill_command = commands.add_parser(
+        "validate", help="Validate local canonical Skills, installed copies, or private proposals"
+    )
+    _repo_argument(validate_skill_command)
+    validate_skill_command.add_argument("skill_ids", nargs="*", metavar="SKILL_ID")
+    validate_skill_command.add_argument("--selector", choices=("codex", "claude", "copilot"))
+
+    propose = commands.add_parser("propose", help="Prepare a local proposal for a new or improved canonical Skill")
+    _repo_argument(propose)
+    propose.add_argument("--new", action="store_true", help="Create a new portable Skill proposal")
+    propose.add_argument("--name", help="New Skill name (with --new)")
+    propose.add_argument("--description", help="New Skill discovery description (with --new)")
+
     setup = commands.add_parser(
         "setup",
         help="Prepare and diagnose user-level onboarding for Codex, Claude, and Copilot",
@@ -99,64 +116,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Save this user-level default selector for future bootstrap and sync commands",
     )
 
-    init = commands.add_parser("init", help="Initialize shared team knowledge in a Git repository")
-    _repo_argument(init)
-    init.add_argument("--organization", help="Organization scope (default: local)")
-    init.add_argument("--team", help="Team name (default: repository name)")
-    init.add_argument("--repository", help="Repository identity (default: Git remote slug or directory name)")
-    init.add_argument("--owner", help="Default contribution owner (default: Git user email/name)")
-    init.add_argument(
-        "--codex",
-        action="store_true",
-        help="Install the repository-local team-knowledge Agent Skill for Codex",
-    )
-
-    add = commands.add_parser("add", help="Add a Markdown knowledge item")
-    _repo_argument(add)
-    add.add_argument("--title", required=True, help="Short human-readable title")
-    add.add_argument("--summary", required=True, help="One line describing when the item is useful")
-    body = add.add_mutually_exclusive_group(required=True)
-    body.add_argument("--body", help="Markdown body text")
-    body.add_argument("--body-file", metavar="PATH", help="Read the Markdown body from a UTF-8 file")
-    add.add_argument("--owner", help="Override the configured default owner")
-    add.add_argument(
-        "--restricted",
-        action="store_true",
-        help="Withhold this item from agents whenever it is inadmissible",
-    )
-
-    list_items = commands.add_parser("list", help="List shared team knowledge")
-    _repo_argument(list_items)
-
-    show = commands.add_parser("show", help="Show one knowledge item as source Markdown")
+    listing = commands.add_parser("list", help="List local canonical or installed team Skills")
+    _repo_argument(listing)
+    show = commands.add_parser("show", help="Show one local canonical or installed Skill")
     _repo_argument(show)
-    show.add_argument("item_id", metavar="ID", help="Stable knowledge item ID")
-
-    check = commands.add_parser("check", help="Validate all knowledge and its native catalog mapping")
-    _repo_argument(check)
-
-    index = commands.add_parser("index", help="Expose the model-visible knowledge index")
-    _repo_argument(index)
-    index.add_argument("--json", action="store_true", help="Emit the machine-readable agent contract")
-    index.add_argument("--task-id", help="Optional local task correlation ID for pilot events")
-
-    use = commands.add_parser("use", help="Validate selected IDs and return only approved knowledge bodies")
-    _repo_argument(use)
-    use.add_argument("item_ids", nargs="+", metavar="ID", help="Knowledge IDs selected from one index response")
-    use.add_argument("--exposure", required=True, metavar="ID", help="Exposure ID returned by index")
-    use.add_argument("--json", action="store_true", help="Emit the machine-readable agent contract")
-    use.add_argument("--task-id", help="Optional local task correlation ID for pilot events")
-
-    feedback = commands.add_parser("feedback", help="Record useful, outdated, or incorrect feedback")
-    _repo_argument(feedback)
-    feedback.add_argument("item_id", metavar="ID", help="Stable knowledge item ID")
-    feedback.add_argument("feedback", choices=("useful", "outdated", "incorrect"))
-    feedback.add_argument("--task-id", help="Optional local task correlation ID for pilot events")
-    feedback.add_argument("--json", action="store_true", help="Emit a machine-readable confirmation")
-
-    revoke = commands.add_parser("revoke", help="Revoke an item while preserving its file and Git history")
-    _repo_argument(revoke)
-    revoke.add_argument("item_id", metavar="ID", help="Stable knowledge item ID")
+    show.add_argument("skill_id", metavar="ID")
     return parser
 
 
@@ -274,6 +238,89 @@ def _choose_bootstrap_skills(plan: DistributionPlan) -> tuple[str, ...] | None:
         print(f"Enter numbers from 1 to {len(candidates)}, for example: 1,2. No files were changed.")
 
 
+def _choose_skills_to_validate(skills) -> tuple[str, ...] | None:
+    print()
+    print("╭─ Canonical Skill validation ─────────────────────────────────────────╮")
+    print("│ Select only the Skills you want to assess.                           │")
+    print("│ Each selected package is validated independently.                    │")
+    print("├─────────────────────────────────────────────────────────────────────┤")
+    print("│ Writes: none                                                         │")
+    print("│ Never: publishes, changes Skills, or combines their contents         │")
+    print("╰─────────────────────────────────────────────────────────────────────╯")
+    for index, (skill, _path) in enumerate(skills, start=1):
+        print(f"  [{index}] {skill.name}")
+        print(f"      {skill.description}")
+    print("  [all] Validate every listed Skill")
+    print("  [cancel] Exit without validating (default)")
+    while True:
+        try:
+            raw = input("Choose Skills [1, 3 / all / cancel] (default cancel): ").strip().casefold()
+        except EOFError:
+            return None
+        if raw in {"cancel", "c", "none", "n", ""}:
+            return None
+        if raw == "all":
+            return tuple(skill.id for skill, _path in skills)
+        values = [part.strip() for part in raw.split(",")]
+        if values and all(value.isdecimal() and 1 <= int(value) <= len(skills) for value in values):
+            return tuple(dict.fromkeys(skills[int(value) - 1][0].id for value in values))
+        print(f"Enter numbers from 1 to {len(skills)}, for example: 1, 3. No files were changed.")
+
+
+def _choose_proposal_kind(*, can_update: bool) -> str | None:
+    print()
+    print("╭─ Prepare a shared Skill proposal ────────────────────────────────────╮")
+    print("│ Choose what you want to contribute. Nothing will be published.       │")
+    print("╰─────────────────────────────────────────────────────────────────────╯")
+    if can_update:
+        print("  [1] Improve an installed Skill")
+    print("  [2] Draft a new Skill")
+    print("  [3] Cancel (default)")
+    try:
+        choice = input("Choose [1/2/3] (default 3): ").strip()
+    except EOFError:
+        return None
+    return ({"1": "update", "2": "new"} if can_update else {"2": "new"}).get(choice)
+
+
+def _validation_targets(root: Path):
+    """Installed locked packages plus local proposals; each proposal remains isolated."""
+    try:
+        targets = list(consumer_validation_targets(root))
+    except SharedKnowledgeError:
+        targets = []
+    local_catalog = root / "team-knowledge"
+    if (local_catalog / "team-knowledge.json").is_file():
+        for skill in local_canonical_skills(local_catalog):
+            targets.append((skill, local_catalog / skill.source_path))
+    installed = {skill.id: skill for skill, _path in targets}
+    drafts = proposal_root(root)
+    if drafts.is_dir() and not drafts.is_symlink():
+        for path in sorted(item for item in drafts.iterdir() if item.is_dir() and not item.is_symlink()):
+            metadata_path = path / "proposal.json"
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            candidate = load_candidate(path)
+            if metadata.get("kind") == "update" and isinstance(metadata.get("skill_id"), str):
+                baseline = installed.get(metadata["skill_id"])
+                if baseline is not None:
+                    targets.append((CanonicalSkill(
+                        f"proposal-{candidate.name}", baseline.name, baseline.description, baseline.state,
+                        baseline.source_path, baseline.revision, baseline.digest_sha256, baseline.files,
+                        baseline.skill_text,
+                    ), path))
+            elif metadata.get("kind") == "new":
+                targets.append((CanonicalSkill(
+                    f"proposal-{candidate.name}", candidate.name, candidate.description, "active",
+                    f"proposals/{candidate.name}", "proposal", "", (), dict(candidate.files)["SKILL.md"].decode("utf-8"),
+                ), path))
+    if not targets:
+        raise SharedKnowledgeError("no installed Skills or local proposals are available to validate")
+    return tuple(targets)
+
+
 def _confirm(yes: bool, plan: DistributionPlan) -> bool:
     if yes:
         return True
@@ -285,7 +332,111 @@ def _confirm(yes: bool, plan: DistributionPlan) -> bool:
         return False
 
 
+def _print_skill_validation_report(report) -> None:
+    status = "PASSED" if report.passed else "NEEDS REVISION"
+    print()
+    print("╭─ Skill validation result ────────────────────────────────────────────╮")
+    print(f"│ Skill: {report.skill_id:<61}│")
+    print(f"│ Package checks: {status:<53}│")
+    print("├─────────────────────────────────────────────────────────────────────┤")
+    print("│ This report is local and read-only; it does not approve publication. │")
+    print("╰─────────────────────────────────────────────────────────────────────╯")
+    if report.changed_paths:
+        print("  Candidate changes: " + ", ".join(report.changed_paths))
+    else:
+        print("  Candidate changes: none (same package as the canonical baseline)")
+    for finding in report.findings:
+        print(f"  - {finding}")
+
+
+def _print_skill_assessment(assessment) -> None:
+    next_step = (
+        "You can prepare a proposal."
+        if assessment.decision == "ready"
+        else "Fix the required changes, then run validate again."
+        if assessment.decision == "needs_revision"
+        else "Gather the missing evidence, then run validate again."
+    )
+    print()
+    print("╭─ Skill decision ─────────────────────────────────────────────────────╮")
+    print(f"│ Status: {assessment.decision.upper():<57}│")
+    print(f"│ Next: {next_step:<59}│")
+    print(f"│ Required changes: {len(assessment.required_changes):<46}│")
+    print("│ It cannot publish, change files, use tools, or inspect other Skills. │")
+    print("╰─────────────────────────────────────────────────────────────────────╯")
+    if assessment.required_changes:
+        print("\nWhat to fix:")
+        for index, change in enumerate(assessment.required_changes, start=1):
+            print(f"  {index}. {change}")
+    print("\nWhy:")
+    print(f"  {assessment.summary}")
+    print("\nBoundary exercises:")
+    print(f"  In-scope exercise: {assessment.in_scope_exercise}")
+    print(f"  Out-of-scope exercise: {assessment.out_of_scope_exercise}")
+    print("\nAdditional observations:")
+    for finding in assessment.findings:
+        print(f"  - {finding}")
+
+
 def _run(args: argparse.Namespace) -> int:
+    if args.command == "validate":
+        from .catalog import find_repository
+        root = find_repository(args.repo)
+        targets = _validation_targets(root)
+        skills = tuple((skill, path) for skill, path in targets)
+        ids = tuple(args.skill_ids) or _choose_skills_to_validate(skills)
+        if not ids:
+            print("No Skills were validated.")
+            return 0
+        available = {skill.id: (skill, path) for skill, path in targets}
+        if any(skill_id not in available for skill_id in ids):
+            raise SharedKnowledgeError("selected Skill is not installed in this repository")
+        preference = load_selector_preference() if args.selector is None and not os.environ.get("TEAM_KNOWLEDGE_SELECTOR") else None
+        evaluator = resolve_selector_name(args.selector, preference=preference)
+        for skill_id in dict.fromkeys(ids):
+            skill, candidate_path = available[skill_id]
+            report = validate_skill(skill, candidate_path)
+            _print_skill_validation_report(report)
+            if report.passed:
+                print(f"[team-knowledge] Starting isolated {evaluator} assessment for this candidate only...", flush=True)
+                _print_skill_assessment(assess_candidate(evaluator, load_candidate(candidate_path)))
+        print("No Skill files were changed or published.")
+        return 0
+    if args.command == "propose":
+        from .catalog import find_repository
+        root = find_repository(args.repo)
+        try:
+            installed_targets = consumer_validation_targets(root)
+        except SharedKnowledgeError:
+            installed_targets = ()
+        kind = "new" if args.new else _choose_proposal_kind(can_update=bool(installed_targets))
+        if kind is None:
+            print("No Skill proposal was created.")
+            return 0
+        if kind == "new":
+            if args.name is None or args.description is None:
+                try:
+                    name = input("New Skill name (lowercase words with hyphens): ").strip()
+                    description = input("When should an agent use it?: ").strip()
+                except EOFError:
+                    print("No Skill proposal was created.")
+                    return 0
+            else:
+                name, description = args.name, args.description
+            proposal = prepare_new(root, name, description)
+            print(f"Created new Skill proposal: {proposal}")
+        else:
+            selected = _choose_skills_to_validate(installed_targets)
+            if not selected:
+                print("No Skill proposal was created.")
+                return 0
+            if len(selected) != 1:
+                raise SharedKnowledgeError("choose exactly one installed Skill to prepare an update proposal")
+            proposal = prepare_update(root, selected[0])
+            print(f"Created update proposal: {proposal}")
+        print("Edit and validate the proposal before deliberately moving it into the canonical catalog.")
+        print("No canonical source, commit, or push was changed.")
+        return 0
     if args.command == "setup":
         if args.only and args.selector is None:
             raise SharedKnowledgeError("--only requires --selector")
@@ -408,6 +559,21 @@ def _run(args: argparse.Namespace) -> int:
             print(f"{action} {skill_path}")
         print(f"Team knowledge is ready in {target}")
         print("Add .team-knowledge to Git and use your normal pull-request review.")
+        return 0
+
+    if args.command in {"list", "show"}:
+        from .catalog import find_repository
+        root = find_repository(args.repo)
+        targets = _validation_targets(root)
+        available = {skill.id: (skill, path) for skill, path in targets}
+        if args.command == "list":
+            for skill_id, (skill, path) in available.items():
+                print(f"{skill_id}\t{skill.description}\t{path}")
+            return 0
+        if args.skill_id not in available:
+            raise SharedKnowledgeError("Skill is not available in this repository")
+        _skill, path = available[args.skill_id]
+        sys.stdout.write((path / "SKILL.md").read_text(encoding="utf-8"))
         return 0
 
     store = KnowledgeStore.open(args.repo)
