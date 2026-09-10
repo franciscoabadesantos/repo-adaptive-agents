@@ -124,7 +124,7 @@ git commit -m "Bootstrap shared team knowledge"
 ```
 
 Declining the bootstrap plan leaves no `.team-knowledge/` state or generated Skill package in
-the consumer repository.
+the consumer repository. Source acquisition may populate the disposable shared user cache.
 
 To prepare a repository for work it does not yet contain, provide the concrete goal as transient
 model input. It is never written to the config, lock, or generated Skill package:
@@ -176,8 +176,12 @@ preference, with Codex as the final fallback.
 Validated Skills are materialized once at `.agents/skills/<name>/`, the vendor-neutral Agent
 Skills location used directly by Codex and Copilot. Claude receives a relative directory
 symlink at `.claude/skills/<name>` pointing to that same package. Generated packages, Claude
-bridges, and the Git source cache remain local. Bootstrap adds only the exact managed paths
-to `.git/info/exclude`; it does not hide other Agent Skills.
+bridges remain local. Bootstrap adds only the exact managed paths to `.git/info/exclude`; it does
+not hide other Agent Skills. The bare Git source cache is shared across repositories under the
+operating system's user cache directory (normally `~/.cache/team-knowledge/` on Linux/WSL), never
+inside the pipx installation. `TEAM_KNOWLEDGE_HOME` can place the shared cache and user configuration
+under an explicit root, and `team-knowledge setup` prints the effective paths. The committed lock
+remains authoritative; the cache is disposable and may fall back to temporary storage online.
 
 When the canonical team repository changes:
 

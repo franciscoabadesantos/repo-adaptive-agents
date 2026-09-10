@@ -5,6 +5,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,6 +51,14 @@ from repo_adaptive_agents.shared_knowledge.selector import (
     parse_selection,
     resolve_selector_name,
 )
+from repo_adaptive_agents.shared_knowledge.storage import source_cache_directory, user_cache_root
+from repo_adaptive_agents.shared_knowledge.source import GitKnowledgeSource, SourceUnavailable
+
+
+@pytest.fixture(autouse=True)
+def _isolated_machine_storage(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("TEAM_KNOWLEDGE_HOME", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "machine-cache"))
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -227,6 +237,191 @@ class OrganizationDefaultStub:
 def _bootstrap(service: TeamKnowledgeDistributionService, root: Path) -> None:
     plan = service.bootstrap_plan(root, source_url="../canonical")
     service.apply(plan)
+
+
+def test_machine_cache_path_honors_explicit_home(tmp_path: Path):
+    assert user_cache_root(environ={"TEAM_KNOWLEDGE_HOME": str(tmp_path / "shared")}) == (
+        tmp_path / "shared/cache"
+    )
+    assert preferences_path(environ={"TEAM_KNOWLEDGE_HOME": str(tmp_path / "shared")}) == (
+        tmp_path / "shared/config/config.json"
+    )
+
+
+def test_machine_cache_path_uses_native_windows_application_data(tmp_path: Path):
+    local_data = tmp_path / "LocalAppData"
+    assert user_cache_root(
+        home=tmp_path,
+        environ={"LOCALAPPDATA": str(local_data)},
+        platform_name="nt",
+    ) == local_data / "team-knowledge/cache"
+
+
+def test_two_consumers_share_one_source_cache(tmp_path: Path):
+    _canonical(tmp_path)
+    first = _dns_repo(tmp_path, "consumer-a", 1)
+    second = _dns_repo(tmp_path, "consumer-b", 2)
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+
+    _bootstrap(service, first)
+    _bootstrap(service, second)
+
+    first_cache = source_cache_directory("../canonical", first)
+    second_cache = source_cache_directory("../canonical", second)
+    assert first_cache == second_cache
+    assert (first_cache / "repository.git").is_dir()
+    assert json.loads((first_cache / "metadata.json").read_text(encoding="utf-8")) == {
+        "schema_version": 2,
+        "source_identity_sha256": first_cache.name,
+    }
+    assert not (first / ".team-knowledge/cache").exists()
+    assert not (second / ".team-knowledge/cache").exists()
+    assert "/cache/" not in (first / ".team-knowledge/.gitignore").read_text(encoding="utf-8")
+
+
+def test_shared_cache_supports_locked_offline_access(tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+    _bootstrap(service, repository)
+    locked = load_consumer_lock(repository)
+
+    source = GitKnowledgeSource(repository)
+    assert source.acquire(
+        locked.source_url,
+        locked.source_ref,
+        catalog_path=locked.catalog_path,
+        offline=True,
+        commit=locked.resolved_commit,
+    ) == locked.resolved_commit
+
+
+def test_offline_access_does_not_create_an_empty_shared_cache(tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    source = GitKnowledgeSource(repository)
+
+    with pytest.raises(SourceUnavailable, match="not cached"):
+        source.acquire("../canonical", "main", offline=True, commit="0" * 40)
+
+    assert not source_cache_directory("../canonical", repository).exists()
+
+
+def test_source_url_rejects_embedded_https_credentials(tmp_path: Path):
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    with pytest.raises(SharedKnowledgeError, match="embedded credentials"):
+        TeamKnowledgeDistributionService(EvidenceRoutingStub()).bootstrap_plan(
+            repository,
+            source_url="https://person:secret@example.invalid/skills.git",
+        )
+
+
+def test_unwritable_machine_cache_falls_back_to_temporary_storage(monkeypatch, tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    machine_cache = user_cache_root()
+    original_mkstemp = tempfile.mkstemp
+
+    def controlled_mkstemp(*args, **kwargs):
+        directory = kwargs.get("dir")
+        if directory is not None and Path(directory) == machine_cache / "sources":
+            raise PermissionError("read-only test cache")
+        return original_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr("repo_adaptive_agents.shared_knowledge.source.tempfile.mkstemp", controlled_mkstemp)
+    source = GitKnowledgeSource(repository)
+    commit = source.acquire("../canonical", "main")
+
+    assert len(commit) == 40
+    assert source.cache_mode == "temporary"
+    assert source.cache is not None and source.cache.is_dir()
+    assert not source_cache_directory("../canonical", repository).exists()
+
+
+def test_concurrent_consumers_do_not_duplicate_or_corrupt_shared_cache(tmp_path: Path):
+    _canonical(tmp_path)
+    first = _dns_repo(tmp_path, "consumer-a", 1)
+    second = _dns_repo(tmp_path, "consumer-b", 2)
+
+    def acquire(repository: Path) -> str:
+        return GitKnowledgeSource(repository).acquire("../canonical", "main")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        commits = tuple(executor.map(acquire, (first, second)))
+
+    assert commits[0] == commits[1]
+    cache = source_cache_directory("../canonical", first)
+    assert (cache / "repository.git").is_dir()
+    assert json.loads((cache / "metadata.json").read_text(encoding="utf-8"))[
+        "source_identity_sha256"
+    ] == cache.name
+
+
+def test_shared_cache_rejects_tampered_metadata_and_origin(tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    source = GitKnowledgeSource(repository)
+    source.acquire("../canonical", "main")
+    cache = source_cache_directory("../canonical", repository)
+    metadata = cache / "metadata.json"
+    original_metadata = metadata.read_text(encoding="utf-8")
+    metadata.write_text('{"schema_version": 2, "source_identity_sha256": "wrong"}\n', encoding="utf-8")
+
+    with pytest.raises(SharedKnowledgeError, match="different canonical source"):
+        GitKnowledgeSource(repository).acquire("../canonical", "main")
+
+    metadata.write_text(original_metadata, encoding="utf-8")
+    _git(cache / "repository.git", "config", "remote.origin.url", "../other-source")
+    with pytest.raises(SharedKnowledgeError, match="origin does not match"):
+        GitKnowledgeSource(repository).acquire("../canonical", "main")
+
+
+def test_legacy_repository_cache_is_removed_only_after_explicit_choice(monkeypatch, tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    plan = TeamKnowledgeDistributionService(EvidenceRoutingStub()).bootstrap_plan(
+        repository,
+        source_url="../canonical",
+    )
+    legacy = repository / ".team-knowledge/cache"
+    legacy.mkdir(parents=True)
+    _git(repository, "clone", "--bare", "--", "../canonical", str(legacy / "source.git"))
+    (legacy / "source.json").write_text(
+        json.dumps(
+            {"schema_version": 1, "source_url": "../canonical", "catalog_path": "."},
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ignore = repository / ".team-knowledge/.gitignore"
+    ignore.write_text("/runtime/\n/cache/\n", encoding="utf-8")
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+    shared_cli._offer_legacy_cache_cleanup(plan, noninteractive=False)
+    assert legacy.is_dir()
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+    shared_cli._offer_legacy_cache_cleanup(plan, noninteractive=False)
+    assert not legacy.exists()
+    assert ignore.read_text(encoding="utf-8") == "/runtime/\n"
+
+
+def test_unknown_legacy_cache_content_is_never_offered_or_removed(monkeypatch, tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    plan = TeamKnowledgeDistributionService(EvidenceRoutingStub()).bootstrap_plan(
+        repository,
+        source_url="../canonical",
+    )
+    legacy = repository / ".team-knowledge/cache"
+    legacy.mkdir(parents=True)
+    (legacy / "unknown.txt").write_text("user data\n", encoding="utf-8")
+    monkeypatch.setattr("builtins.input", lambda _prompt: pytest.fail("unsafe cache must not be offered"))
+
+    shared_cli._offer_legacy_cache_cleanup(plan, noninteractive=False)
+
+    assert (legacy / "unknown.txt").read_text(encoding="utf-8") == "user data\n"
 
 
 def _bootstrap_bundled(service: TeamKnowledgeDistributionService, root: Path) -> None:
@@ -771,11 +966,6 @@ def test_old_v02_source_state_without_catalog_path_syncs_as_root(tmp_path: Path)
             for resource in data["resources"]:
                 resource.pop("source_catalog_path", None)
         path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    cache_metadata = repository / ".team-knowledge/cache/source.json"
-    metadata = json.loads(cache_metadata.read_text(encoding="utf-8"))
-    metadata.pop("catalog_path", None)
-    cache_metadata.write_text(json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8")
-
     config = load_consumer_config(repository)
     previous = load_consumer_lock(repository)
     plan = service.sync_plan(repository)
@@ -1141,7 +1331,9 @@ def test_fresh_checkout_hydrates_generated_skill_from_committed_config_and_lock(
     assert result.returncode == 0, result.stderr
     assert "RESTORE dns -> .agents/skills/dns" in result.stdout
     assert not selector_marker.exists()
-    assert (fresh / ".team-knowledge/cache/source.git").is_dir()
+    shared_cache = source_cache_directory("../canonical", fresh)
+    assert (shared_cache / "repository.git").is_dir()
+    assert not (fresh / ".team-knowledge/cache").exists()
     assert (fresh / ".agents/skills/dns/SKILL.md").is_file()
     assert (fresh / ".claude/skills/dns").is_symlink()
     hydrated = load_consumer_lock(fresh)

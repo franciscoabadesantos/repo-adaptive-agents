@@ -16,7 +16,7 @@ from repo_adaptive_agents.shared_knowledge.repository import SharedKnowledgeErro
 STATE_DIR = ".team-knowledge"
 CONFIG_FILE = "config.json"
 LOCK_FILE = "lock.json"
-IGNORE_CONTENT = "/events.jsonl\n/runtime/\n/cache/\n"
+IGNORE_CONTENT = "/events.jsonl\n/runtime/\n"
 EXCLUDE_BEGIN = "# BEGIN team-knowledge managed Skills"
 EXCLUDE_END = "# END team-knowledge managed Skills"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -45,6 +45,10 @@ def _object(value: object, field: str, allowed: frozenset[str]) -> dict[str, obj
 def validate_source_url(value: str) -> str:
     source = _text(value, "source URL")
     parsed = urlparse(source)
+    if parsed.password is not None or (
+        parsed.scheme in {"http", "https"} and parsed.username is not None
+    ):
+        raise SharedKnowledgeError("source URL must not contain embedded credentials")
     if parsed.scheme == "file" or (not parsed.scheme and not (":" in source and not source.startswith("./")) and Path(source).is_absolute()):
         raise SharedKnowledgeError(
             "absolute local source paths are not stored; use a Git URL or a relative repository path"

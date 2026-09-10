@@ -14,6 +14,8 @@ from .selector import SELECTOR_NAMES
 def preferences_path(*, home: Path | None = None, environ: Mapping[str, str] | None = None) -> Path:
     environment = os.environ if environ is None else environ
     user_home = Path.home() if home is None else home
+    if override := environment.get("TEAM_KNOWLEDGE_HOME"):
+        return Path(override).expanduser() / "config" / "config.json"
     config_home = Path(environment.get("XDG_CONFIG_HOME", str(user_home / ".config"))).expanduser()
     return config_home / "team-knowledge" / "config.json"
 

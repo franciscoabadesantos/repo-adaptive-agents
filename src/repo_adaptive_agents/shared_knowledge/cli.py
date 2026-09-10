@@ -12,13 +12,15 @@ from pathlib import Path
 from .repository import SharedKnowledgeError, find_repository
 from .canonical import CanonicalSkill
 from .onboarding import install_onboarding_skills, onboarding_readiness
-from .preferences import load_selector_preference, save_selector_preference
+from .preferences import load_selector_preference, preferences_path, save_selector_preference
 from .proposals import prepare_new, prepare_update, proposal_root
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
 from .consumer import default_consumer_source, external_consumer_source
 from .selector import resolve_selector_name, selector_for
 from .skill_quality import assess_candidate
 from .skill_validation import consumer_validation_targets, load_candidate, local_canonical_skills, validate_skill
+from .storage import user_cache_root
+from .source import removable_legacy_cache, remove_legacy_cache
 
 
 def _repo_argument(parser: argparse.ArgumentParser) -> None:
@@ -402,6 +404,40 @@ def _confirm(yes: bool, plan: DistributionPlan) -> bool:
         return False
 
 
+def _offer_legacy_cache_cleanup(plan: DistributionPlan, *, noninteractive: bool) -> None:
+    legacy = removable_legacy_cache(
+        plan.root,
+        plan.config.source.url,
+        plan.config.source.catalog_path,
+    )
+    if legacy is None:
+        return
+    print()
+    print("╭─ Obsolete repository cache ─────────────────────────────────────────╮")
+    print("│ The shared cache is ready; this clone and its ignore rule are old.  │")
+    print(f"│ Path: {str(legacy)[:62]:<62}│")
+    print("╰─────────────────────────────────────────────────────────────────────╯")
+    if noninteractive:
+        print("  Kept obsolete local cache because --yes never authorizes cleanup.")
+        return
+    print("  [1] Remove the obsolete local cache")
+    print("  [2] Keep it for now (default)")
+    try:
+        remove = input("Choose [1/2] (default 2): ").strip().casefold() in {"1", "y", "yes"}
+    except EOFError:
+        remove = False
+    if not remove:
+        print("Kept obsolete local cache.")
+        return
+    if not remove_legacy_cache(
+        plan.root,
+        plan.config.source.url,
+        plan.config.source.catalog_path,
+    ):
+        raise SharedKnowledgeError("legacy cache changed before cleanup; nothing was removed")
+    print("Removed obsolete repository-local source cache.")
+
+
 def _print_skill_validation_report(report) -> None:
     status = "PASSED" if report.passed else "NEEDS REVISION"
     print()
@@ -541,6 +577,10 @@ def _run(args: argparse.Namespace) -> int:
         for consumer, path, created in installed:
             action = "Would install" if args.dry_run and created else "Installed" if created else "Already current at"
             print(f"  {action} {consumer}: {path}")
+        print("Machine storage:")
+        print(f"  user configuration: {preferences_path()}")
+        print(f"  shared source cache: {user_cache_root()}")
+        print("  repository cache: not used")
         if args.dry_run:
             print("No files were written.")
             return 0
@@ -607,6 +647,7 @@ def _run(args: argparse.Namespace) -> int:
                 return 0
             plan = service.retain_bootstrap_skills(plan, selected)
         _print_distribution_plan(plan)
+        _offer_legacy_cache_cleanup(plan, noninteractive=args.yes)
         if plan.offline:
             service.apply(plan)
             print("Locked team Skills are present and match their recorded digests.")

@@ -183,7 +183,10 @@ def consumer_validation_targets(root: Path) -> tuple[tuple[CanonicalSkill, Path]
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="team-knowledge-validation-") as temporary:
-        source = GitKnowledgeSource(root, state=Path(temporary) / "state")
+        source = GitKnowledgeSource(
+            root,
+            runtime_root=Path(temporary) / "runtime",
+        )
         source.acquire(
             lock.source_url, lock.source_ref, catalog_path=lock.catalog_path,
         )

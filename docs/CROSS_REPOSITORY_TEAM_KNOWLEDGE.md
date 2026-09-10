@@ -49,7 +49,7 @@ files over 1 MB, Skill packages over 4 MB, and source archives over 20 MB.
 
 `team-knowledge bootstrap [--source <git-repository>] [--catalog-path <relative-path>] [--ref <ref>] [--selector <name>] [--task <text>]`:
 
-1. clones/fetches the source into ignored `.team-knowledge/cache/` and pins a commit;
+1. clones/fetches the source into the shared user cache and pins a commit;
 2. reads and validates an immutable Git archive;
 3. projects only factual evidence from the existing repository profiler;
 4. maps canonical packages to native `AGENT_SKILL` resources with organization/team scope;
@@ -110,10 +110,28 @@ Commit:
 
 Keep local:
 
-- `.team-knowledge/cache/` and `.team-knowledge/runtime/`;
+- `.team-knowledge/runtime/`;
 - `.team-knowledge/events.jsonl`;
 - generated `.agents/skills/<managed-name>/` packages and
   `.claude/skills/<managed-name>` bridges.
+
+The disposable bare Git source clone is shared by every consumer of the same canonical source
+under the operating system's user cache directory. On Linux and WSL this is normally
+`$XDG_CACHE_HOME/team-knowledge/sources/` or `~/.cache/team-knowledge/sources/`. Native Windows
+uses `%LOCALAPPDATA%/team-knowledge/cache/sources/`. `TEAM_KNOWLEDGE_HOME` may define one explicit
+application root, with caches below its `cache/` directory. The hashed source directory does not
+expose its URL, and its metadata stores only the identity digest; source URLs containing embedded
+HTTP credentials are rejected.
+
+The cache is an optimization, never authority: `lock.json` still pins the exact source commit and
+package digests. If the persistent cache is not writable during an online operation, the command
+uses an operation-scoped temporary cache. Offline verification requires the locked commit in the
+persistent shared cache. Concurrent processes serialize clone and fetch operations per source.
+
+Version 0.16 and later no longer create `.team-knowledge/cache/`. When an exact cache created by an
+older version is found after the shared cache is ready, an interactive command offers to remove it
+and its obsolete exact `/cache/` ignore rule. Unknown content is never offered for deletion, and
+`--yes` deliberately does not authorize legacy cache cleanup.
 
 The installer writes exact managed paths inside a marked block in `.git/info/exclude`. It
 never ignores either Skills directory globally and never overwrites an unmanaged physical
@@ -134,7 +152,7 @@ does not trigger reassessment.
 Model nonselection never silently removes an installed Skill; it is reported as possibly no
 longer relevant. A locally modified managed copy is never overwritten or removed. Network
 failure leaves all current state untouched. Offline mode verifies locked copies against the
-cached pinned commit and never claims the source is current.
+shared cached pinned commit and never claims the source is current.
 
 ## Current limits
 
@@ -142,5 +160,5 @@ This is one Git source, one team scope, and one vendor-neutral Agent Skills targ
 Claude, and Copilot are selector choices, not separate committed targets. The bundled catalog is not wheel
 package data; Git remains its canonical update and revision mechanism. The product does not publish Skills,
 merge repository instructions, execute Skill bundles, authenticate users, rank knowledge,
-serve MCP, or manage organization-wide policy. Source cache sharing, hosted distribution,
-and additional materialization formats are intentionally out of scope.
+serve MCP, or manage organization-wide policy. Hosted distribution and additional
+materialization formats are intentionally out of scope.

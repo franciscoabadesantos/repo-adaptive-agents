@@ -421,7 +421,7 @@ class TeamKnowledgeDistributionService:
         if progress is not None:
             progress("Fetching and validating the canonical team knowledge catalog")
         with tempfile.TemporaryDirectory(prefix="team-knowledge-bootstrap-") as temporary:
-            git_source = GitKnowledgeSource(root, state=Path(temporary) / "state")
+            git_source = GitKnowledgeSource(root, runtime_root=Path(temporary) / "runtime")
             commit = git_source.acquire(source_url, ref, catalog_path=catalog_path)
             canonical = _read_catalog(git_source, commit, catalog_path)
         repository_id = repository_identity(root)

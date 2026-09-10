@@ -64,9 +64,12 @@ These paths are local, generated state:
 ```text
 .agents/skills/<managed-name>/
 .claude/skills/<managed-name>
-.team-knowledge/cache/
 .team-knowledge/runtime/
 ```
+
+The canonical Git clone is not stored in the repository. It is shared between consumers in the
+user cache (normally `~/.cache/team-knowledge/sources/` on Linux/WSL). `team-knowledge setup`
+prints the effective machine cache path.
 
 Each selected standard Skill exists physically once under `.agents/skills/`. The Claude path
 is a generated discovery bridge to that same package. Do not commit generated Skill packages,
