@@ -312,6 +312,31 @@ def _conversation_action(selection: SkillSelection, skills) -> str:
         print("Choose 1, 2, or 3. No files were changed.")
 
 
+def _print_skill_list(targets) -> None:
+    count = len(targets)
+    noun = "Skill" if count == 1 else "Skills"
+    print()
+    print("╭─ Available team Skills ──────────────────────────────────────────────╮")
+    summary = f"{count} local {noun}"
+    print(f"│ {summary:<68} │")
+    print("╰──────────────────────────────────────────────────────────────────────╯")
+    if not targets:
+        print("  No canonical, installed, or proposed Skills are available.")
+        return
+    for index, (skill, path) in enumerate(targets, start=1):
+        print()
+        print(f"  [{index}] {skill.name}")
+        for line in wrap(skill.description, width=82):
+            print(f"      {line}")
+        for line in wrap(
+            f"Location: {path}",
+            width=82,
+            initial_indent="      ",
+            subsequent_indent="                ",
+        ):
+            print(line)
+
+
 class _ConversationalSelector:
     """Keep one bootstrap conversation in memory while reusing one evidence snapshot."""
 
@@ -828,8 +853,7 @@ def _run(args: argparse.Namespace) -> int:
         targets = _validation_targets(root)
         available = {skill.id: (skill, path) for skill, path in targets}
         if args.command == "list":
-            for skill_id, (skill, path) in available.items():
-                print(f"{skill_id}\t{skill.description}\t{path}")
+            _print_skill_list(tuple(available.values()))
             return 0
         if args.skill_id not in available:
             raise SharedKnowledgeError("Skill is not available in this repository")

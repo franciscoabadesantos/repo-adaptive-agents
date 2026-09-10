@@ -15,7 +15,7 @@ import pytest
 import repo_adaptive_agents.shared_knowledge.distribution as distribution
 import repo_adaptive_agents.shared_knowledge.cli as shared_cli
 from repo_adaptive_agents.shared_knowledge.skill_quality import SkillAssessment, assessment_prompt
-from repo_adaptive_agents.shared_knowledge.skill_validation import load_candidate
+from repo_adaptive_agents.shared_knowledge.skill_validation import load_candidate, local_canonical_skills
 from repo_adaptive_agents.shared_knowledge.proposals import PreparedProposal, prepare_update
 from repo_adaptive_agents.shared_knowledge import (
     ClaudeSkillSelector,
@@ -642,6 +642,22 @@ def test_empty_bootstrap_plan_has_no_apply_choice_or_write_even_with_yes(monkeyp
     assert "Apply anyway" not in output
     assert "Writes: none" in output
     assert not (repository / ".team-knowledge").exists()
+
+
+def test_skill_list_is_human_readable_and_wraps_long_fields(tmp_path: Path, capsys):
+    source = _canonical(tmp_path)
+    skill = local_canonical_skills(source)[0]
+    location = tmp_path / ("nested-" * 15) / skill.name
+
+    shared_cli._print_skill_list(((skill, location),))
+
+    output = capsys.readouterr().out
+    assert "1 local Skill" in output
+    assert f"[1] {skill.name}" in output
+    assert skill.description in output
+    assert "Location:" in output
+    assert "\t" not in output
+    assert all(len(line) <= 88 for line in output.splitlines())
 
 
 def test_task_scoped_bootstrap_gives_only_transient_task_to_selector(tmp_path: Path):
