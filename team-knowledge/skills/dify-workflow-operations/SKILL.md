@@ -1,13 +1,17 @@
 ---
 name: dify-workflow-operations
-description: Use when designing, importing, repairing, testing, or operating a Dify Workflow or Chatflow with workspace-dependent dependencies or external effects.
+description: Use when implementing, importing, repairing, migrating, testing, or operating a Dify Workflow or Chatflow whose workspace dependencies or external effects must be verified.
 ---
 
 # Dify workflow operations
 
-Use this Skill for Dify workflow work without treating a plausible DSL, successful import, or
-model response as proof that the automation is ready. Choose Workflow or Chatflow from the
-required interaction and state model, not from an assumed universal recipe.
+Use this Skill for an actual Dify Workflow or Chatflow implementation, import, repair,
+migration, test, or operation where workspace dependencies or external effects must be
+verified. Do not activate it for conceptual explanations or ordinary read-only questions that
+do not involve an application artifact, observed trace, workspace-bound dependency, or
+operational change. Do not treat a plausible DSL, successful import, or model response as proof
+that the automation is ready. Choose Workflow or Chatflow from the required interaction and
+state model, not from an assumed universal recipe.
 
 Classify every important claim as **Confirmed** (current official documentation, sanitized
 export, or observed trace), **Workspace-dependent** (models, plugins, credentials, knowledge,
