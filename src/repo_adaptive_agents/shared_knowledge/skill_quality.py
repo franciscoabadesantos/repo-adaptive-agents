@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .catalog import SharedKnowledgeError
+from .repository import SharedKnowledgeError
 from .skill_validation import SkillCandidate
 
 

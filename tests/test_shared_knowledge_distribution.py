@@ -14,6 +14,7 @@ import repo_adaptive_agents.shared_knowledge.distribution as distribution
 import repo_adaptive_agents.shared_knowledge.cli as shared_cli
 from repo_adaptive_agents.shared_knowledge.skill_quality import SkillAssessment, assessment_prompt
 from repo_adaptive_agents.shared_knowledge.skill_validation import load_candidate
+from repo_adaptive_agents.shared_knowledge.proposals import PreparedProposal, prepare_update
 from repo_adaptive_agents.shared_knowledge import (
     ClaudeSkillSelector,
     CodexSkillSelector,
@@ -632,6 +633,82 @@ def test_validate_skill_uses_only_the_installed_copy_and_its_locked_predecessor(
     assert "jira-data-center-operations" in seen[0]
     assert "dify-workflow-operations" not in seen[0]
     assert "Status: READY" in output
+
+
+def test_prepare_update_uses_locked_source_commit_and_never_changes_remote_source(tmp_path: Path):
+    source = _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+    _bootstrap(service, repository)
+    candidate_path = repository / ".agents" / "skills" / "dns"
+    skill_path = candidate_path / "SKILL.md"
+    skill_path.write_text(skill_path.read_text(encoding="utf-8") + "\nConfirm the target zone first.\n", encoding="utf-8")
+
+    prepared = prepare_update(repository, "dns", load_candidate(candidate_path))
+
+    assert prepared.checkout.is_dir()
+    assert prepared.branch.startswith("team-knowledge/dns-")
+    assert "Confirm the target zone first." in prepared.diff
+    assert "Confirm the target zone first." in (prepared.checkout / "skills" / "dns" / "SKILL.md").read_text(encoding="utf-8")
+    assert _git(source, "status", "--short") == ""
+
+
+def test_prepared_proposal_default_keeps_the_checkout_local(monkeypatch, tmp_path: Path, capsys):
+    prepared = PreparedProposal(tmp_path, "team-knowledge/dns", "diff", "main", "dns", "skills/dns")
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+    calls = []
+    monkeypatch.setattr(shared_cli, "_run_git_action", lambda *_args: calls.append(_args))
+
+    shared_cli._apply_prepared_proposal_action(prepared)
+
+    assert not calls
+    assert "No commit, push, pull request, or remote source change was made." in capsys.readouterr().out
+
+
+def test_prepared_proposal_draft_pr_runs_explicit_git_actions_in_order(monkeypatch, tmp_path: Path, capsys):
+    prepared = PreparedProposal(tmp_path, "team-knowledge/dns", "diff", "main", "dns", "skills/dns")
+    monkeypatch.setattr("builtins.input", lambda _prompt: "4")
+    git_calls = []
+    monkeypatch.setattr(shared_cli, "_run_git_action", lambda _checkout, *args: git_calls.append(args))
+    gh_calls = []
+    monkeypatch.setattr(shared_cli, "_run_gh_action", lambda _checkout, *args: gh_calls.append(args) or "https://example.test/pr/1")
+
+    shared_cli._apply_prepared_proposal_action(prepared)
+
+    assert git_calls == [
+        ("add", "--", "skills/dns"),
+        ("commit", "-m", "Propose update to dns"),
+        ("push", "--set-upstream", "origin", "team-knowledge/dns"),
+    ]
+    assert gh_calls == [
+        (
+            "pr", "create", "--draft", "--base", "main", "--head", "team-knowledge/dns",
+            "--title", "Propose update to dns", "--body", "Prepared and independently validated with team-knowledge.",
+        )
+    ]
+    assert "Created draft pull request: https://example.test/pr/1" in capsys.readouterr().out
+
+
+def test_propose_stops_before_checkout_when_independent_assessment_is_not_ready(monkeypatch, tmp_path: Path, capsys):
+    source = _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+    _bootstrap(service, repository)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+    monkeypatch.setattr(
+        shared_cli,
+        "assess_candidate",
+        lambda _selector, _candidate: SkillAssessment(
+            "needs_revision", "Needs a correction.", ("Make it portable.",), (), "Use DNS.", "Use Dify."
+        ),
+    )
+    called = []
+    monkeypatch.setattr(shared_cli, "prepare_update", lambda *_args: called.append(True))
+
+    assert shared_cli.main(["propose", "--repo", str(repository)]) == 2
+    assert not called
+    assert "proposal stopped: independent assessment is not READY" in capsys.readouterr().err
+    assert _git(source, "status", "--short") == ""
 
 
 def test_user_selector_preference_is_local_and_has_lower_precedence_than_explicit_or_environment(tmp_path: Path):

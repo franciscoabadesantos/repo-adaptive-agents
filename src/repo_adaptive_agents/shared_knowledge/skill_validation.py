@@ -14,7 +14,7 @@ from .canonical import (
     load_canonical_catalog,
     package_digest,
 )
-from .catalog import SharedKnowledgeError
+from .repository import SharedKnowledgeError
 from .consumer import load_consumer_lock
 from .source import GitKnowledgeSource
 
@@ -56,13 +56,25 @@ def _frontmatter(text: str) -> tuple[str, str]:
     except ValueError as error:
         raise SharedKnowledgeError("candidate SKILL.md frontmatter must end with a --- delimiter") from error
     values: dict[str, str] = {}
-    for line in lines[1:closing]:
+    index = 1
+    while index < closing:
+        line = lines[index]
         if not line.strip():
+            index += 1
             continue
         if line[:1].isspace() or ":" not in line:
             raise SharedKnowledgeError("candidate SKILL.md frontmatter must use top-level key: value fields")
         key, value = line.split(":", 1)
         key, value = key.strip(), value.strip().strip("\"'")
+        if value in {">", ">-", ">+", "|", "|-", "|+"}:
+            block: list[str] = []
+            index += 1
+            while index < closing and (not lines[index].strip() or lines[index][:1].isspace()):
+                block.append(lines[index].strip())
+                index += 1
+            value = " ".join(block).strip()
+        else:
+            index += 1
         if key not in {"name", "description"} or not value or key in values:
             raise SharedKnowledgeError("candidate SKILL.md has unsupported, empty, or duplicate frontmatter")
         values[key] = " ".join(value.split())

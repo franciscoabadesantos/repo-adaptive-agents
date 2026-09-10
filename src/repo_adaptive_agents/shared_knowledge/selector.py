@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Protocol
 
-from repo_adaptive_agents.shared_knowledge.catalog import SharedKnowledgeError
+from repo_adaptive_agents.shared_knowledge.repository import SharedKnowledgeError
 
 from .evidence import RepositoryKnowledgeEvidence
 

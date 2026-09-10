@@ -51,10 +51,8 @@ detailed behavior.
 - Central Skill changes and explicit revocations propagate through sync. Preserve integrity,
   collision protection, locally modified-copy protection, and deterministic revocation.
 
-The repository still contains profiler, recommender, provider-resolution, role, and adapter
-code from the earlier product direction. Treat it as legacy: do not extend it, revive it as
-the product architecture, or route new shared-knowledge behavior through it unless the user
-explicitly requests that work.
+The product contains no compatibility layer for the retired profiler, recommender,
+provider-resolution, role, or adapter workflow. Do not reintroduce that architecture.
 
 ## Maintenance workflow
 

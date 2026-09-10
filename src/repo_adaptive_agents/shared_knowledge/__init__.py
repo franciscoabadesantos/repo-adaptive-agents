@@ -1,16 +1,7 @@
-"""Shared team knowledge for coding agents."""
+"""Git-backed portable team Skills for coding agents."""
 
-from .catalog import (
-    KnowledgeConfig,
-    KnowledgeStore,
-    SharedKnowledgeError,
-    find_repository,
-    initialize_repository,
-    repository_identity,
-)
+from .repository import SharedKnowledgeError, find_repository, repository_identity
 from .canonical import CanonicalCatalog, CanonicalSkill, SourceDescriptor
-from .content import KnowledgeContentError, KnowledgeItem
-from .codex import CODEX_SKILL_PATH, install_codex_skill, skill_text
 from .onboarding import (
     ONBOARDING_SKILL_NAME,
     install_onboarding_skills,
@@ -19,7 +10,6 @@ from .onboarding import (
     onboarding_skill_text,
 )
 from .preferences import load_selector_preference, preferences_path, save_selector_preference
-from .sessions import ExposureSession, ExposureSessions
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
 from .evidence import RepositoryKnowledgeEvidence, collect_skill_bootstrap_evidence
 from .selector import (
@@ -37,25 +27,8 @@ from .selector import (
     resolve_selector_name,
     selector_for,
 )
-from .service import (
-    KnowledgeCheck,
-    KnowledgeExposure,
-    KnowledgeIndexEntry,
-    KnowledgeResolution,
-    SharedKnowledgeService,
-    ValidatedKnowledge,
-)
 
 __all__ = [
-    "KnowledgeCheck",
-    "KnowledgeConfig",
-    "KnowledgeContentError",
-    "KnowledgeExposure",
-    "KnowledgeIndexEntry",
-    "KnowledgeItem",
-    "KnowledgeResolution",
-    "KnowledgeStore",
-    "CODEX_SKILL_PATH",
     "ONBOARDING_SKILL_NAME",
     "CanonicalCatalog",
     "CanonicalSkill",
@@ -63,10 +36,7 @@ __all__ = [
     "CodexSkillSelector",
     "CopilotSkillSelector",
     "DistributionPlan",
-    "ExposureSession",
-    "ExposureSessions",
     "SharedKnowledgeError",
-    "SharedKnowledgeService",
     "SkillRoutingEntry",
     "SkillSelection",
     "SkillSelectionEntry",
@@ -76,16 +46,13 @@ __all__ = [
     "SourceDescriptor",
     "TeamKnowledgeDistributionService",
     "RepositoryKnowledgeEvidence",
-    "ValidatedKnowledge",
     "build_selection_prompt",
     "build_selection_request",
     "find_repository",
-    "initialize_repository",
     "repository_identity",
     "resolve_selector_name",
     "selector_for",
     "collect_skill_bootstrap_evidence",
-    "install_codex_skill",
     "install_onboarding_skills",
     "onboarding_destinations",
     "onboarding_readiness",
@@ -93,5 +60,4 @@ __all__ = [
     "load_selector_preference",
     "preferences_path",
     "save_selector_preference",
-    "skill_text",
 ]

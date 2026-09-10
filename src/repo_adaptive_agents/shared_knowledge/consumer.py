@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
-from repo_adaptive_agents.shared_knowledge.catalog import SharedKnowledgeError, _git
+from repo_adaptive_agents.shared_knowledge.repository import SharedKnowledgeError, git_output as _git
 
 
 STATE_DIR = ".team-knowledge"

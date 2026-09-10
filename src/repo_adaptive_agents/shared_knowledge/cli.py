@@ -5,20 +5,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
-from .catalog import KnowledgeStore, SharedKnowledgeError, initialize_repository
+from .repository import SharedKnowledgeError, find_repository
 from .canonical import CanonicalSkill
-from .codex import install_codex_skill
 from .onboarding import install_onboarding_skills, onboarding_readiness
 from .preferences import load_selector_preference, save_selector_preference
 from .proposals import prepare_new, prepare_update, proposal_root
-from .content import KnowledgeContentError
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
 from .consumer import default_consumer_source, external_consumer_source
 from .selector import resolve_selector_name, selector_for
-from .service import SharedKnowledgeService
 from .skill_quality import assess_candidate
 from .skill_validation import consumer_validation_targets, load_candidate, local_canonical_skills, validate_skill
 
@@ -99,6 +97,7 @@ def _parser() -> argparse.ArgumentParser:
     propose.add_argument("--new", action="store_true", help="Create a new portable Skill proposal")
     propose.add_argument("--name", help="New Skill name (with --new)")
     propose.add_argument("--description", help="New Skill discovery description (with --new)")
+    propose.add_argument("--selector", choices=("codex", "claude", "copilot"))
 
     setup = commands.add_parser(
         "setup",
@@ -122,15 +121,6 @@ def _parser() -> argparse.ArgumentParser:
     _repo_argument(show)
     show.add_argument("skill_id", metavar="ID")
     return parser
-
-
-def _read_body(args: argparse.Namespace) -> str:
-    if args.body_file:
-        try:
-            return Path(args.body_file).expanduser().read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as error:
-            raise SharedKnowledgeError(f"cannot read body file {args.body_file}: {error}") from error
-    return args.body
 
 
 def _print_distribution_plan(plan: DistributionPlan) -> None:
@@ -238,20 +228,21 @@ def _choose_bootstrap_skills(plan: DistributionPlan) -> tuple[str, ...] | None:
         print(f"Enter numbers from 1 to {len(candidates)}, for example: 1,2. No files were changed.")
 
 
-def _choose_skills_to_validate(skills) -> tuple[str, ...] | None:
+def _choose_skills_to_validate(skills, *, proposal: bool = False) -> tuple[str, ...] | None:
     print()
-    print("╭─ Canonical Skill validation ─────────────────────────────────────────╮")
-    print("│ Select only the Skills you want to assess.                           │")
-    print("│ Each selected package is validated independently.                    │")
+    print("╭─ Prepare a Skill improvement ────────────────────────────────────────╮" if proposal else "╭─ Canonical Skill validation ─────────────────────────────────────────╮")
+    print("│ Select one installed Skill to revalidate and prepare.                │" if proposal else "│ Select only the Skills you want to assess.                           │")
+    print("│ No source checkout is changed until it has a READY assessment.       │" if proposal else "│ Each selected package is validated independently.                    │")
     print("├─────────────────────────────────────────────────────────────────────┤")
-    print("│ Writes: none                                                         │")
+    print("│ Writes: none before the READY gate                                  │" if proposal else "│ Writes: none                                                         │")
     print("│ Never: publishes, changes Skills, or combines their contents         │")
     print("╰─────────────────────────────────────────────────────────────────────╯")
     for index, (skill, _path) in enumerate(skills, start=1):
         print(f"  [{index}] {skill.name}")
         print(f"      {skill.description}")
-    print("  [all] Validate every listed Skill")
-    print("  [cancel] Exit without validating (default)")
+    print("  [all] Validate every listed Skill" if not proposal else "  [cancel] Exit without preparing a proposal (default)")
+    if not proposal:
+        print("  [cancel] Exit without validating (default)")
     while True:
         try:
             raw = input("Choose Skills [1, 3 / all / cancel] (default cancel): ").strip().casefold()
@@ -259,7 +250,7 @@ def _choose_skills_to_validate(skills) -> tuple[str, ...] | None:
             return None
         if raw in {"cancel", "c", "none", "n", ""}:
             return None
-        if raw == "all":
+        if raw == "all" and not proposal:
             return tuple(skill.id for skill, _path in skills)
         values = [part.strip() for part in raw.split(",")]
         if values and all(value.isdecimal() and 1 <= int(value) <= len(skills) for value in values):
@@ -281,6 +272,74 @@ def _choose_proposal_kind(*, can_update: bool) -> str | None:
     except EOFError:
         return None
     return ({"1": "update", "2": "new"} if can_update else {"2": "new"}).get(choice)
+
+
+def _choose_prepared_proposal_action() -> str:
+    print()
+    print("╭─ Prepared Skill proposal ────────────────────────────────────────────╮")
+    print("│ The diff is local. Choose the next explicit Git action.              │")
+    print("╰─────────────────────────────────────────────────────────────────────╯")
+    print("  [1] Keep the checkout local — no Git write (default)")
+    print("  [2] Commit the prepared branch locally")
+    print("  [3] Commit and push the prepared branch")
+    print("  [4] Commit, push, and create a draft pull request")
+    try:
+        return {"2": "commit", "3": "push", "4": "pr"}.get(input("Choose [1/2/3/4] (default 1): ").strip(), "keep")
+    except EOFError:
+        return "keep"
+
+
+def _run_git_action(checkout: Path, *arguments: str) -> None:
+    result = subprocess.run(["git", *arguments], cwd=checkout, check=False, text=True, capture_output=True)
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or "Git failed without an error message"
+        raise SharedKnowledgeError(f"requested Git action did not complete successfully: {detail}")
+
+
+def _run_gh_action(checkout: Path, *arguments: str) -> str:
+    try:
+        result = subprocess.run(["gh", *arguments], cwd=checkout, check=False, text=True, capture_output=True)
+    except FileNotFoundError as error:
+        raise SharedKnowledgeError("creating a pull request requires the GitHub CLI (gh) to be installed and signed in") from error
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or "GitHub CLI failed without an error message"
+        raise SharedKnowledgeError(f"draft pull request was not created: {detail}")
+    return result.stdout.strip()
+
+
+def _apply_prepared_proposal_action(prepared) -> None:
+    """Perform only the Git action explicitly selected after the local diff was shown."""
+    action = _choose_prepared_proposal_action()
+    if action == "keep":
+        print(f"Kept local checkout: {prepared.checkout}")
+        print("No commit, push, pull request, or remote source change was made.")
+        return
+    _run_git_action(prepared.checkout, "add", "--", prepared.source_path)
+    _run_git_action(prepared.checkout, "commit", "-m", f"Propose update to {prepared.skill_id}")
+    print(f"Committed local proposal branch: {prepared.branch}")
+    if action == "commit":
+        print("No push, pull request, or remote source change was made.")
+        return
+    _run_git_action(prepared.checkout, "push", "--set-upstream", "origin", prepared.branch)
+    print(f"Pushed proposal branch: {prepared.branch}")
+    if action == "push":
+        print("No pull request was created.")
+        return
+    url = _run_gh_action(
+        prepared.checkout,
+        "pr",
+        "create",
+        "--draft",
+        "--base",
+        prepared.base_ref,
+        "--head",
+        prepared.branch,
+        "--title",
+        f"Propose update to {prepared.skill_id}",
+        "--body",
+        "Prepared and independently validated with team-knowledge.",
+    )
+    print("Created draft pull request" + (f": {url}" if url else "."))
 
 
 def _validation_targets(root: Path):
@@ -380,7 +439,6 @@ def _print_skill_assessment(assessment) -> None:
 
 def _run(args: argparse.Namespace) -> int:
     if args.command == "validate":
-        from .catalog import find_repository
         root = find_repository(args.repo)
         targets = _validation_targets(root)
         skills = tuple((skill, path) for skill, path in targets)
@@ -403,7 +461,6 @@ def _run(args: argparse.Namespace) -> int:
         print("No Skill files were changed or published.")
         return 0
     if args.command == "propose":
-        from .catalog import find_repository
         root = find_repository(args.repo)
         try:
             installed_targets = consumer_validation_targets(root)
@@ -426,16 +483,31 @@ def _run(args: argparse.Namespace) -> int:
             proposal = prepare_new(root, name, description)
             print(f"Created new Skill proposal: {proposal}")
         else:
-            selected = _choose_skills_to_validate(installed_targets)
+            selected = _choose_skills_to_validate(installed_targets, proposal=True)
             if not selected:
                 print("No Skill proposal was created.")
                 return 0
             if len(selected) != 1:
                 raise SharedKnowledgeError("choose exactly one installed Skill to prepare an update proposal")
-            proposal = prepare_update(root, selected[0])
-            print(f"Created update proposal: {proposal}")
-        print("Edit and validate the proposal before deliberately moving it into the canonical catalog.")
-        print("No canonical source, commit, or push was changed.")
+            skill, candidate_path = {skill.id: (skill, path) for skill, path in installed_targets}[selected[0]]
+            report = validate_skill(skill, candidate_path)
+            _print_skill_validation_report(report)
+            if not report.passed:
+                raise SharedKnowledgeError("proposal stopped: package checks need revision")
+            preference = load_selector_preference() if args.selector is None and not os.environ.get("TEAM_KNOWLEDGE_SELECTOR") else None
+            evaluator = resolve_selector_name(args.selector, preference=preference)
+            print(f"[team-knowledge] Revalidating with isolated {evaluator} assessment...", flush=True)
+            assessment = assess_candidate(evaluator, load_candidate(candidate_path))
+            _print_skill_assessment(assessment)
+            if assessment.decision != "ready":
+                raise SharedKnowledgeError("proposal stopped: independent assessment is not READY")
+            prepared = prepare_update(root, selected[0], load_candidate(candidate_path))
+            print(f"Prepared source checkout: {prepared.checkout}")
+            print(f"Prepared branch: {prepared.branch}")
+            print("\nProposed diff:\n" + prepared.diff)
+            _apply_prepared_proposal_action(prepared)
+            return 0
+        print("No commit, push, pull request, or remote source change was made.")
         return 0
     if args.command == "setup":
         if args.only and args.selector is None:
@@ -545,24 +617,7 @@ def _run(args: argparse.Namespace) -> int:
         print("Commit .team-knowledge/config.json, .team-knowledge/lock.json, and .team-knowledge/.gitignore")
         print("Generated Agent Skills and Claude bridges remain local and Git-excluded.")
         return 0
-    if args.command == "init":
-        target = initialize_repository(
-            args.repo,
-            organization=args.organization,
-            team=args.team,
-            repository=args.repository,
-            owner=args.owner,
-        )
-        if args.codex:
-            skill_path, created = install_codex_skill(target.parent)
-            action = "Installed" if created else "Codex Skill already current at"
-            print(f"{action} {skill_path}")
-        print(f"Team knowledge is ready in {target}")
-        print("Add .team-knowledge to Git and use your normal pull-request review.")
-        return 0
-
     if args.command in {"list", "show"}:
-        from .catalog import find_repository
         root = find_repository(args.repo)
         targets = _validation_targets(root)
         available = {skill.id: (skill, path) for skill, path in targets}
@@ -575,128 +630,6 @@ def _run(args: argparse.Namespace) -> int:
         _skill, path = available[args.skill_id]
         sys.stdout.write((path / "SKILL.md").read_text(encoding="utf-8"))
         return 0
-
-    store = KnowledgeStore.open(args.repo)
-    if args.command == "add":
-        item = store.add(
-            args.title,
-            args.summary,
-            _read_body(args),
-            owner=args.owner,
-            restricted=args.restricted,
-        )
-        print(f"Added {item.id}: {item.title}")
-        print(f"Created {item.path}; review and commit it through the normal Git workflow.")
-        return 0
-    if args.command == "list":
-        items = store.load_items()
-        if not items:
-            print("No team knowledge yet. Use 'team-knowledge add' to create the first item.")
-            return 0
-        for item in items:
-            print(f"{item.id}\t{item.state}\t{item.title}\t{item.summary}")
-        print(f"{len(items)} item{'s' if len(items) != 1 else ''}")
-        return 0
-    if args.command == "show":
-        item = store.get(args.item_id)
-        sys.stdout.write((store.root / item.path).read_text(encoding="utf-8"))
-        return 0
-    if args.command == "check":
-        result = SharedKnowledgeService(store).check()
-        print(
-            "Team knowledge is valid: "
-            f"{result.active} active, {result.revoked} revoked, "
-            f"{result.exposable} visible in the agent index."
-        )
-        return 0
-    if args.command == "index":
-        exposure = SharedKnowledgeService(store).expose_index(task_id=args.task_id)
-        payload = {
-            "schema_version": 1,
-            "exposure_id": exposure.id,
-            "knowledge": [
-                {
-                    "id": item.id,
-                    "revision": item.revision,
-                    "title": item.title,
-                    "summary": item.summary,
-                }
-                for item in exposure.index
-            ],
-        }
-        if args.json:
-            print(json.dumps(payload, indent=2, sort_keys=True))
-        else:
-            print(f"Exposure: {exposure.id}")
-            for item in exposure.index:
-                print(f"{item.id}@{item.revision}\t{item.title}\t{item.summary}")
-        return 0
-    if args.command == "use":
-        service = SharedKnowledgeService(store)
-        exposure = service.load_exposure(args.exposure)
-        result = service.validate_ids(
-            exposure,
-            tuple(args.item_ids),
-            task_id=args.task_id,
-        )
-        exposed_revisions = {
-            identity.resource_id: identity.revision for identity in exposure.receipt.resources
-        }
-        selected = [
-            {
-                "id": decision.resource_id,
-                "revision": exposed_revisions.get(decision.resource_id),
-                "status": "accepted" if decision.admitted else "rejected",
-            }
-            for decision in result.validation.selection_decisions
-        ]
-        payload = {
-            "schema_version": 1,
-            "exposure_id": exposure.id,
-            "selected": selected,
-            "knowledge": [
-                {
-                    "id": item.id,
-                    "revision": item.revision,
-                    "title": item.title,
-                    "body": item.body,
-                }
-                for item in result.items
-            ],
-            "citations": [
-                {"id": item.id, "revision": item.revision, "title": item.title}
-                for item in result.items
-            ],
-            "binding_additions": list(result.binding_additions),
-            "rejected": [item for item in selected if item["status"] == "rejected"],
-        }
-        if args.json:
-            print(json.dumps(payload, indent=2, sort_keys=True))
-        else:
-            for item in result.items:
-                print(f"# {item.title} ({item.id}@{item.revision})\n\n{item.body}\n")
-            if result.citations:
-                print("Used team knowledge: " + "; ".join(result.citations))
-            if payload["rejected"]:
-                print("Rejected: " + ", ".join(item["id"] for item in payload["rejected"]))
-        return 0
-    if args.command == "feedback":
-        SharedKnowledgeService(store).record_feedback(
-            args.item_id,
-            args.feedback,
-            task_id=args.task_id,
-        )
-        payload = {"schema_version": 1, "id": args.item_id, "feedback": args.feedback, "recorded": True}
-        if args.json:
-            print(json.dumps(payload, sort_keys=True))
-        else:
-            print(f"Recorded {args.feedback} feedback for {args.item_id}; the knowledge item was not changed.")
-        return 0
-    if args.command == "revoke":
-        item = store.revoke(args.item_id)
-        print(f"Revoked {item.id}: {item.title}")
-        print(f"Updated {item.path}; review and commit the change through the normal Git workflow.")
-        return 0
     raise SharedKnowledgeError(f"unsupported command: {args.command}")
 
 
@@ -704,7 +637,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         return _run(args)
-    except (KnowledgeContentError, SharedKnowledgeError, OSError, ValueError) as error:
+    except (SharedKnowledgeError, OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 

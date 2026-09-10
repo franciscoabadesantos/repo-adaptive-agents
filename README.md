@@ -208,7 +208,3 @@ The explicitly chosen model owns semantic relevance. The product supplies bounde
 Skill routing metadata; it contains no keyword fallback or deterministic semantic selector.
 The existing native admission layer independently enforces exposure and final exact-resource
 validation before any canonical Skill is materialized.
-
-The older profiler, provider, role, and adapter commands remain legacy and are not part of
-the shared-knowledge product path. Public-safe research history is under
-[`docs/research/`](docs/research/README.md).

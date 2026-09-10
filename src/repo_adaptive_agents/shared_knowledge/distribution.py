@@ -13,7 +13,7 @@ from typing import Callable
 
 import repo_adaptive_agents.admission_control as native
 
-from repo_adaptive_agents.shared_knowledge.catalog import (
+from repo_adaptive_agents.shared_knowledge.repository import (
     SharedKnowledgeError,
     find_repository,
     repository_identity,

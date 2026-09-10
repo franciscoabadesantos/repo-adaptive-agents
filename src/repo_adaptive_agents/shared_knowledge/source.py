@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Iterator
 
-from repo_adaptive_agents.shared_knowledge.catalog import SharedKnowledgeError
+from repo_adaptive_agents.shared_knowledge.repository import SharedKnowledgeError
 from repo_adaptive_agents.shared_knowledge.consumer import validate_catalog_path
 
 

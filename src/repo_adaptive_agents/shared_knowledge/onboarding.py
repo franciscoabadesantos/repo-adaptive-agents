@@ -8,7 +8,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Iterable, Mapping
 
-from .catalog import SharedKnowledgeError
+from .repository import SharedKnowledgeError
 
 
 ONBOARDING_SKILL_NAME = "team-knowledge-prepare"

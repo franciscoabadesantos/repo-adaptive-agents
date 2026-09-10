@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Mapping
 
-from .catalog import SharedKnowledgeError
+from .repository import SharedKnowledgeError
 from .selector import SELECTOR_NAMES
 
 

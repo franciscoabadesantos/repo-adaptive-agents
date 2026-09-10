@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
-from repo_adaptive_agents.shared_knowledge.catalog import SharedKnowledgeError
+from repo_adaptive_agents.shared_knowledge.repository import SharedKnowledgeError
 
 
 SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")

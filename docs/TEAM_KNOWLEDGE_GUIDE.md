@@ -2,8 +2,7 @@
 
 Canonical team knowledge is authored as a portable Agent Skill under
 `team-knowledge/skills/<skill-name>/`. It is reviewed and versioned in Git, then selected and
-materialized by `team-knowledge bootstrap`; do not use `team-knowledge add` for canonical
-team Skills.
+materialized by `team-knowledge bootstrap`.
 
 Each canonical Skill contains only safe UTF-8 text:
 
@@ -49,6 +48,14 @@ The evaluator receives only the selected package, not a repository or other Skil
 recommendation and two boundary exercises are evidence for improvement, never authorization to
 publish. A candidate is not a new canonical version until its contents are deliberately copied
 into the catalog, reviewed through the normal Git workflow, and committed.
+
+For an installed Skill, use `team-knowledge propose` after editing its local materialized
+copy. The command reruns the same independent assessment and, only when it is `READY`, creates
+a separate local checkout pinned to the Skill's locked canonical commit. It shows the exact
+diff and then offers a form: keep that checkout only (the default), commit the local branch,
+commit and push it, or commit, push, and create a draft GitHub pull request. No source
+repository is changed before the selected action; creating a draft PR requires the `gh` CLI to
+be installed and signed in.
 
 Add knowledge that another engineer's coding agent would genuinely benefit from and that the
 repository itself does not make obvious.
