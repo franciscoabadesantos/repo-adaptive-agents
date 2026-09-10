@@ -21,6 +21,7 @@ from repo_adaptive_agents.shared_knowledge import (
     ClaudeSkillSelector,
     CodexSkillSelector,
     CopilotSkillSelector,
+    SelectionConversationTurn,
     SelectorResponseError,
     SelectorUnavailable,
     SharedKnowledgeError,
@@ -658,6 +659,179 @@ def test_task_scoped_bootstrap_gives_only_transient_task_to_selector(tmp_path: P
     assert [action.id for action in plan.actions] == ["dns"]
     assert "Implement DNS-01" not in json.dumps(plan.config.to_data())
     assert "Implement DNS-01" not in json.dumps(plan.lock.to_data())
+
+
+def test_conversational_selector_keeps_prior_request_and_findings_in_memory(monkeypatch):
+    evidence, skills = _selector_fixture()
+
+    class ConversationCapture:
+        def __init__(self):
+            self.calls = []
+
+        def select(
+            self,
+            received_evidence,
+            received_skills,
+            *,
+            task=None,
+            organization_default_skill_ids=(),
+            conversation=(),
+        ):
+            self.calls.append(
+                (received_evidence, received_skills, task, organization_default_skill_ids, conversation)
+            )
+            if len(self.calls) == 1:
+                return SkillSelection((SkillSelectionEntry("dns", "Useful for the first request."),))
+            return SkillSelection((SkillSelectionEntry("dns", "Still useful after the clarification."),))
+
+    answers = iter(["2", "Keep that and also consider certificate renewal.", "1"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    delegate = ConversationCapture()
+    selector = shared_cli._ConversationalSelector(delegate, "Help with DNS.", "codex")
+
+    result = selector.select(evidence, skills)
+
+    assert result.selected[0].reason == "Still useful after the clarification."
+    assert len(delegate.calls) == 2
+    assert delegate.calls[0][0] is delegate.calls[1][0] is evidence
+    assert delegate.calls[0][1] is delegate.calls[1][1] is skills
+    assert delegate.calls[0][4] == ()
+    assert delegate.calls[1][4] == (
+        SelectionConversationTurn(
+            "Help with DNS.",
+            SkillSelection((SkillSelectionEntry("dns", "Useful for the first request."),)),
+        ),
+    )
+
+
+def test_conversation_can_continue_after_no_matching_skills(monkeypatch):
+    evidence, skills = _selector_fixture()
+
+    class NoMatchThenMatch:
+        def __init__(self):
+            self.calls = []
+
+        def select(self, _evidence, _skills, *, task=None, conversation=(), **_options):
+            self.calls.append((task, conversation))
+            if len(self.calls) == 1:
+                return SkillSelection(())
+            return SkillSelection((SkillSelectionEntry("dns", "The clarified task matches DNS."),))
+
+    answers = iter(["2", "Actually, prepare DNS automation.", "1"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    delegate = NoMatchThenMatch()
+
+    result = shared_cli._ConversationalSelector(
+        delegate,
+        "Prepare shopping integration.",
+        "codex",
+    ).select(evidence, skills)
+
+    assert [entry.id for entry in result.selected] == ["dns"]
+    assert delegate.calls[1][1] == (
+        SelectionConversationTurn("Prepare shopping integration.", SkillSelection(())),
+    )
+
+
+def test_selection_request_serializes_transient_conversation_history():
+    evidence, skills = _selector_fixture()
+    prior = SelectionConversationTurn(
+        "Help with DNS.",
+        SkillSelection((SkillSelectionEntry("dns", "Repository contains DNS configuration."),)),
+    )
+
+    request = build_selection_request(
+        evidence,
+        skills,
+        task="Also consider certificate renewal.",
+        conversation=(prior,),
+    )
+
+    assert request["task"] == "Also consider certificate renewal."
+    assert request["conversation"] == [
+        {
+            "user_message": "Help with DNS.",
+            "assistant_selection": [
+                {"id": "dns", "reason": "Repository contains DNS configuration."}
+            ],
+        }
+    ]
+
+
+def test_interactive_bootstrap_conversation_reuses_one_repository_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    source = _canonical(tmp_path)
+    descriptor = json.loads((source / "team-knowledge.json").read_text(encoding="utf-8"))
+    descriptor.update(
+        {
+            "schema_version": 2,
+            "organization": "example",
+            "organization_default_skill_ids": ["dns"],
+        }
+    )
+    (source / "team-knowledge.json").write_text(
+        json.dumps(descriptor, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    _git(source, "add", ".")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Set organization default")
+    repository = _unrelated_repo(tmp_path, "consumer")
+    _git(repository, "remote", "add", "origin", "https://github.com/example/service.git")
+
+    class ConversationCapture:
+        def __init__(self):
+            self.calls = []
+
+        def select(
+            self,
+            evidence,
+            skills,
+            *,
+            task=None,
+            organization_default_skill_ids=(),
+            conversation=(),
+        ):
+            self.calls.append(
+                (evidence, skills, task, organization_default_skill_ids, conversation)
+            )
+            return SkillSelection((SkillSelectionEntry("dns", f"Relevant to {task}"),))
+
+    delegate = ConversationCapture()
+    monkeypatch.setattr(shared_cli, "selector_for", lambda _name: delegate)
+
+    class InteractiveInput:
+        @staticmethod
+        def isatty():
+            return True
+
+    monkeypatch.setattr(shared_cli.sys, "stdin", InteractiveInput())
+    answers = iter([
+        "2",
+        "Help with DNS.",
+        "2",
+        "Keep that and also consider certificate renewal.",
+        "1",
+        "2",
+    ])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    assert shared_cli.main(
+        ["bootstrap", "--repo", str(repository), "--source", "../canonical"]
+    ) == 0
+
+    assert len(delegate.calls) == 2
+    assert delegate.calls[0][0] is delegate.calls[1][0]
+    assert delegate.calls[0][1] is delegate.calls[1][1]
+    assert delegate.calls[0][3] == delegate.calls[1][3] == ()
+    assert delegate.calls[1][4][0].user_message == "Help with DNS."
+    assert not (repository / ".team-knowledge").exists()
+    output = capsys.readouterr().out
+    assert "Tell me what you want to do" in output
+    assert "Continuing codex AI selection with the same repository evidence" in output
+    assert "No committed or materialized team knowledge changes were applied" in output
 
 
 def test_bootstrap_progress_reports_ai_selection_before_any_apply(tmp_path: Path):

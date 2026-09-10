@@ -61,24 +61,34 @@ files over 1 MB, Skill packages over 4 MB, and source archives over 20 MB.
    `.claude/skills/<name>`; and
 8. applies the complete plan transactionally after collision and local-modification checks.
 
+Without `--task` or `--yes`, an interactive terminal first offers repository-only recommendation
+or a conversational task description. The conversational path builds the catalog, admission
+snapshot, and factual repository evidence once. Each continuation uses that same evidence and
+includes the earlier user messages and complete earlier model selections, allowing the latest
+message to add, correct, or replace intent. Conversation state is process memory only and is
+discarded before exit; it is never written to consumer state, the shared cache, or the canonical
+source. Non-interactive invocations retain repository-only behavior unless `--task` is supplied.
+
 The selector is resolved in this order: explicit `--selector`,
 `TEAM_KNOWLEDGE_SELECTOR`, then `codex`. There is no automatic provider detection,
 cross-provider reconciliation, or deterministic semantic fallback. Selection reasons are
 shown in the plan but are deliberately absent from the lock, as is selector identity.
 
 All three providers receive the same semantic instruction and the same factual evidence plus
-admitted routing metadata. Each invocation uses a fresh temporary working directory. Codex
+admitted routing metadata. Each model turn uses a fresh temporary working directory; follow-up
+turns replay the bounded in-process conversation against the unchanged evidence snapshot rather
+than relying on provider-specific persisted sessions. Codex
 uses ephemeral read-only structured execution; Claude uses safe mode with tools, Skills,
 custom instructions, sessions, and MCP disabled; Copilot uses programmatic silent mode with
 custom instructions, built-in MCP, experimental features, and available tools disabled.
 Malformed Copilot text gets at most one serialization-only retry. Provider unavailability is
 reported; one provider is never silently substituted for another.
 
-`--task` is optional, transient semantic context for a declared future implementation task. It
-is sent only to the selected model alongside the same factual evidence and routing metadata. It
-is not deterministic matching input and is never recorded in the consumer config or lock. This
-lets a repository prepare for a capability it does not yet demonstrate without making a task
-description part of durable repository state.
+`--task` is optional, transient semantic context for a declared future implementation task and
+bypasses the interactive intent menu. It is sent only to the selected model alongside the same
+factual evidence and routing metadata. It is not deterministic matching input and is never
+recorded in the consumer config or lock. This lets a repository prepare for a capability it does
+not yet demonstrate without making a task description part of durable repository state.
 
 `team-knowledge setup` is the new-machine entry point. It installs a single portable
 `team-knowledge-prepare` Skill in the standard user-level Skill directory of Codex, Claude, and

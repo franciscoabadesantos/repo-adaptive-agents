@@ -36,6 +36,21 @@ class SkillSelection:
     selected: tuple[SkillSelectionEntry, ...]
 
 
+@dataclass(frozen=True)
+class SelectionConversationTurn:
+    user_message: str
+    selection: SkillSelection
+
+    def to_data(self) -> dict[str, object]:
+        return {
+            "user_message": self.user_message,
+            "assistant_selection": [
+                {"id": entry.id, "reason": entry.reason}
+                for entry in self.selection.selected
+            ],
+        }
+
+
 class SkillSelector(Protocol):
     def select(
         self,
@@ -44,6 +59,7 @@ class SkillSelector(Protocol):
         *,
         task: str | None = None,
         organization_default_skill_ids: tuple[str, ...] = (),
+        conversation: tuple[SelectionConversationTurn, ...] = (),
     ) -> SkillSelection: ...
 
 
@@ -88,7 +104,10 @@ SELECTION_INSTRUCTION = (
     "roadmap. When organization_default_skill_ids is supplied, include those IDs as organizational "
     "recommendations in addition to semantic matches. They are supplied only for a normal bootstrap "
     "of a repository in that organization, never as a cross-organization default. Do not inspect the filesystem "
-    "or use tools. Respond only with the requested structured JSON."
+    "or use tools. When conversation is supplied, treat the latest task as a continuation that may "
+    "add, correct, or replace earlier intent. Return the complete current selection, not only a delta; "
+    "the conversation is transient and must not become repository state. Respond only with the "
+    "requested structured JSON."
 )
 
 
@@ -98,6 +117,7 @@ def build_selection_request(
     *,
     task: str | None = None,
     organization_default_skill_ids: tuple[str, ...] = (),
+    conversation: tuple[SelectionConversationTurn, ...] = (),
 ) -> dict[str, object]:
     request: dict[str, object] = {
         "schema_version": 1,
@@ -108,6 +128,8 @@ def build_selection_request(
         request["task"] = task
     if organization_default_skill_ids:
         request["organization_default_skill_ids"] = list(organization_default_skill_ids)
+    if conversation:
+        request["conversation"] = [turn.to_data() for turn in conversation]
     return request
 
 
@@ -140,6 +162,7 @@ class CodexSkillSelector:
         *,
         task: str | None = None,
         organization_default_skill_ids: tuple[str, ...] = (),
+        conversation: tuple[SelectionConversationTurn, ...] = (),
     ) -> SkillSelection:
         prompt = build_selection_prompt(
             build_selection_request(
@@ -147,6 +170,7 @@ class CodexSkillSelector:
                 skills,
                 task=task,
                 organization_default_skill_ids=organization_default_skill_ids,
+                conversation=conversation,
             )
         )
         with tempfile.TemporaryDirectory(prefix="team-knowledge-selector-") as temporary:
@@ -218,6 +242,7 @@ class ClaudeSkillSelector:
         *,
         task: str | None = None,
         organization_default_skill_ids: tuple[str, ...] = (),
+        conversation: tuple[SelectionConversationTurn, ...] = (),
     ) -> SkillSelection:
         prompt = build_selection_prompt(
             build_selection_request(
@@ -225,6 +250,7 @@ class ClaudeSkillSelector:
                 skills,
                 task=task,
                 organization_default_skill_ids=organization_default_skill_ids,
+                conversation=conversation,
             )
         )
         schema = json.dumps(OUTPUT_SCHEMA, sort_keys=True, separators=(",", ":"))
@@ -288,6 +314,7 @@ class CopilotSkillSelector:
         *,
         task: str | None = None,
         organization_default_skill_ids: tuple[str, ...] = (),
+        conversation: tuple[SelectionConversationTurn, ...] = (),
     ) -> SkillSelection:
         prompt = build_selection_prompt(
             build_selection_request(
@@ -295,6 +322,7 @@ class CopilotSkillSelector:
                 skills,
                 task=task,
                 organization_default_skill_ids=organization_default_skill_ids,
+                conversation=conversation,
             )
         )
         try:

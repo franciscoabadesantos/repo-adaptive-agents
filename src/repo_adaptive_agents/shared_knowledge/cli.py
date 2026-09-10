@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from textwrap import wrap
 
 from .repository import SharedKnowledgeError, find_repository
 from .canonical import CanonicalSkill
@@ -16,7 +17,12 @@ from .preferences import load_selector_preference, preferences_path, save_select
 from .proposals import prepare_new, prepare_update, proposal_root
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
 from .consumer import default_consumer_source, external_consumer_source
-from .selector import resolve_selector_name, selector_for
+from .selector import (
+    SelectionConversationTurn,
+    SkillSelection,
+    resolve_selector_name,
+    selector_for,
+)
 from .skill_quality import assess_candidate
 from .skill_validation import consumer_validation_targets, load_candidate, local_canonical_skills, validate_skill
 from .storage import user_cache_root
@@ -235,6 +241,124 @@ def _choose_bootstrap_skills(plan: DistributionPlan) -> tuple[str, ...] | None:
         if valid and selected:
             return tuple(selected)
         print(f"Enter numbers from 1 to {len(candidates)}, for example: 1,2. No files were changed.")
+
+
+def _choose_bootstrap_intent() -> str | None:
+    print()
+    print("╭─ Prepare team knowledge ─────────────────────────────────────────────╮")
+    print("│ Choose how the AI selector should evaluate this repository.          │")
+    print("╰─────────────────────────────────────────────────────────────────────╯")
+    print("  [1] Recommend Skills for this repository (default)")
+    print("  [2] Tell me what you want to do")
+    print("  [3] Cancel")
+    while True:
+        try:
+            choice = input("Choose [1/2/3] (default 1): ").strip()
+        except EOFError:
+            return "repository"
+        if choice in {"", "1"}:
+            return "repository"
+        if choice == "2":
+            return "conversation"
+        if choice == "3":
+            return None
+        print("Choose 1, 2, or 3. No files were changed.")
+
+
+def _read_conversation_message(prompt: str) -> str | None:
+    while True:
+        try:
+            message = input(prompt).strip()
+        except EOFError:
+            return None
+        if message:
+            return message
+        print("Describe the work you want to do, or press Ctrl-D to cancel.")
+
+
+def _conversation_action(selection: SkillSelection, skills) -> str:
+    descriptions = {skill.id: skill for skill in skills}
+    print()
+    print("╭─ Current Skill recommendations ──────────────────────────────────────╮")
+    if selection.selected:
+        for entry in selection.selected:
+            skill = descriptions.get(entry.id)
+            label = skill.name if skill is not None else entry.id
+            for line in wrap(label, width=67) or [""]:
+                print(f"│ {line:<67}│")
+            if entry.reason:
+                for line in wrap(entry.reason, width=65):
+                    print(f"│   {line:<65}│")
+    else:
+        print("│ No matching team Skills were found.                                  │")
+    print("╰─────────────────────────────────────────────────────────────────────╯")
+    if selection.selected:
+        print("  [1] Review these recommendations (default)")
+    else:
+        print("  [1] Finish without Skill changes (default)")
+    print("  [2] Add context or describe another task")
+    print("  [3] Cancel")
+    while True:
+        try:
+            choice = input("Choose [1/2/3] (default 1): ").strip()
+        except EOFError:
+            return "accept"
+        if choice in {"", "1"}:
+            return "accept"
+        if choice == "2":
+            return "continue"
+        if choice == "3":
+            return "cancel"
+        print("Choose 1, 2, or 3. No files were changed.")
+
+
+class _ConversationalSelector:
+    """Keep one bootstrap conversation in memory while reusing one evidence snapshot."""
+
+    def __init__(self, delegate, initial_message: str, selector_name: str) -> None:
+        self.delegate = delegate
+        self.initial_message = initial_message
+        self.selector_name = selector_name
+        self.cancelled = False
+
+    def select(
+        self,
+        evidence,
+        skills,
+        *,
+        task=None,
+        organization_default_skill_ids=(),
+    ) -> SkillSelection:
+        del task
+        message = self.initial_message
+        history: list[SelectionConversationTurn] = []
+        while True:
+            selection = self.delegate.select(
+                evidence,
+                skills,
+                task=message,
+                organization_default_skill_ids=organization_default_skill_ids,
+                conversation=tuple(history),
+            )
+            action = _conversation_action(selection, skills)
+            if action == "accept":
+                return selection
+            if action == "cancel":
+                self.cancelled = True
+                return SkillSelection(())
+            next_message = _read_conversation_message(
+                "Add context, correct the request, or describe another task: "
+            )
+            if next_message is None:
+                self.cancelled = True
+                return SkillSelection(())
+            history.append(SelectionConversationTurn(message, selection))
+            message = next_message
+            print(
+                f"[team-knowledge] Continuing {self.selector_name} AI selection with the same "
+                "repository evidence...",
+                flush=True,
+            )
 
 
 def _choose_skills_to_validate(skills, *, proposal: bool = False) -> tuple[str, ...] | None:
@@ -615,7 +739,34 @@ def _run(args: argparse.Namespace) -> int:
         if args.selector is None and not os.environ.get("TEAM_KNOWLEDGE_SELECTOR"):
             preference = load_selector_preference()
         selector_name = resolve_selector_name(args.selector, preference=preference)
-        service = TeamKnowledgeDistributionService(selector_for(selector_name))
+        active_selector = selector_for(selector_name)
+        conversational_selector = None
+        bootstrap_task = args.task if args.command == "bootstrap" else None
+        if (
+            args.command == "bootstrap"
+            and not args.yes
+            and args.task is None
+            and sys.stdin.isatty()
+        ):
+            intent = _choose_bootstrap_intent()
+            if intent is None:
+                print("No committed or materialized team knowledge changes were applied.")
+                return 0
+            if intent == "conversation":
+                initial_message = _read_conversation_message(
+                    "What are you planning to build, change, or investigate? "
+                )
+                if initial_message is None:
+                    print("No committed or materialized team knowledge changes were applied.")
+                    return 0
+                conversational_selector = _ConversationalSelector(
+                    active_selector,
+                    initial_message,
+                    selector_name,
+                )
+                active_selector = conversational_selector
+                bootstrap_task = initial_message
+        service = TeamKnowledgeDistributionService(active_selector)
 
         def progress(message: str) -> None:
             if message.startswith("Calling the configured AI selector"):
@@ -634,12 +785,15 @@ def _run(args: argparse.Namespace) -> int:
                     if args.source is not None
                     else default_consumer_source(args.ref)
                 ),
-                task=args.task,
+                task=bootstrap_task,
                 progress=progress,
             )
             if args.command == "bootstrap"
             else service.sync_plan(args.repo, offline=args.offline)
         )
+        if conversational_selector is not None and conversational_selector.cancelled:
+            print("No committed or materialized team knowledge changes were applied.")
+            return 0
         if args.command == "bootstrap" and not args.yes:
             selected = _choose_bootstrap_skills(plan)
             if selected is None:

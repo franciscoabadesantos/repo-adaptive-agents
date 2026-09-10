@@ -33,7 +33,10 @@ team-knowledge bootstrap --selector <codex|claude|copilot>
 Replace the placeholder with the selector CLI you actually have available. The explicit flag
 takes precedence over `TEAM_KNOWLEDGE_SELECTOR`. Bootstrap fetches the canonical source,
 collects factual repository evidence, runs semantic selection, performs native validation,
-and prints a proposed plan.
+and prints a proposed plan. In an interactive terminal, choose whether to recommend Skills from
+the repository as it exists or describe work you intend to add. If you continue that conversation,
+earlier messages and recommendations remain available while the same repository-evidence snapshot
+is reused. The history is discarded when the command exits.
 
 ## Review the plan
 

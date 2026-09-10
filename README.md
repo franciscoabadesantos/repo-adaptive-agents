@@ -67,6 +67,14 @@ In an existing engineering repository, run:
 team-knowledge bootstrap
 ```
 
+In an interactive terminal, bootstrap first offers to recommend Skills from the repository as
+it exists or to start a short conversation about work you intend to add. Conversation turns
+reuse the same catalog and factual repository-evidence snapshot. Earlier requests and the
+selector's earlier recommendations remain in memory for the duration of that command, so a
+clarification can add, correct, or replace intent without rescanning the repository. The
+conversation is discarded on exit and is never written to the repository, lock, configuration,
+or shared cache.
+
 By default, the tool fetches the `main` branch of `repo-adaptive-agents` and reads only its
 `team-knowledge/` catalog. Product code and team knowledge share Git hosting for this trial,
 but remain separate logical assets with independent source paths, revisions, and lifecycle.
@@ -126,8 +134,10 @@ git commit -m "Bootstrap shared team knowledge"
 Declining the bootstrap plan leaves no `.team-knowledge/` state or generated Skill package in
 the consumer repository. Source acquisition may populate the disposable shared user cache.
 
-To prepare a repository for work it does not yet contain, provide the concrete goal as transient
-model input. It is never written to the config, lock, or generated Skill package:
+To prepare a repository for work it does not yet contain, choose "Tell me what you want to do"
+in the interactive bootstrap. `--task` provides the same direct, non-conversational path for
+scripts and one-line invocations. Task and conversation text are never written to the config,
+lock, generated Skill package, or cache:
 
 ```sh
 team-knowledge bootstrap --task "Implement Jira issue automation for this service"
