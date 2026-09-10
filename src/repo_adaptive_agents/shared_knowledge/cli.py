@@ -179,9 +179,16 @@ def _print_approval_form(plan: DistributionPlan) -> None:
     print(f"│ Why: {reason[:62]:<62}│")
     print("├───────────────────────────────────────────────────────────────────────┤")
     print(f"│ Planned Skill changes: {skill_count:<48}│")
-    print("│ Writes: .team-knowledge config, lock, and local ignore rules          │")
+    print(
+        "│ Writes: .team-knowledge config, lock, and local ignore rules          │"
+        if planned
+        else "│ Writes: none                                                           │"
+    )
     print("│ Never: commits, pushes, deploys, or edits application source files     │")
     print("╰───────────────────────────────────────────────────────────────────────╯")
+    if not planned:
+        print("  No action is available — no files will be changed.")
+        return
     if recommendation == "APPLY":
         print("  [1] Apply the recommended local plan")
         print("  [2] Cancel — make no changes (default)")
@@ -381,6 +388,10 @@ def _validation_targets(root: Path):
 
 
 def _confirm(yes: bool, plan: DistributionPlan) -> bool:
+    planned = [action for action in plan.actions if action.action != "keep"]
+    if not planned:
+        _print_approval_form(plan)
+        return False
     if yes:
         return True
     _print_approval_form(plan)

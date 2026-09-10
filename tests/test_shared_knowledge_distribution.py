@@ -428,6 +428,26 @@ def test_declined_bootstrap_leaves_no_consumer_state(monkeypatch, tmp_path: Path
     assert "Never: commits, pushes, deploys, or edits application source files" in output
 
 
+def test_empty_bootstrap_plan_has_no_apply_choice_or_write_even_with_yes(monkeypatch, tmp_path: Path, capsys):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+
+    class SelectNone:
+        def select(self, _evidence, _skills):
+            return SkillSelection(())
+
+    monkeypatch.setattr(shared_cli, "selector_for", lambda _name: SelectNone())
+    monkeypatch.setattr("builtins.input", lambda _prompt: pytest.fail("an empty plan must not prompt"))
+
+    assert shared_cli.main(["bootstrap", "--yes", "--repo", str(repository), "--source", "../canonical"]) == 0
+
+    output = capsys.readouterr().out
+    assert "No action is available — no files will be changed." in output
+    assert "Apply anyway" not in output
+    assert "Writes: none" in output
+    assert not (repository / ".team-knowledge").exists()
+
+
 def test_task_scoped_bootstrap_gives_only_transient_task_to_selector(tmp_path: Path):
     _canonical(tmp_path)
     repository = _unrelated_repo(tmp_path, "consumer")
