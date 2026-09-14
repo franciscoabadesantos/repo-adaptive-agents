@@ -1090,6 +1090,43 @@ def test_prepared_proposal_default_keeps_the_checkout_local(monkeypatch, tmp_pat
     assert "No commit, push, pull request, or remote source change was made." in capsys.readouterr().out
 
 
+def test_prepared_proposal_default_output_is_compact_and_wraps_human_summary(monkeypatch, tmp_path: Path, capsys):
+    checkout = tmp_path / ("long-checkout-name-" * 8)
+    diff = "\n".join((
+        "diff --git a/team-knowledge/skills/dns/SKILL.md b/team-knowledge/skills/dns/SKILL.md",
+        "--- a/team-knowledge/skills/dns/SKILL.md",
+        "+++ b/team-knowledge/skills/dns/SKILL.md",
+        "@@ -1 +1 @@",
+        "-Use the old shared DNS procedure.",
+        "+Use the improved shared DNS procedure while preserving explicit authorization boundaries and portable evidence requirements.",
+    ))
+    prepared = PreparedProposal(checkout, "team-knowledge/dns", diff, "main", "dns", "team-knowledge/skills/dns")
+    assessment = SkillAssessment(
+        "ready",
+        "The candidate is portable, narrowly triggered, and ready for shared human review.",
+        (),
+        ("Permissions remain conditional.",),
+        "Review one DNS change.",
+        "Explain DNS conceptually.",
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+
+    shared_cli._apply_prepared_proposal_action(
+        prepared,
+        assessment=assessment,
+        changed_paths=("SKILL.md",),
+    )
+
+    output = capsys.readouterr().out
+    assert "Proposal ready" in output
+    assert "Changed files: SKILL.md" in output
+    assert "Changed lines: +1 / -1" in output
+    assert "Change preview:" in output
+    assert "Full Git diff:" not in output
+    assert "[d] View the full assessment, paths, and Git diff" in output
+    assert all(len(line) <= 88 for line in output.splitlines())
+
+
 def test_prepared_proposal_draft_pr_runs_explicit_git_actions_in_order(monkeypatch, tmp_path: Path, capsys):
     prepared = PreparedProposal(tmp_path, "team-knowledge/dns", "diff", "main", "dns", "skills/dns")
     monkeypatch.setattr("builtins.input", lambda _prompt: "4")

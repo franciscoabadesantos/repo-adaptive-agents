@@ -436,19 +436,94 @@ def _choose_proposal_kind(*, can_update: bool) -> str | None:
     return ({"1": "update", "2": "new"} if can_update else {"2": "new"}).get(choice)
 
 
-def _choose_prepared_proposal_action() -> str:
+def _print_wrapped_text(text: str, *, initial: str = "  ", subsequent: str | None = None) -> None:
+    subsequent = initial if subsequent is None else subsequent
+    for line in wrap(text, width=88, initial_indent=initial, subsequent_indent=subsequent):
+        print(line)
+
+
+def _print_card(title: str, lines: tuple[str, ...]) -> None:
+    width = 68
+    heading = f"╭─ {title} "
+    print(heading + "─" * (width + 3 - len(heading)) + "╮")
+    for text in lines:
+        wrapped = wrap(text, width=width) or [""]
+        for line in wrapped:
+            print(f"│ {line:<{width}} │")
+    print("╰" + "─" * (width + 2) + "╯")
+
+
+def _diff_summary(diff: str) -> tuple[int, int, tuple[str, ...]]:
+    added = removed = 0
+    preview: list[str] = []
+    for line in diff.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            added += 1
+            if len(preview) < 6:
+                preview.append(line)
+        elif line.startswith("-"):
+            removed += 1
+            if len(preview) < 6:
+                preview.append(line)
+    return added, removed, tuple(preview)
+
+
+def _print_prepared_proposal_summary(prepared, changed_paths: tuple[str, ...]) -> None:
+    added, removed, preview = _diff_summary(prepared.diff)
+    files = ", ".join(changed_paths) if changed_paths else prepared.source_path
+    _print_card(
+        "Proposal ready",
+        (
+            f"Skill: {prepared.skill_id}",
+            "Independent review: READY",
+            f"Changed files: {files}",
+            f"Changed lines: +{added} / -{removed}",
+        ),
+    )
+    if preview:
+        print("\nChange preview:")
+        for line in preview:
+            marker, content = line[0], line[1:].strip() or "(blank line)"
+            _print_wrapped_text(content, initial=f"  {marker} ", subsequent="    ")
+
+
+def _print_prepared_proposal_details(prepared, assessment) -> None:
+    if assessment is not None:
+        _print_skill_assessment(assessment, detailed=True)
+    print("\nPrepared checkout:")
+    _print_wrapped_text(str(prepared.checkout))
+    print("Prepared branch:")
+    _print_wrapped_text(prepared.branch)
+    print("\nFull Git diff:\n")
+    print(prepared.diff.rstrip())
+
+
+def _choose_prepared_proposal_action(prepared, assessment=None) -> str:
     print()
-    print("╭─ Prepared Skill proposal ────────────────────────────────────────────╮")
-    print("│ The diff is local. Choose the next explicit Git action.              │")
-    print("╰─────────────────────────────────────────────────────────────────────╯")
-    print("  [1] Keep the checkout local — no Git write (default)")
-    print("  [2] Commit the prepared branch locally")
-    print("  [3] Commit and push the prepared branch")
-    print("  [4] Commit, push, and create a draft pull request")
-    try:
-        return {"2": "commit", "3": "push", "4": "pr"}.get(input("Choose [1/2/3/4] (default 1): ").strip(), "keep")
-    except EOFError:
-        return "keep"
+    _print_card(
+        "Choose the next action",
+        (
+            "Nothing has been committed or sent to the remote repository.",
+            "For shared review, use option 4. The safe default is option 1.",
+        ),
+    )
+    while True:
+        print("  [1] Keep the prepared checkout local (safe default)")
+        print("  [2] Commit the prepared branch locally")
+        print("  [3] Commit and push the prepared branch")
+        print("  [4] Commit, push, and create a draft pull request (shared review)")
+        print("  [d] View the full assessment, paths, and Git diff")
+        try:
+            choice = input("Choose [1/2/3/4/d] (default 1): ").strip().casefold()
+        except EOFError:
+            return "keep"
+        if choice in {"d", "details"}:
+            _print_prepared_proposal_details(prepared, assessment)
+            print("\nChoose the next action:")
+            continue
+        return {"2": "commit", "3": "push", "4": "pr"}.get(choice, "keep")
 
 
 def _run_git_action(checkout: Path, *arguments: str) -> None:
@@ -469,21 +544,25 @@ def _run_gh_action(checkout: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
-def _apply_prepared_proposal_action(prepared) -> None:
-    """Perform only the Git action explicitly selected after the local diff was shown."""
-    action = _choose_prepared_proposal_action()
+def _apply_prepared_proposal_action(prepared, *, assessment=None, changed_paths: tuple[str, ...] = ()) -> None:
+    """Summarize the proposal, then perform only the explicitly selected Git action."""
+    _print_prepared_proposal_summary(prepared, changed_paths)
+    action = _choose_prepared_proposal_action(prepared, assessment)
     if action == "keep":
-        print(f"Kept local checkout: {prepared.checkout}")
+        print("Kept local checkout:")
+        _print_wrapped_text(str(prepared.checkout))
         print("No commit, push, pull request, or remote source change was made.")
         return
     _run_git_action(prepared.checkout, "add", "--", prepared.source_path)
     _run_git_action(prepared.checkout, "commit", "-m", f"Propose update to {prepared.skill_id}")
-    print(f"Committed local proposal branch: {prepared.branch}")
+    print("Committed local proposal branch:")
+    _print_wrapped_text(prepared.branch)
     if action == "commit":
         print("No push, pull request, or remote source change was made.")
         return
     _run_git_action(prepared.checkout, "push", "--set-upstream", "origin", prepared.branch)
-    print(f"Pushed proposal branch: {prepared.branch}")
+    print("Pushed proposal branch:")
+    _print_wrapped_text(prepared.branch)
     if action == "push":
         print("No pull request was created.")
         return
@@ -608,7 +687,7 @@ def _print_skill_validation_report(report) -> None:
         print(f"  - {finding}")
 
 
-def _print_skill_assessment(assessment, *, candidate_changed: bool = True) -> None:
+def _print_skill_assessment(assessment, *, candidate_changed: bool = True, detailed: bool = True) -> None:
     next_step = (
         "You can prepare a proposal."
         if assessment.decision == "ready" and candidate_changed
@@ -618,25 +697,36 @@ def _print_skill_assessment(assessment, *, candidate_changed: bool = True) -> No
         if assessment.decision == "needs_revision"
         else "Gather the missing evidence, then run validate again."
     )
+    recommendation = {
+        "ready": next_step,
+        "needs_revision": "Do not prepare or publish this proposal yet.",
+        "inconclusive": "Pause until the missing evidence is available.",
+    }[assessment.decision]
     print()
-    print("╭─ Skill decision ─────────────────────────────────────────────────────╮")
-    print(f"│ Status: {assessment.decision.upper():<57}│")
-    print(f"│ Next: {next_step:<59}│")
-    print(f"│ Required changes: {len(assessment.required_changes):<46}│")
-    print("│ It cannot publish, change files, use tools, or inspect other Skills. │")
-    print("╰─────────────────────────────────────────────────────────────────────╯")
+    _print_card(
+        "Skill review",
+        (
+            f"Status: {assessment.decision.upper()}",
+            f"Recommendation: {recommendation}",
+            f"Blocking changes: {len(assessment.required_changes)}",
+        ),
+    )
     if assessment.required_changes:
         print("\nWhat to fix:")
         for index, change in enumerate(assessment.required_changes, start=1):
-            print(f"  {index}. {change}")
-    print("\nWhy:")
-    print(f"  {assessment.summary}")
-    print("\nBoundary exercises:")
-    print(f"  In-scope exercise: {assessment.in_scope_exercise}")
-    print(f"  Out-of-scope exercise: {assessment.out_of_scope_exercise}")
-    print("\nAdditional observations:")
-    for finding in assessment.findings:
-        print(f"  - {finding}")
+            _print_wrapped_text(change, initial=f"  {index}. ", subsequent="     ")
+    print("\nReason:")
+    _print_wrapped_text(assessment.summary)
+    if not detailed:
+        print("  Full assessment available from the proposal action menu with [d].")
+        return
+    print("\nBoundary checks:")
+    _print_wrapped_text(assessment.in_scope_exercise, initial="  In scope: ", subsequent="            ")
+    _print_wrapped_text(assessment.out_of_scope_exercise, initial="  Out of scope: ", subsequent="                ")
+    if assessment.findings:
+        print("\nAdditional observations:")
+        for finding in assessment.findings:
+            _print_wrapped_text(finding, initial="  - ", subsequent="    ")
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -708,14 +798,15 @@ def _run(args: argparse.Namespace) -> int:
             evaluator = resolve_selector_name(args.selector, preference=preference)
             print(f"[team-knowledge] Revalidating with isolated {evaluator} assessment...", flush=True)
             assessment = assess_candidate(evaluator, load_candidate(candidate_path))
-            _print_skill_assessment(assessment)
+            _print_skill_assessment(assessment, detailed=False)
             if assessment.decision != "ready":
                 raise SharedKnowledgeError("proposal stopped: independent assessment is not READY")
             prepared = prepare_update(root, selected[0], load_candidate(candidate_path))
-            print(f"Prepared source checkout: {prepared.checkout}")
-            print(f"Prepared branch: {prepared.branch}")
-            print("\nProposed diff:\n" + prepared.diff)
-            _apply_prepared_proposal_action(prepared)
+            _apply_prepared_proposal_action(
+                prepared,
+                assessment=assessment,
+                changed_paths=report.changed_paths,
+            )
             return 0
         print("No commit, push, pull request, or remote source change was made.")
         return 0
