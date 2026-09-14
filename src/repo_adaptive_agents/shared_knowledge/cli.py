@@ -478,6 +478,7 @@ def _print_prepared_proposal_summary(prepared, changed_paths: tuple[str, ...]) -
         (
             f"Skill: {prepared.skill_id}",
             "Independent review: READY",
+            f"Prepared checkout: {'REUSED' if prepared.reused else 'CREATED'}",
             f"Changed files: {files}",
             f"Changed lines: +{added} / -{removed}",
         ),

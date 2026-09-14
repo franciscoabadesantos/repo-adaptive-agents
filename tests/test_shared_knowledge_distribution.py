@@ -1059,6 +1059,41 @@ def test_prepare_update_uses_locked_source_commit_and_never_changes_remote_sourc
     assert "Confirm the target zone first." in (prepared.checkout / "skills" / "dns" / "SKILL.md").read_text(encoding="utf-8")
     assert _git(source, "status", "--short") == ""
 
+    reused = prepare_update(repository, "dns", load_candidate(candidate_path))
+
+    assert reused.checkout == prepared.checkout
+    assert reused.diff == prepared.diff
+    assert reused.reused
+
+
+def test_prepare_update_rejects_an_existing_checkout_with_unrelated_changes(tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    _bootstrap(TeamKnowledgeDistributionService(EvidenceRoutingStub()), repository)
+    candidate_path = repository / ".agents" / "skills" / "dns"
+    skill_path = candidate_path / "SKILL.md"
+    skill_path.write_text(skill_path.read_text(encoding="utf-8") + "\nConfirm the target zone first.\n", encoding="utf-8")
+    prepared = prepare_update(repository, "dns", load_candidate(candidate_path))
+    (prepared.checkout / "unexpected.txt").write_text("unrelated change\n", encoding="utf-8")
+
+    with pytest.raises(SharedKnowledgeError, match="existing prepared proposal is not reusable"):
+        prepare_update(repository, "dns", load_candidate(candidate_path))
+
+
+def test_prepare_update_diff_includes_a_new_candidate_reference(tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    _bootstrap(TeamKnowledgeDistributionService(EvidenceRoutingStub()), repository)
+    candidate_path = repository / ".agents" / "skills" / "dns"
+    reference = candidate_path / "references" / "new-check.md"
+    reference.write_text("# New check\n\nVerify the intended target.\n", encoding="utf-8")
+
+    prepared = prepare_update(repository, "dns", load_candidate(candidate_path))
+
+    assert "new-check.md" in prepared.diff
+    assert "Verify the intended target." in prepared.diff
+    assert not prepared.reused
+
 
 def test_prepare_update_addresses_skill_relative_to_nested_catalog(tmp_path: Path):
     source = _bundled_source(tmp_path)
