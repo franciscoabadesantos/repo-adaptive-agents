@@ -405,12 +405,17 @@ def _choose_skills_to_validate(skills, *, proposal: bool = False) -> tuple[str, 
     print("│ Writes: none before the READY gate                                  │" if proposal else "│ Writes: none                                                         │")
     print("│ Never: publishes, changes Skills, or combines their contents         │")
     print("╰─────────────────────────────────────────────────────────────────────╯")
+    print()
     for index, (skill, _path) in enumerate(skills, start=1):
+        if index > 1:
+            print()
         print(f"  [{index}] {skill.name}")
         print(f"      {skill.description}")
+    print()
     print("  [all] Validate every listed Skill" if not proposal else "  [cancel] Exit without preparing a proposal (default)")
     if not proposal:
         print("  [cancel] Exit without validating (default)")
+    print()
     while True:
         try:
             raw = input("Choose Skills [1, 3 / all / cancel] (default cancel): ").strip().casefold()
@@ -515,6 +520,7 @@ def _choose_new_skill_source(
     if candidates:
         print("\nDetected local Skills:")
         for index, (candidate, path) in enumerate(candidates, start=1):
+            print()
             print(f"  [{index}] {candidate.name}")
             _print_wrapped_text(candidate.description, initial="      ")
             _print_wrapped_text(
@@ -524,9 +530,11 @@ def _choose_new_skill_source(
             )
     else:
         print("\n  No existing local Skill candidates were detected.")
+    print()
     print("  [n] Start a new Skill draft")
     print("  [path] Select another Skill folder inside this repository")
     print("  [cancel] Exit without preparing a proposal (default)")
+    print()
     while True:
         try:
             raw = input("Choose a Skill, n, path, or cancel (default cancel): ").strip()

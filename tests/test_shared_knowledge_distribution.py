@@ -1183,6 +1183,7 @@ def test_propose_adds_an_existing_new_skill_instead_of_recreating_it(monkeypatch
     output = capsys.readouterr().out
     assert "Add or create a new Skill" in output
     assert "Detected local Skills:" in output
+    assert "Location: .team-knowledge/proposals/cloud-run-deployment-safety\n\n  [n]" in output
     assert "Independent review: READY" in output
     assert "Changed files: SKILL.md" in output
     assert "Prepared checkout: CREATED" in output
@@ -1402,6 +1403,10 @@ def test_propose_unchanged_skill_stops_before_semantic_assessment(monkeypatch, t
     assert shared_cli.main(["propose", "--repo", str(repository)]) == 2
 
     output = capsys.readouterr()
+    assert (
+        "Use for company DNS zones, records, delegation, and DNS operations.\n\n"
+        "  [cancel] Exit without preparing a proposal"
+    ) in output.out
     assert "Candidate changes: none" in output.out
     assert "installed Skill has no local changes" in output.err
     assert "Revalidating with isolated" not in output.out
