@@ -1038,6 +1038,8 @@ def test_validate_skill_uses_only_the_installed_copy_and_its_locked_predecessor(
     assert "jira-data-center-operations" in seen[0]
     assert "dify-workflow-operations" not in seen[0]
     assert "Status: READY" in output
+    assert "No proposal needed; package matches canonical" in output
+    assert "You can prepare a proposal" not in output
 
 
 def test_prepare_update_uses_locked_source_commit_and_never_changes_remote_source(tmp_path: Path):
@@ -1099,6 +1101,11 @@ def test_propose_stops_before_checkout_when_independent_assessment_is_not_ready(
     repository = _dns_repo(tmp_path, "consumer", 1)
     service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
     _bootstrap(service, repository)
+    candidate = repository / ".agents/skills/dns/SKILL.md"
+    candidate.write_text(
+        candidate.read_text(encoding="utf-8") + "\nConfirm the intended DNS zone.\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr("builtins.input", lambda _prompt: "1")
     monkeypatch.setattr(
         shared_cli,
@@ -1114,6 +1121,25 @@ def test_propose_stops_before_checkout_when_independent_assessment_is_not_ready(
     assert not called
     assert "proposal stopped: independent assessment is not READY" in capsys.readouterr().err
     assert _git(source, "status", "--short") == ""
+
+
+def test_propose_unchanged_skill_stops_before_semantic_assessment(monkeypatch, tmp_path: Path, capsys):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    _bootstrap(TeamKnowledgeDistributionService(EvidenceRoutingStub()), repository)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+    monkeypatch.setattr(
+        shared_cli,
+        "assess_candidate",
+        lambda *_args: pytest.fail("an unchanged Skill must not spend a semantic assessment"),
+    )
+
+    assert shared_cli.main(["propose", "--repo", str(repository)]) == 2
+
+    output = capsys.readouterr()
+    assert "Candidate changes: none" in output.out
+    assert "installed Skill has no local changes" in output.err
+    assert "Revalidating with isolated" not in output.out
 
 
 def test_user_selector_preference_is_local_and_has_lower_precedence_than_explicit_or_environment(tmp_path: Path):

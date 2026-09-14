@@ -608,9 +608,11 @@ def _print_skill_validation_report(report) -> None:
         print(f"  - {finding}")
 
 
-def _print_skill_assessment(assessment) -> None:
+def _print_skill_assessment(assessment, *, candidate_changed: bool = True) -> None:
     next_step = (
         "You can prepare a proposal."
+        if assessment.decision == "ready" and candidate_changed
+        else "No proposal needed; package matches canonical."
         if assessment.decision == "ready"
         else "Fix the required changes, then run validate again."
         if assessment.decision == "needs_revision"
@@ -657,7 +659,10 @@ def _run(args: argparse.Namespace) -> int:
             _print_skill_validation_report(report)
             if report.passed:
                 print(f"[team-knowledge] Starting isolated {evaluator} assessment for this candidate only...", flush=True)
-                _print_skill_assessment(assess_candidate(evaluator, load_candidate(candidate_path)))
+                _print_skill_assessment(
+                    assess_candidate(evaluator, load_candidate(candidate_path)),
+                    candidate_changed=bool(report.changed_paths),
+                )
         print("No Skill files were changed or published.")
         return 0
     if args.command == "propose":
@@ -694,6 +699,11 @@ def _run(args: argparse.Namespace) -> int:
             _print_skill_validation_report(report)
             if not report.passed:
                 raise SharedKnowledgeError("proposal stopped: package checks need revision")
+            if not report.changed_paths:
+                raise SharedKnowledgeError(
+                    "proposal stopped: installed Skill has no local changes; edit its local "
+                    "copy before proposing an improvement"
+                )
             preference = load_selector_preference() if args.selector is None and not os.environ.get("TEAM_KNOWLEDGE_SELECTOR") else None
             evaluator = resolve_selector_name(args.selector, preference=preference)
             print(f"[team-knowledge] Revalidating with isolated {evaluator} assessment...", flush=True)
