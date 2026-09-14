@@ -1393,7 +1393,8 @@ def test_propose_unchanged_skill_stops_before_semantic_assessment(monkeypatch, t
     _canonical(tmp_path)
     repository = _dns_repo(tmp_path, "consumer", 1)
     _bootstrap(TeamKnowledgeDistributionService(EvidenceRoutingStub()), repository)
-    monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or "1")
     monkeypatch.setattr(
         shared_cli,
         "assess_candidate",
@@ -1403,10 +1404,8 @@ def test_propose_unchanged_skill_stops_before_semantic_assessment(monkeypatch, t
     assert shared_cli.main(["propose", "--repo", str(repository)]) == 2
 
     output = capsys.readouterr()
-    assert (
-        "Use for company DNS zones, records, delegation, and DNS operations.\n\n"
-        "  [cancel] Exit without preparing a proposal"
-    ) in output.out
+    assert "[cancel] Exit without preparing a proposal" not in output.out
+    assert prompts[-1] == "Choose a Skill [1] (leave blank to cancel): "
     assert "Candidate changes: none" in output.out
     assert "installed Skill has no local changes" in output.err
     assert "Revalidating with isolated" not in output.out

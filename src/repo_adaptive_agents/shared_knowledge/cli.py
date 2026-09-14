@@ -410,15 +410,20 @@ def _choose_skills_to_validate(skills, *, proposal: bool = False) -> tuple[str, 
         if index > 1:
             print()
         print(f"  [{index}] {skill.name}")
-        print(f"      {skill.description}")
-    print()
-    print("  [all] Validate every listed Skill" if not proposal else "  [cancel] Exit without preparing a proposal (default)")
+        _print_wrapped_text(skill.description, initial="      ")
     if not proposal:
-        print("  [cancel] Exit without validating (default)")
+        print()
+        print("  [all] Validate every listed Skill")
     print()
     while True:
         try:
-            raw = input("Choose Skills [1, 3 / all / cancel] (default cancel): ").strip().casefold()
+            proposal_choices = "1" if len(skills) == 1 else f"1-{len(skills)}"
+            if proposal or len(skills) == 1:
+                prompt = f"Choose a Skill [{proposal_choices}] (leave blank to cancel): "
+            else:
+                example = "1, 2" if len(skills) == 2 else "1, 3"
+                prompt = f"Choose Skills [{example} / all] (leave blank to cancel): "
+            raw = input(prompt).strip().casefold()
         except EOFError:
             return None
         if raw in {"cancel", "c", "none", "n", ""}:
@@ -427,8 +432,14 @@ def _choose_skills_to_validate(skills, *, proposal: bool = False) -> tuple[str, 
             return tuple(skill.id for skill, _path in skills)
         values = [part.strip() for part in raw.split(",")]
         if values and all(value.isdecimal() and 1 <= int(value) <= len(skills) for value in values):
+            if proposal and len(values) != 1:
+                print("Choose exactly one Skill. Leave the answer blank to cancel; no files were changed.")
+                continue
             return tuple(dict.fromkeys(skills[int(value) - 1][0].id for value in values))
-        print(f"Enter numbers from 1 to {len(skills)}, for example: 1, 3. No files were changed.")
+        if proposal:
+            print(f"Choose one number from 1 to {len(skills)}. No files were changed.")
+        else:
+            print(f"Enter numbers from 1 to {len(skills)}, or all. No files were changed.")
 
 
 def _choose_proposal_kind(*, can_update: bool) -> str | None:
@@ -533,11 +544,10 @@ def _choose_new_skill_source(
     print()
     print("  [n] Start a new Skill draft")
     print("  [path] Select another Skill folder inside this repository")
-    print("  [cancel] Exit without preparing a proposal (default)")
     print()
     while True:
         try:
-            raw = input("Choose a Skill, n, path, or cancel (default cancel): ").strip()
+            raw = input("Choose a Skill, n, or path (leave blank to cancel): ").strip()
         except EOFError:
             return None
         folded = raw.casefold()
@@ -555,7 +565,7 @@ def _choose_new_skill_source(
         if raw.isdecimal() and 1 <= int(raw) <= len(candidates):
             candidate, path = candidates[int(raw) - 1]
             return "candidate", candidate, path
-        print("Choose one listed number, n, path, or cancel. No files were changed.")
+        print("Choose one listed number, n, or path. Leave the answer blank to cancel; no files were changed.")
 
 
 def _print_wrapped_text(text: str, *, initial: str = "  ", subsequent: str | None = None) -> None:
