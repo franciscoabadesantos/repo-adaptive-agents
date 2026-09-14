@@ -38,11 +38,12 @@ typing a path, source URL, or a second semantic-validation command:
 team-knowledge validate
 ```
 
-The menu lists only Skills installed in that repository. For each chosen Skill it discovers the
-local `.agents/skills/...` package and its exact canonical URL, commit, and path from the locked
-provenance. It compares only that pair, checks the portable package boundary and common
-secret/personal-path markers, then runs the isolated semantic assessment with the person's saved
-selector. It never publishes, replaces, or commits a Skill.
+The menu lists installed Skills, local canonical packages, and new local proposals available in
+that repository. An installed Skill is compared only with its exact canonical URL, commit, and
+path from locked provenance. A new candidate is validated independently against an empty
+baseline. Both paths check the portable package boundary and common secret/personal-path markers,
+then run the isolated semantic assessment with the person's saved selector. Validation never
+publishes, replaces, or commits a Skill.
 
 The evaluator receives only the selected package, not a repository or other Skills. Its
 recommendation and two boundary exercises are evidence for improvement, never authorization to
@@ -56,6 +57,14 @@ diff and then offers a form: keep that checkout only (the default), commit the l
 commit and push it, or commit, push, and create a draft GitHub pull request. No source
 repository is changed before the selected action; creating a draft PR requires the `gh` CLI to
 be installed and signed in.
+
+The same `propose` menu combines adding existing work and starting a new draft. "Add or create a
+new Skill" first lists new proposals under `.team-knowledge/proposals/` and unmanaged portable
+packages under `.agents/skills/`; it can also accept another folder inside the current repository.
+Selecting existing work validates it and, only when it is `READY`, creates the sidecar and Skill
+directory in a pinned checkout of the configured canonical catalog. `proposal.json` remains local
+and is never copied to the catalog. Choosing "Start a new Skill draft" creates only a local
+workspace to edit with a coding agent; rerun `propose` to select it when it is ready.
 
 Add knowledge that another engineer's coding agent would genuinely benefit from and that the
 repository itself does not make obvious.

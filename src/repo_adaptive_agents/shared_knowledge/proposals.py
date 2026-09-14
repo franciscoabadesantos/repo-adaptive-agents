@@ -29,6 +29,7 @@ class PreparedProposal:
     skill_id: str
     source_path: str
     reused: bool = False
+    kind: str = "update"
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -91,17 +92,19 @@ def _path_is_within(path: str, parent: str) -> bool:
     return path == parent or path.startswith(parent + "/")
 
 
-def _reuse_prepared_update(
+def _reusable_checkout_state(
     final: Path,
     branch: str,
-    resource,
+    base_commit: str,
+    catalog_path: str,
+    skill_path: str,
     candidate: SkillCandidate,
     repository_skill_path: str,
-) -> PreparedProposal:
+) -> tuple[Path, str]:
     unsafe = "existing prepared proposal is not reusable; keep it for inspection or remove it deliberately"
     if final.is_symlink() or not final.is_dir():
         raise SharedKnowledgeError(unsafe)
-    if _git(final, "rev-parse", "HEAD").strip() != resource.resolved_source_commit:
+    if _git(final, "rev-parse", "HEAD").strip() != base_commit:
         raise SharedKnowledgeError(unsafe)
     if _git(final, "branch", "--show-current").strip() != branch:
         raise SharedKnowledgeError(unsafe)
@@ -111,17 +114,36 @@ def _reuse_prepared_update(
     changed.update(_git_paths(final, "ls-files", "--others", "--exclude-standard", "-z"))
     if not changed or any(not _path_is_within(path, repository_skill_path) for path in changed):
         raise SharedKnowledgeError(unsafe)
-    catalog = final if resource.source_catalog_path == "." else final / resource.source_catalog_path
-    target = catalog / resource.source_path
-    existing = load_candidate(target)
+    catalog = final if catalog_path == "." else final / catalog_path
+    existing = load_candidate(catalog / skill_path)
     if existing.digest_sha256 != candidate.digest_sha256 or existing.files != candidate.files:
-        raise SharedKnowledgeError(unsafe)
-    parsed = load_canonical_catalog(catalog, resource.resolved_source_commit, lambda _path: resource.revision)
-    verified = parsed.by_id().get(resource.id)
-    if verified is None or verified.digest_sha256 != candidate.digest_sha256:
         raise SharedKnowledgeError(unsafe)
     diff = _proposal_diff(final, repository_skill_path)
     if not diff:
+        raise SharedKnowledgeError(unsafe)
+    return catalog, diff
+
+
+def _reuse_prepared_update(
+    final: Path,
+    branch: str,
+    resource,
+    candidate: SkillCandidate,
+    repository_skill_path: str,
+) -> PreparedProposal:
+    unsafe = "existing prepared proposal is not reusable; keep it for inspection or remove it deliberately"
+    catalog, diff = _reusable_checkout_state(
+        final,
+        branch,
+        resource.resolved_source_commit,
+        resource.source_catalog_path,
+        resource.source_path,
+        candidate,
+        repository_skill_path,
+    )
+    parsed = load_canonical_catalog(catalog, resource.resolved_source_commit, lambda _path: resource.revision)
+    verified = parsed.by_id().get(resource.id)
+    if verified is None or verified.digest_sha256 != candidate.digest_sha256:
         raise SharedKnowledgeError(unsafe)
     return PreparedProposal(
         checkout=final,
@@ -131,6 +153,44 @@ def _reuse_prepared_update(
         skill_id=resource.id,
         source_path=repository_skill_path,
         reused=True,
+    )
+
+
+def _reuse_prepared_addition(
+    final: Path,
+    branch: str,
+    lock,
+    candidate: SkillCandidate,
+    repository_skill_path: str,
+) -> PreparedProposal:
+    unsafe = "existing prepared proposal is not reusable; keep it for inspection or remove it deliberately"
+    catalog, diff = _reusable_checkout_state(
+        final,
+        branch,
+        lock.resolved_commit,
+        lock.catalog_path,
+        f"skills/{candidate.name}",
+        candidate,
+        repository_skill_path,
+    )
+    parsed = load_canonical_catalog(catalog, lock.resolved_commit, lambda _path: lock.resolved_commit)
+    verified = parsed.by_id().get(candidate.name)
+    if (
+        verified is None
+        or verified.name != candidate.name
+        or verified.state != "active"
+        or verified.digest_sha256 != candidate.digest_sha256
+    ):
+        raise SharedKnowledgeError(unsafe)
+    return PreparedProposal(
+        checkout=final,
+        branch=branch,
+        diff=diff,
+        base_ref=lock.source_ref,
+        skill_id=candidate.name,
+        source_path=repository_skill_path,
+        reused=True,
+        kind="addition",
     )
 
 
@@ -170,6 +230,76 @@ def prepare_update(repository: Path, skill_id: str, candidate: SkillCandidate) -
         base_ref=resource.source_ref,
         skill_id=resource.id,
         source_path=repository_skill_path,
+    )
+
+
+def prepare_addition(repository: Path, candidate: SkillCandidate) -> PreparedProposal:
+    """Prepare a validated new Skill in a pinned canonical source checkout."""
+    lock = load_consumer_lock(repository)
+    root = repository / ".team-knowledge" / "runtime" / "proposals"
+    root.mkdir(parents=True, exist_ok=True)
+    branch = f"team-knowledge/add-{candidate.name}-{candidate.digest_sha256[:12]}"
+    final = root / f"add-{candidate.name}-{candidate.digest_sha256[:12]}"
+    skill_path = f"skills/{candidate.name}"
+    repository_skill_path = _repository_skill_path(lock.catalog_path, skill_path)
+    if final.exists():
+        return _reuse_prepared_addition(final, branch, lock, candidate, repository_skill_path)
+    with tempfile.TemporaryDirectory(prefix="proposal-", dir=root) as temporary:
+        staging = Path(temporary) / "source"
+        _git(repository, "clone", "--no-checkout", lock.source_url, str(staging))
+        _git(staging, "checkout", "--detach", lock.resolved_commit)
+        _git(staging, "switch", "-c", branch)
+        catalog = staging if lock.catalog_path == "." else staging / lock.catalog_path
+        before = load_canonical_catalog(
+            catalog,
+            lock.resolved_commit,
+            lambda _path: lock.resolved_commit,
+        )
+        if any(skill.id == candidate.name or skill.name == candidate.name for skill in before.skills):
+            raise SharedKnowledgeError(
+                f"canonical catalog already contains Skill name or ID: {candidate.name}"
+            )
+        target = catalog / skill_path
+        if target.exists() or target.is_symlink():
+            raise SharedKnowledgeError(f"canonical Skill destination already exists: {skill_path}")
+        target.mkdir(parents=True)
+        for relative, data in candidate.files:
+            destination = target.joinpath(*relative.split("/"))
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
+        (target / "team-knowledge.json").write_text(
+            json.dumps(
+                {"schema_version": 1, "id": candidate.name, "state": "active"},
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        parsed = load_canonical_catalog(
+            catalog,
+            lock.resolved_commit,
+            lambda _path: lock.resolved_commit,
+        )
+        verified = parsed.by_id().get(candidate.name)
+        if (
+            verified is None
+            or verified.name != candidate.name
+            or verified.state != "active"
+            or verified.digest_sha256 != candidate.digest_sha256
+        ):
+            raise SharedKnowledgeError("prepared canonical addition does not match the validated candidate")
+        diff = _proposal_diff(staging, repository_skill_path)
+        if not diff:
+            raise SharedKnowledgeError("new Skill did not produce a canonical catalog change")
+        os.replace(staging, final)
+    return PreparedProposal(
+        checkout=final,
+        branch=branch,
+        diff=diff,
+        base_ref=lock.source_ref,
+        skill_id=candidate.name,
+        source_path=repository_skill_path,
+        kind="addition",
     )
 
 

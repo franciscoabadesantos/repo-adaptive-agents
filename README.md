@@ -115,6 +115,12 @@ offers numbered choices. Keep all recommendations or select a subset (for exampl
 not Jira); only that subset is then written to the lock and shown in the final approval form.
 `--yes` is explicit automation consent for the complete validated recommendation set.
 
+`team-knowledge propose` provides one contribution flow for improving an installed Skill or
+adding a new one. For a new Skill it detects existing local drafts and unmanaged portable Skill
+packages before offering to create a blank draft. A selected candidate must pass package checks
+and an isolated semantic assessment before the CLI prepares a pinned canonical-catalog checkout
+and offers explicit local commit, push, or draft-PR actions.
+
 A canonical source may opt into schema version 2 and declare
 `organization_default_skill_ids`. During a normal bootstrap, those active Skill IDs are presented
 and enforced as auditable defaults only when the repository's Git remote owner exactly matches the

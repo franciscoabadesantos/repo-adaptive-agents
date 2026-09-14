@@ -14,7 +14,7 @@ from .repository import SharedKnowledgeError, find_repository
 from .canonical import CanonicalSkill
 from .onboarding import install_onboarding_skills, onboarding_readiness
 from .preferences import load_selector_preference, preferences_path, save_selector_preference
-from .proposals import prepare_new, prepare_update, proposal_root
+from .proposals import prepare_addition, prepare_new, prepare_update, proposal_root
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
 from .consumer import default_consumer_source, external_consumer_source
 from .selector import (
@@ -24,7 +24,13 @@ from .selector import (
     selector_for,
 )
 from .skill_quality import assess_candidate
-from .skill_validation import consumer_validation_targets, load_candidate, local_canonical_skills, validate_skill
+from .skill_validation import (
+    SkillCandidate,
+    consumer_validation_targets,
+    load_candidate,
+    local_canonical_skills,
+    validate_skill,
+)
 from .storage import user_cache_root
 from .source import removable_legacy_cache, remove_legacy_cache
 
@@ -100,7 +106,7 @@ def _parser() -> argparse.ArgumentParser:
     validate_skill_command.add_argument("skill_ids", nargs="*", metavar="SKILL_ID")
     validate_skill_command.add_argument("--selector", choices=("codex", "claude", "copilot"))
 
-    propose = commands.add_parser("propose", help="Prepare a local proposal for a new or improved canonical Skill")
+    propose = commands.add_parser("propose", help="Add, create, or improve a canonical Skill proposal")
     _repo_argument(propose)
     propose.add_argument("--new", action="store_true", help="Create a new portable Skill proposal")
     propose.add_argument("--name", help="New Skill name (with --new)")
@@ -427,13 +433,121 @@ def _choose_proposal_kind(*, can_update: bool) -> str | None:
     print("╰─────────────────────────────────────────────────────────────────────╯")
     if can_update:
         print("  [1] Improve an installed Skill")
-    print("  [2] Draft a new Skill")
+    print("  [2] Add or create a new Skill")
     print("  [3] Cancel (default)")
     try:
         choice = input("Choose [1/2/3] (default 3): ").strip()
     except EOFError:
         return None
     return ({"1": "update", "2": "new"} if can_update else {"2": "new"}).get(choice)
+
+
+def _proposal_metadata(path: Path) -> dict[str, object] | None:
+    metadata_path = path / "proposal.json"
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return metadata if isinstance(metadata, dict) else None
+
+
+def _new_skill_baseline(candidate: SkillCandidate) -> CanonicalSkill:
+    return CanonicalSkill(
+        candidate.name,
+        candidate.name,
+        candidate.description,
+        "active",
+        f"skills/{candidate.name}",
+        "proposal",
+        "",
+        (),
+        dict(candidate.files)["SKILL.md"].decode("utf-8"),
+    )
+
+
+def _new_skill_candidates(root: Path, installed_targets) -> tuple[tuple[SkillCandidate, Path], ...]:
+    found: list[tuple[SkillCandidate, Path]] = []
+    seen: set[Path] = set()
+    drafts = proposal_root(root)
+    if drafts.is_dir() and not drafts.is_symlink():
+        for path in sorted(item for item in drafts.iterdir() if item.is_dir() and not item.is_symlink()):
+            metadata = _proposal_metadata(path)
+            if metadata is not None and metadata.get("kind") == "new":
+                candidate = load_candidate(path)
+                found.append((candidate, path))
+                seen.add(path.resolve())
+    managed = {(root / skill.materialized_path).resolve() for skill, _path in installed_targets}
+    local_skills = root / ".agents" / "skills"
+    if local_skills.is_dir() and not local_skills.is_symlink():
+        for path in sorted(item for item in local_skills.iterdir() if item.is_dir() and not item.is_symlink()):
+            resolved = path.resolve()
+            if resolved in managed or resolved in seen:
+                continue
+            found.append((load_candidate(path), path))
+            seen.add(resolved)
+    return tuple(found)
+
+
+def _candidate_at_user_path(root: Path, raw: str) -> tuple[SkillCandidate, Path]:
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root.resolve())
+    except (OSError, ValueError) as error:
+        raise SharedKnowledgeError("local Skill folder must exist inside the current repository") from error
+    return load_candidate(resolved), resolved
+
+
+def _choose_new_skill_source(
+    root: Path,
+    candidates: tuple[tuple[SkillCandidate, Path], ...],
+) -> tuple[str, SkillCandidate | None, Path | None] | None:
+    print()
+    _print_card(
+        "Add or create a new Skill",
+        (
+            "Select existing work when available; do not recreate it.",
+            "A new draft remains local until it is completed and validated.",
+        ),
+    )
+    if candidates:
+        print("\nDetected local Skills:")
+        for index, (candidate, path) in enumerate(candidates, start=1):
+            print(f"  [{index}] {candidate.name}")
+            _print_wrapped_text(candidate.description, initial="      ")
+            _print_wrapped_text(
+                f"Location: {path.relative_to(root)}",
+                initial="      ",
+                subsequent="                ",
+            )
+    else:
+        print("\n  No existing local Skill candidates were detected.")
+    print("  [n] Start a new Skill draft")
+    print("  [path] Select another Skill folder inside this repository")
+    print("  [cancel] Exit without preparing a proposal (default)")
+    while True:
+        try:
+            raw = input("Choose a Skill, n, path, or cancel (default cancel): ").strip()
+        except EOFError:
+            return None
+        folded = raw.casefold()
+        if folded in {"", "cancel", "c"}:
+            return None
+        if folded in {"n", "new", "draft"}:
+            return "draft", None, None
+        if folded in {"path", "p"}:
+            try:
+                selected = input("Skill folder inside this repository: ").strip()
+            except EOFError:
+                return None
+            candidate, path = _candidate_at_user_path(root, selected)
+            return "candidate", candidate, path
+        if raw.isdecimal() and 1 <= int(raw) <= len(candidates):
+            candidate, path = candidates[int(raw) - 1]
+            return "candidate", candidate, path
+        print("Choose one listed number, n, path, or cancel. No files were changed.")
 
 
 def _print_wrapped_text(text: str, *, initial: str = "  ", subsequent: str | None = None) -> None:
@@ -477,6 +591,7 @@ def _print_prepared_proposal_summary(prepared, changed_paths: tuple[str, ...]) -
         "Proposal ready",
         (
             f"Skill: {prepared.skill_id}",
+            f"Proposal type: {'NEW SKILL' if prepared.kind == 'addition' else 'IMPROVEMENT'}",
             "Independent review: READY",
             f"Prepared checkout: {'REUSED' if prepared.reused else 'CREATED'}",
             f"Changed files: {files}",
@@ -554,8 +669,13 @@ def _apply_prepared_proposal_action(prepared, *, assessment=None, changed_paths:
         _print_wrapped_text(str(prepared.checkout))
         print("No commit, push, pull request, or remote source change was made.")
         return
+    title = (
+        f"Propose new Skill {prepared.skill_id}"
+        if prepared.kind == "addition"
+        else f"Propose update to {prepared.skill_id}"
+    )
     _run_git_action(prepared.checkout, "add", "--", prepared.source_path)
-    _run_git_action(prepared.checkout, "commit", "-m", f"Propose update to {prepared.skill_id}")
+    _run_git_action(prepared.checkout, "commit", "-m", title)
     print("Committed local proposal branch:")
     _print_wrapped_text(prepared.branch)
     if action == "commit":
@@ -577,7 +697,7 @@ def _apply_prepared_proposal_action(prepared, *, assessment=None, changed_paths:
         "--head",
         prepared.branch,
         "--title",
-        f"Propose update to {prepared.skill_id}",
+        title,
         "--body",
         "Prepared and independently validated with team-knowledge.",
     )
@@ -598,10 +718,8 @@ def _validation_targets(root: Path):
     drafts = proposal_root(root)
     if drafts.is_dir() and not drafts.is_symlink():
         for path in sorted(item for item in drafts.iterdir() if item.is_dir() and not item.is_symlink()):
-            metadata_path = path / "proposal.json"
-            try:
-                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            metadata = _proposal_metadata(path)
+            if metadata is None:
                 continue
             candidate = load_candidate(path)
             if metadata.get("kind") == "update" and isinstance(metadata.get("skill_id"), str):
@@ -617,10 +735,7 @@ def _validation_targets(root: Path):
                     raise SharedKnowledgeError(
                         f"new Skill proposal conflicts with an existing Skill: {candidate.name}"
                     )
-                targets.append((CanonicalSkill(
-                    candidate.name, candidate.name, candidate.description, "active",
-                    f"proposals/{candidate.name}", "proposal", "", (), dict(candidate.files)["SKILL.md"].decode("utf-8"),
-                ), path))
+                targets.append((_new_skill_baseline(candidate), path))
     if not targets:
         raise SharedKnowledgeError("no installed Skills or local proposals are available to validate")
     return tuple(targets)
@@ -762,26 +877,59 @@ def _run(args: argparse.Namespace) -> int:
         return 0
     if args.command == "propose":
         root = find_repository(args.repo)
-        try:
+        if (root / ".team-knowledge" / "lock.json").exists():
             installed_targets = consumer_validation_targets(root)
-        except SharedKnowledgeError:
+        else:
             installed_targets = ()
+        new_candidates = _new_skill_candidates(root, installed_targets)
         kind = "new" if args.new else _choose_proposal_kind(can_update=bool(installed_targets))
         if kind is None:
             print("No Skill proposal was created.")
             return 0
         if kind == "new":
-            if args.name is None or args.description is None:
+            source = (
+                ("draft", None, None)
+                if args.new
+                else _choose_new_skill_source(root, new_candidates)
+            )
+            if source is None:
+                print("No Skill proposal was created.")
+                return 0
+            mode, candidate, candidate_path = source
+            if mode == "draft" and (args.name is None or args.description is None):
                 try:
                     name = input("New Skill name (lowercase words with hyphens): ").strip()
                     description = input("When should an agent use it?: ").strip()
                 except EOFError:
                     print("No Skill proposal was created.")
                     return 0
-            else:
+            elif mode == "draft":
                 name, description = args.name, args.description
-            proposal = prepare_new(root, name, description)
-            print(f"Created new Skill proposal: {proposal}")
+            if mode == "draft":
+                proposal = prepare_new(root, name, description)
+                print(f"Created new Skill draft: {proposal}")
+                print("Edit it with your coding agent, then run team-knowledge propose again.")
+                print("No commit, push, pull request, or remote source change was made.")
+                return 0
+            baseline = _new_skill_baseline(candidate)
+            report = validate_skill(baseline, candidate_path)
+            _print_skill_validation_report(report)
+            if not report.passed:
+                raise SharedKnowledgeError("proposal stopped: package checks need revision")
+            preference = load_selector_preference() if args.selector is None and not os.environ.get("TEAM_KNOWLEDGE_SELECTOR") else None
+            evaluator = resolve_selector_name(args.selector, preference=preference)
+            print(f"[team-knowledge] Validating new Skill with isolated {evaluator} assessment...", flush=True)
+            assessment = assess_candidate(evaluator, candidate)
+            _print_skill_assessment(assessment, detailed=False)
+            if assessment.decision != "ready":
+                raise SharedKnowledgeError("proposal stopped: independent assessment is not READY")
+            prepared = prepare_addition(root, candidate)
+            _apply_prepared_proposal_action(
+                prepared,
+                assessment=assessment,
+                changed_paths=report.changed_paths,
+            )
+            return 0
         else:
             selected = _choose_skills_to_validate(installed_targets, proposal=True)
             if not selected:
@@ -813,8 +961,6 @@ def _run(args: argparse.Namespace) -> int:
                 changed_paths=report.changed_paths,
             )
             return 0
-        print("No commit, push, pull request, or remote source change was made.")
-        return 0
     if args.command == "setup":
         if args.only and args.selector is None:
             raise SharedKnowledgeError("--only requires --selector")

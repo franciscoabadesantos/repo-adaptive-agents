@@ -16,7 +16,7 @@ import repo_adaptive_agents.shared_knowledge.distribution as distribution
 import repo_adaptive_agents.shared_knowledge.cli as shared_cli
 from repo_adaptive_agents.shared_knowledge.skill_quality import SkillAssessment, assessment_prompt
 from repo_adaptive_agents.shared_knowledge.skill_validation import load_candidate, local_canonical_skills
-from repo_adaptive_agents.shared_knowledge.proposals import PreparedProposal, prepare_update
+from repo_adaptive_agents.shared_knowledge.proposals import PreparedProposal, prepare_addition, prepare_update
 from repo_adaptive_agents.shared_knowledge import (
     ClaudeSkillSelector,
     CodexSkillSelector,
@@ -1083,6 +1083,113 @@ def test_new_skill_proposal_can_be_validated_directly_by_its_name(monkeypatch, t
     assert "Status: NEEDS_REVISION" in output
 
 
+def test_prepare_addition_creates_and_reuses_valid_nested_catalog_change(tmp_path: Path):
+    source = _bundled_source(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    _bootstrap_bundled(TeamKnowledgeDistributionService(EvidenceRoutingStub()), repository)
+    candidate_path = repository / ".team-knowledge" / "proposals" / "cloud-run-deployment-safety"
+    candidate_path.mkdir(parents=True)
+    (candidate_path / "SKILL.md").write_text(
+        "---\nname: cloud-run-deployment-safety\n"
+        "description: Use when reviewing the safety of a concrete Cloud Run service deployment.\n"
+        "---\n\n# Cloud Run safety\n\nVerify the target and authorization before deployment.\n",
+        encoding="utf-8",
+    )
+    (candidate_path / "proposal.json").write_text(
+        json.dumps({"schema_version": 1, "kind": "new"}) + "\n",
+        encoding="utf-8",
+    )
+    references = candidate_path / "references"
+    references.mkdir()
+    (references / "release.md").write_text("# Release\n\nVerify the new revision.\n", encoding="utf-8")
+    candidate = load_candidate(candidate_path)
+
+    prepared = prepare_addition(repository, candidate)
+
+    assert prepared.source_path == "team-knowledge/skills/cloud-run-deployment-safety"
+    assert "cloud-run-deployment-safety" in prepared.diff
+    target = prepared.checkout / prepared.source_path
+    assert (target / "SKILL.md").read_bytes() == (candidate_path / "SKILL.md").read_bytes()
+    assert (target / "references/release.md").is_file()
+    assert not (target / "proposal.json").exists()
+    assert json.loads((target / "team-knowledge.json").read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "id": "cloud-run-deployment-safety",
+        "state": "active",
+    }
+    assert _git(source, "status", "--short") == ""
+
+    reused = prepare_addition(repository, candidate)
+
+    assert reused.checkout == prepared.checkout
+    assert reused.diff == prepared.diff
+    assert reused.reused
+
+
+def test_prepare_addition_rejects_existing_canonical_name_or_id(tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    _bootstrap(TeamKnowledgeDistributionService(EvidenceRoutingStub()), repository)
+    candidate_path = repository / "local-dns"
+    candidate_path.mkdir()
+    (candidate_path / "SKILL.md").write_text(
+        "---\nname: dns\ndescription: Use for a new DNS procedure.\n---\n\n# DNS\n\nNew procedure.\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SharedKnowledgeError, match="already contains Skill name or ID"):
+        prepare_addition(repository, load_candidate(candidate_path))
+
+
+def test_propose_adds_an_existing_new_skill_instead_of_recreating_it(monkeypatch, tmp_path: Path, capsys):
+    source = _bundled_source(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    _bootstrap_bundled(TeamKnowledgeDistributionService(EvidenceRoutingStub()), repository)
+    assert shared_cli.main([
+        "propose",
+        "--new",
+        "--name",
+        "cloud-run-deployment-safety",
+        "--description",
+        "Use when reviewing the safety of a concrete Cloud Run service deployment.",
+        "--repo",
+        str(repository),
+    ]) == 0
+    proposal = repository / ".team-knowledge/proposals/cloud-run-deployment-safety/SKILL.md"
+    proposal.write_text(
+        proposal.read_text(encoding="utf-8").replace(
+            "Describe the shared procedure and its boundaries.",
+            "Verify the target, authorization, release signals, and recovery plan.",
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        shared_cli,
+        "assess_candidate",
+        lambda _selector, _candidate: SkillAssessment(
+            "ready",
+            "The candidate is ready for shared review.",
+            (),
+            (),
+            "Review a Cloud Run release.",
+            "Develop an unrelated application.",
+        ),
+    )
+    answers = iter(("2", "1", "1"))
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    assert shared_cli.main(["propose", "--repo", str(repository)]) == 0
+
+    output = capsys.readouterr().out
+    assert "Add or create a new Skill" in output
+    assert "Detected local Skills:" in output
+    assert "Independent review: READY" in output
+    assert "Changed files: SKILL.md" in output
+    assert "Prepared checkout: CREATED" in output
+    assert "Created new Skill draft" in output
+    assert _git(source, "status", "--short") == ""
+
+
 def test_prepare_update_uses_locked_source_commit_and_never_changes_remote_source(tmp_path: Path):
     source = _canonical(tmp_path)
     repository = _dns_repo(tmp_path, "consumer", 1)
@@ -1225,6 +1332,33 @@ def test_prepared_proposal_draft_pr_runs_explicit_git_actions_in_order(monkeypat
         )
     ]
     assert "Created draft pull request: https://example.test/pr/1" in capsys.readouterr().out
+
+
+def test_new_skill_proposal_uses_addition_commit_title(monkeypatch, tmp_path: Path, capsys):
+    prepared = PreparedProposal(
+        tmp_path,
+        "team-knowledge/add-cloud-run-deployment-safety",
+        "+new Skill",
+        "main",
+        "cloud-run-deployment-safety",
+        "team-knowledge/skills/cloud-run-deployment-safety",
+        kind="addition",
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+    git_calls = []
+    monkeypatch.setattr(
+        shared_cli,
+        "_run_git_action",
+        lambda _checkout, *args: git_calls.append(args),
+    )
+
+    shared_cli._apply_prepared_proposal_action(prepared)
+
+    assert git_calls == [
+        ("add", "--", "team-knowledge/skills/cloud-run-deployment-safety"),
+        ("commit", "-m", "Propose new Skill cloud-run-deployment-safety"),
+    ]
+    assert "Proposal type: NEW SKILL" in capsys.readouterr().out
 
 
 def test_propose_stops_before_checkout_when_independent_assessment_is_not_ready(monkeypatch, tmp_path: Path, capsys):
