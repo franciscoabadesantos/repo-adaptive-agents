@@ -1423,6 +1423,23 @@ def test_network_failure_and_offline_verification_leave_locked_skill_usable(tmp_
     assert skill.is_file()
 
 
+def test_offline_pending_message_does_not_claim_selector_failure(tmp_path: Path, capsys):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+    _bootstrap(service, repository)
+    (repository / "new-repository-evidence.txt").write_text("changed\n", encoding="utf-8")
+
+    plan = service.sync_plan(repository, offline=True)
+    shared_cli._print_distribution_plan(plan)
+
+    output = capsys.readouterr().out
+    assert plan.semantic_pending
+    assert "intentionally skipped in offline mode" in output
+    assert "configured selector was unavailable" not in output
+    assert "canonical source freshness was not checked" in output
+
+
 def test_sync_updates_existing_and_defers_new_skill_when_selector_unavailable(tmp_path: Path):
     source = _canonical(tmp_path)
     repository = _dns_repo(tmp_path, "consumer", 1)

@@ -161,7 +161,11 @@ def _print_distribution_plan(plan: DistributionPlan) -> None:
         for resource_id, reason in reasons:
             print(f"  {resource_id}: {reason}")
     if plan.semantic_pending:
-        print("Semantic reassessment is pending because the configured selector was unavailable.")
+        print(
+            "Semantic reassessment is pending and was intentionally skipped in offline mode."
+            if plan.offline
+            else "Semantic reassessment is pending because the configured selector was unavailable."
+        )
     if plan.offline:
         print("Offline verification only; canonical source freshness was not checked.")
 
