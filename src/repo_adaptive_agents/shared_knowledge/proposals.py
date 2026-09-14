@@ -57,6 +57,12 @@ def _replace_materialized(target: Path, candidate: SkillCandidate) -> None:
         destination.write_bytes(data)
 
 
+def _repository_skill_path(catalog_path: str, skill_path: str) -> str:
+    if catalog_path == ".":
+        return skill_path
+    return f"{catalog_path.rstrip('/')}/{skill_path}"
+
+
 def prepare_update(repository: Path, skill_id: str, candidate: SkillCandidate) -> PreparedProposal:
     """Prepare an uncommitted, pinned source checkout without touching the remote."""
     lock = load_consumer_lock(repository)
@@ -76,12 +82,13 @@ def prepare_update(repository: Path, skill_id: str, candidate: SkillCandidate) -
         _git(staging, "switch", "-c", branch)
         catalog = staging if resource.source_catalog_path == "." else staging / resource.source_catalog_path
         target = catalog / resource.source_path
+        repository_skill_path = _repository_skill_path(resource.source_catalog_path, resource.source_path)
         _replace_materialized(target, candidate)
         parsed = load_canonical_catalog(catalog, resource.resolved_source_commit, lambda _path: resource.revision)
         verified = parsed.by_id().get(resource.id)
         if verified is None or verified.digest_sha256 != candidate.digest_sha256:
             raise SharedKnowledgeError("prepared canonical package does not match the validated candidate")
-        diff = _git(staging, "diff", "--no-ext-diff", "--", resource.source_path)
+        diff = _git(staging, "diff", "--no-ext-diff", "--", repository_skill_path)
         if not diff:
             raise SharedKnowledgeError("candidate has no change relative to the locked canonical Skill")
         os.replace(staging, final)
@@ -91,7 +98,7 @@ def prepare_update(repository: Path, skill_id: str, candidate: SkillCandidate) -
         diff=diff,
         base_ref=resource.source_ref,
         skill_id=resource.id,
-        source_path=resource.source_path,
+        source_path=repository_skill_path,
     )
 
 

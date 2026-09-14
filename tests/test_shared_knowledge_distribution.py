@@ -1060,6 +1060,24 @@ def test_prepare_update_uses_locked_source_commit_and_never_changes_remote_sourc
     assert _git(source, "status", "--short") == ""
 
 
+def test_prepare_update_addresses_skill_relative_to_nested_catalog(tmp_path: Path):
+    source = _bundled_source(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+    _bootstrap_bundled(service, repository)
+    candidate_path = repository / ".agents" / "skills" / "dns"
+    skill_path = candidate_path / "SKILL.md"
+    skill_path.write_text(skill_path.read_text(encoding="utf-8") + "\nConfirm the target zone first.\n", encoding="utf-8")
+
+    prepared = prepare_update(repository, "dns", load_candidate(candidate_path))
+
+    assert prepared.source_path == "team-knowledge/skills/dns"
+    assert "Confirm the target zone first." in prepared.diff
+    prepared_skill = prepared.checkout / "team-knowledge" / "skills" / "dns" / "SKILL.md"
+    assert "Confirm the target zone first." in prepared_skill.read_text(encoding="utf-8")
+    assert _git(source, "status", "--short") == ""
+
+
 def test_prepared_proposal_default_keeps_the_checkout_local(monkeypatch, tmp_path: Path, capsys):
     prepared = PreparedProposal(tmp_path, "team-knowledge/dns", "diff", "main", "dns", "skills/dns")
     monkeypatch.setattr("builtins.input", lambda _prompt: "")
