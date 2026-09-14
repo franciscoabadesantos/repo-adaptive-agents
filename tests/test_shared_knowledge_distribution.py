@@ -1042,6 +1042,47 @@ def test_validate_skill_uses_only_the_installed_copy_and_its_locked_predecessor(
     assert "You can prepare a proposal" not in output
 
 
+def test_new_skill_proposal_can_be_validated_directly_by_its_name(monkeypatch, tmp_path: Path, capsys):
+    repository = _repo(tmp_path / "consumer")
+    assert shared_cli.main([
+        "propose",
+        "--new",
+        "--name",
+        "cloud-run-deployment-safety",
+        "--description",
+        "Use when preparing, reviewing, or troubleshooting a Google Cloud Run deployment.",
+        "--repo",
+        str(repository),
+    ]) == 0
+    seen = []
+
+    def assess(_selector, candidate):
+        seen.append(candidate.name)
+        return SkillAssessment(
+            "needs_revision",
+            "The generated body is still a placeholder.",
+            ("Replace the placeholder with a concrete portable procedure.",),
+            (),
+            "Review a Cloud Run deployment.",
+            "Explain container hosting generally.",
+        )
+
+    monkeypatch.setattr(shared_cli, "assess_candidate", assess)
+
+    assert shared_cli.main([
+        "validate",
+        "cloud-run-deployment-safety",
+        "--repo",
+        str(repository),
+    ]) == 0
+
+    output = capsys.readouterr().out
+    assert seen == ["cloud-run-deployment-safety"]
+    assert "Skill: cloud-run-deployment-safety" in output
+    assert "Candidate changes: SKILL.md" in output
+    assert "Status: NEEDS_REVISION" in output
+
+
 def test_prepare_update_uses_locked_source_commit_and_never_changes_remote_source(tmp_path: Path):
     source = _canonical(tmp_path)
     repository = _dns_repo(tmp_path, "consumer", 1)

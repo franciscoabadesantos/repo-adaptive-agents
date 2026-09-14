@@ -613,8 +613,12 @@ def _validation_targets(root: Path):
                         baseline.skill_text,
                     ), path))
             elif metadata.get("kind") == "new":
+                if candidate.name in installed:
+                    raise SharedKnowledgeError(
+                        f"new Skill proposal conflicts with an existing Skill: {candidate.name}"
+                    )
                 targets.append((CanonicalSkill(
-                    f"proposal-{candidate.name}", candidate.name, candidate.description, "active",
+                    candidate.name, candidate.name, candidate.description, "active",
                     f"proposals/{candidate.name}", "proposal", "", (), dict(candidate.files)["SKILL.md"].decode("utf-8"),
                 ), path))
     if not targets:
@@ -741,7 +745,7 @@ def _run(args: argparse.Namespace) -> int:
             return 0
         available = {skill.id: (skill, path) for skill, path in targets}
         if any(skill_id not in available for skill_id in ids):
-            raise SharedKnowledgeError("selected Skill is not installed in this repository")
+            raise SharedKnowledgeError("selected Skill is not available in this repository")
         preference = load_selector_preference() if args.selector is None and not os.environ.get("TEAM_KNOWLEDGE_SELECTOR") else None
         evaluator = resolve_selector_name(args.selector, preference=preference)
         for skill_id in dict.fromkeys(ids):
