@@ -1280,6 +1280,19 @@ def test_prepare_uses_sync_for_an_existing_repository_without_forcing_selection(
     assert shared_cli.main(["prepare", "--repo", str(repository), "--yes"]) == 0
 
 
+def test_ctrl_c_exits_cleanly_without_a_traceback(monkeypatch, capsys):
+    def interrupt(_args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(shared_cli, "_run", interrupt)
+
+    assert shared_cli.main(["list"]) == 130
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == "\nCancelled.\n"
+    assert "Traceback" not in output.err
+
+
 def test_validate_skill_uses_only_the_installed_copy_and_its_locked_predecessor(monkeypatch, tmp_path: Path, capsys):
     repository = _repo(tmp_path / "consumer")
     candidate = repository / ".agents" / "skills" / "jira-data-center-operations"

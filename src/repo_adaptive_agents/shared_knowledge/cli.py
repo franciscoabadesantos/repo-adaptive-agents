@@ -1322,9 +1322,12 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
     try:
+        args = _parser().parse_args(argv)
         return _run(args)
+    except KeyboardInterrupt:
+        print("\nCancelled.", file=sys.stderr)
+        return 130
     except (SharedKnowledgeError, OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
