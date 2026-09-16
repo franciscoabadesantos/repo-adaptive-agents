@@ -22,16 +22,16 @@ Claude does not require the teammate to consume them with Claude, for example.
   Skill; it is relevant only where the required getssl, DNS, and authorization preconditions
   exist.
 
-## Bootstrap
+## Prepare
 
 From the repository you want to equip, run:
 
 ```sh
-team-knowledge bootstrap --selector <codex|claude|copilot>
+team-knowledge prepare
 ```
 
-Replace the placeholder with the selector CLI you actually have available. The explicit flag
-takes precedence over `TEAM_KNOWLEDGE_SELECTOR`. Bootstrap fetches the canonical source,
+On first use, choose the default selector from the detected CLIs. Later, an explicit `--selector`
+takes precedence over `TEAM_KNOWLEDGE_SELECTOR`. Preparation fetches the canonical source,
 collects factual repository evidence, runs semantic selection, performs native validation,
 and prints a proposed plan. In an interactive terminal, choose whether to recommend Skills from
 the repository as it exists or describe work you intend to add. If you continue that conversation,

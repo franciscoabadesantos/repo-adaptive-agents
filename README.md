@@ -64,11 +64,17 @@ UTF-8 text packages: `SKILL.md` plus optional text references. Symlinks, executa
 In an existing engineering repository, run:
 
 ```sh
-team-knowledge bootstrap
+team-knowledge prepare
 ```
 
-In an interactive terminal, bootstrap first offers to recommend Skills from the repository as
-it exists or to start a short conversation about work you intend to add. Conversation turns
+On first use, `prepare` detects that machine setup has not been completed, shows which selector
+CLIs are available, asks for the default selector, and installs the portable onboarding Skill.
+It then bootstraps a new repository or synchronizes an already prepared repository automatically.
+The same first-run guard applies when an experienced user starts with `bootstrap`, `sync`,
+`validate`, or `propose`; read-only `list` and `show` do not require selector setup.
+
+In an interactive terminal, first-time repository preparation offers to recommend Skills from the
+repository as it exists or to start a short conversation about work you intend to add. Conversation turns
 reuse the same catalog and factual repository-evidence snapshot. Earlier requests and the
 selector's earlier recommendations remain in memory for the duration of that command, so a
 clarification can add, correct, or replace intent without rescanning the repository. The
@@ -83,13 +89,13 @@ To use a different dedicated canonical Git repository whose catalog is at the re
 override the source:
 
 ```sh
-team-knowledge bootstrap --source <git-repository>
+team-knowledge prepare --source <git-repository>
 ```
 
 For a catalog in a subdirectory, provide that path explicitly:
 
 ```sh
-team-knowledge bootstrap \
+team-knowledge prepare \
   --source <git-repository> \
   --catalog-path team-knowledge
 ```
@@ -102,8 +108,8 @@ Bootstrap profiles factual repository evidence, gives that evidence and admitted
 are explicit; there is no auto-detection or semantic fallback:
 
 ```sh
-team-knowledge bootstrap --selector claude
-TEAM_KNOWLEDGE_SELECTOR=copilot team-knowledge bootstrap
+team-knowledge prepare --selector claude
+TEAM_KNOWLEDGE_SELECTOR=copilot team-knowledge prepare
 ```
 
 The CLI prints each phase, including when it starts and finishes the isolated AI selection.
@@ -141,16 +147,17 @@ Declining the bootstrap plan leaves no `.team-knowledge/` state or generated Ski
 the consumer repository. Source acquisition may populate the disposable shared user cache.
 
 To prepare a repository for work it does not yet contain, choose "Tell me what you want to do"
-in the interactive bootstrap. `--task` provides the same direct, non-conversational path for
+in the interactive preparation form. `--task` provides the same direct, non-conversational path for
 scripts and one-line invocations. Task and conversation text are never written to the config,
 lock, generated Skill package, or cache:
 
 ```sh
-team-knowledge bootstrap --task "Implement Jira issue automation for this service"
+team-knowledge prepare --task "Implement Jira issue automation for this service"
 ```
 
-For natural-language onboarding in every supported coding agent, install the same portable
-preparation Skill once at the user-level locations for Codex, Claude, and Copilot:
+The first interactive `prepare` installs the portable preparation Skill at the user-level
+locations for Codex, Claude, and Copilot. Use the explicit machine command only to inspect or
+change that setup later:
 
 ```sh
 team-knowledge setup --dry-run
@@ -169,10 +176,12 @@ distribution once. With access to a private organization source, a typical isola
 
 ```sh
 pipx install "git+https://github.com/<organization>/<team-knowledge-repository>.git@main"
-team-knowledge setup
+team-knowledge prepare
 ```
 
-`setup` installs the same portable onboarding Skill for all three agents and reports whether their
+The first interactive `prepare` performs machine setup and continues directly into repository
+preparation. `setup` remains available to inspect or change that machine configuration. It installs
+the same portable onboarding Skill for all three agents and reports whether their
 CLIs are currently available on `PATH`; it does not install, authenticate, configure, or silently
 substitute any coding agent. A person needs Git access to the private source and must sign in to the
 agent they choose. By default it prepares all three agents, including ones installed later. Use
@@ -199,10 +208,10 @@ inside the pipx installation. `TEAM_KNOWLEDGE_HOME` can place the shared cache a
 under an explicit root, and `team-knowledge setup` prints the effective paths. The committed lock
 remains authoritative; the cache is disposable and may fall back to temporary storage online.
 
-When the canonical team repository changes:
+When the canonical team repository changes, the same entry point refreshes the repository:
 
 ```sh
-team-knowledge sync
+team-knowledge prepare
 git add .team-knowledge/lock.json
 git commit -m "Sync shared team knowledge"
 ```
@@ -216,6 +225,9 @@ If the configured selector is unavailable during sync, safe deterministic update
 applied while semantic additions are deferred. If the Git source is unavailable, existing
 local Skills and the lock remain untouched. `team-knowledge sync --offline` verifies the
 locked local state without claiming freshness.
+
+`bootstrap` and `sync` remain explicit advanced commands for scripts and diagnostics. `prepare`
+selects between them from the presence of the complete committed consumer config and lock.
 
 Unrelated product-code commits do not advance the effective team-knowledge revision or churn
 consumer locks. Commits under `team-knowledge/` do. See

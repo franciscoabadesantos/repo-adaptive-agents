@@ -77,6 +77,19 @@ def _parser() -> argparse.ArgumentParser:
     )
     bootstrap.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
 
+    prepare = commands.add_parser(
+        "prepare",
+        help="Set up first use and prepare or refresh the current repository",
+    )
+    _repo_argument(prepare)
+    prepare.add_argument("--source", help="Override the default canonical Git source for a new repository")
+    prepare.add_argument("--catalog-path", help="Relative catalog path inside --source (default: .)")
+    prepare.add_argument("--ref", help="Canonical Git ref for a new repository (default: main)")
+    prepare.add_argument("--selector", choices=("codex", "claude", "copilot"))
+    prepare.add_argument("--task", metavar="TEXT", help="Select Skills for this transient work description")
+    prepare.add_argument("--offline", action="store_true", help="Verify an existing repository without fetching")
+    prepare.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
+
     sync = commands.add_parser("sync", help="Safely synchronize bootstrapped canonical team Skills")
     _repo_argument(sync)
     sync.add_argument("--offline", action="store_true", help="Verify locked local state without fetching or claiming freshness")
@@ -259,6 +272,28 @@ def _choose_bootstrap_intent() -> str | None:
     print("│ Choose how the AI selector should evaluate this repository.          │")
     print("╰─────────────────────────────────────────────────────────────────────╯")
     print("  [1] Recommend Skills for this repository (default)")
+    print("  [2] Tell me what you want to do")
+    print("  [3] Cancel")
+    while True:
+        try:
+            choice = input("Choose [1/2/3] (default 1): ").strip()
+        except EOFError:
+            return "repository"
+        if choice in {"", "1"}:
+            return "repository"
+        if choice == "2":
+            return "conversation"
+        if choice == "3":
+            return None
+        print("Choose 1, 2, or 3. No files were changed.")
+
+
+def _choose_refresh_intent() -> str | None:
+    print()
+    print("╭─ Prepare team knowledge ─────────────────────────────────────────────╮")
+    print("│ This repository is already prepared. Choose what to do next.         │")
+    print("╰─────────────────────────────────────────────────────────────────────╯")
+    print("  [1] Refresh current team knowledge (default)")
     print("  [2] Tell me what you want to do")
     print("  [3] Cancel")
     while True:
@@ -585,6 +620,97 @@ def _print_card(title: str, lines: tuple[str, ...]) -> None:
     print("╰" + "─" * (width + 2) + "╯")
 
 
+def _choose_default_selector(
+    readiness: dict[str, bool],
+    *,
+    preferred: str | None = None,
+) -> str | None:
+    names = ("codex", "claude", "copilot")
+    default = preferred if preferred in names else next(
+        (name for name in names if readiness.get(name)),
+        "codex",
+    )
+    default_index = names.index(default) + 1
+    print()
+    _print_card(
+        "Welcome to Team Knowledge",
+        ("Choose the AI that should recommend Skills by default.",),
+    )
+    for index, name in enumerate(names, start=1):
+        availability = "available" if readiness.get(name) else "not found on PATH"
+        suffix = " (default)" if name == default else ""
+        print(f"  [{index}] {name} — {availability}{suffix}")
+    print()
+    while True:
+        try:
+            choice = input(f"Choose [1/2/3] (default {default_index}): ").strip()
+        except EOFError:
+            return None
+        if not choice:
+            return default
+        if choice in {"1", "2", "3"}:
+            return names[int(choice) - 1]
+        print("Choose 1, 2, or 3. No setup changes were made.")
+
+
+def _perform_machine_setup(
+    selector: str | None,
+    *,
+    only: bool = False,
+    dry_run: bool = False,
+) -> None:
+    if only and selector is None:
+        raise SharedKnowledgeError("--only requires --selector")
+    consumers = (selector,) if only else ("codex", "claude", "copilot")
+    readiness = dict(onboarding_readiness(consumers))
+    installed = install_onboarding_skills(consumers, dry_run=dry_run)
+    preference_path = None
+    if selector is not None:
+        if dry_run:
+            print(f"Would save default selector: {selector}")
+        else:
+            preference_path = save_selector_preference(selector)
+    print("Team knowledge machine setup")
+    print("Agent CLI availability:")
+    for consumer in consumers:
+        status = "available" if readiness[consumer] else "not found on PATH"
+        print(f"  {consumer}: {status}")
+    print("Onboarding Skills:")
+    for consumer, path, created in installed:
+        action = "Would install" if dry_run and created else "Installed" if created else "Already current at"
+        print(f"  {action} {consumer}: {path}")
+    print("Machine storage:")
+    print(f"  user configuration: {preferences_path()}")
+    print(f"  shared source cache: {user_cache_root()}")
+    print("  repository cache: not used")
+    if dry_run:
+        print("No files were written.")
+        return
+    if preference_path is not None:
+        print(f"Saved default selector: {selector} ({preference_path})")
+    missing = [consumer for consumer in consumers if not readiness[consumer]]
+    if missing:
+        print(
+            "Note: onboarding was installed, but these agent CLIs are not currently on PATH: "
+            + ", ".join(missing)
+            + ". Install or sign in to them before using them as a selector."
+        )
+    print("Ready. In any Git repository, run team-knowledge prepare.")
+
+
+def _ensure_first_run_setup(requested_selector: str | None) -> bool:
+    if load_selector_preference() is not None or not sys.stdin.isatty():
+        return True
+    readiness = dict(onboarding_readiness(("codex", "claude", "copilot")))
+    selector = requested_selector or _choose_default_selector(readiness)
+    if selector is None:
+        print("First-run setup was cancelled; no repository files were changed.")
+        return False
+    _perform_machine_setup(selector)
+    print("Continuing with repository preparation...")
+    return True
+
+
 def _diff_summary(diff: str) -> tuple[int, int, tuple[str, ...]]:
     added = removed = 0
     preview: list[str] = []
@@ -868,6 +994,10 @@ def _print_skill_assessment(assessment, *, candidate_changed: bool = True, detai
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.command in {"prepare", "bootstrap", "sync", "validate", "propose"}:
+        find_repository(args.repo)
+        if not _ensure_first_run_setup(args.selector):
+            return 0
     if args.command == "validate":
         root = find_repository(args.repo)
         targets = _validation_targets(root)
@@ -980,45 +1110,14 @@ def _run(args: argparse.Namespace) -> int:
             )
             return 0
     if args.command == "setup":
-        if args.only and args.selector is None:
-            raise SharedKnowledgeError("--only requires --selector")
-        consumers = (args.selector,) if args.only else ("codex", "claude", "copilot")
-        readiness = dict(onboarding_readiness(consumers))
-        preference_path = None
-        if args.selector is not None:
-            if args.dry_run:
-                print(f"Would save default selector: {args.selector}")
-            else:
-                preference_path = save_selector_preference(args.selector)
-        installed = install_onboarding_skills(consumers, dry_run=args.dry_run)
-        print("Team knowledge machine setup")
-        print("Agent CLI availability:")
-        for consumer in consumers:
-            status = "available" if readiness[consumer] else "not found on PATH"
-            print(f"  {consumer}: {status}")
-        print("Onboarding Skills:")
-        for consumer, path, created in installed:
-            action = "Would install" if args.dry_run and created else "Installed" if created else "Already current at"
-            print(f"  {action} {consumer}: {path}")
-        print("Machine storage:")
-        print(f"  user configuration: {preferences_path()}")
-        print(f"  shared source cache: {user_cache_root()}")
-        print("  repository cache: not used")
-        if args.dry_run:
-            print("No files were written.")
-            return 0
-        if preference_path is not None:
-            print(f"Saved default selector: {args.selector} ({preference_path})")
-        missing = [consumer for consumer in consumers if not readiness[consumer]]
-        if missing:
-            print(
-                "Note: onboarding was installed, but these agent CLIs are not currently on PATH: "
-                + ", ".join(missing)
-                + ". Install or sign in to them before using them as a selector."
-            )
-        print(
-            "Ready. In any Git repository, ask your coding agent to prepare team knowledge for the work you want to do."
-        )
+        selector = args.selector
+        if selector is None and sys.stdin.isatty():
+            readiness = dict(onboarding_readiness(("codex", "claude", "copilot")))
+            selector = _choose_default_selector(readiness, preferred=load_selector_preference())
+            if selector is None:
+                print("Setup was cancelled; no files were written.")
+                return 0
+        _perform_machine_setup(selector, only=args.only, dry_run=args.dry_run)
         return 0
     if args.command == "install-onboarding":
         installed = install_onboarding_skills(
@@ -1031,8 +1130,31 @@ def _run(args: argparse.Namespace) -> int:
         if args.dry_run:
             print("No files were written.")
         return 0
-    if args.command in {"bootstrap", "sync"}:
-        if args.command == "bootstrap" and args.catalog_path is not None and args.source is None:
+    distribution_command = args.command
+    if args.command == "prepare":
+        root = find_repository(args.repo)
+        config_present = (root / ".team-knowledge" / "config.json").exists()
+        lock_present = (root / ".team-knowledge" / "lock.json").exists()
+        if config_present != lock_present:
+            raise SharedKnowledgeError(
+                "repository team knowledge state is incomplete: config.json and lock.json must both exist"
+            )
+        distribution_command = "sync" if config_present else "bootstrap"
+        if distribution_command == "sync" and any(
+            value is not None for value in (args.source, args.catalog_path, args.ref)
+        ):
+            raise SharedKnowledgeError(
+                "an existing repository keeps its locked canonical source; source overrides apply only before bootstrap"
+            )
+        if distribution_command == "bootstrap" and args.offline:
+            raise SharedKnowledgeError("offline preparation requires an already prepared repository")
+    if distribution_command in {"bootstrap", "sync"}:
+        source_argument = getattr(args, "source", None)
+        catalog_argument = getattr(args, "catalog_path", None)
+        ref_argument = getattr(args, "ref", None) or "main"
+        offline = getattr(args, "offline", False)
+        task_argument = getattr(args, "task", None)
+        if distribution_command == "bootstrap" and catalog_argument is not None and source_argument is None:
             raise SharedKnowledgeError("--catalog-path requires --source")
         preference = None
         if args.selector is None and not os.environ.get("TEAM_KNOWLEDGE_SELECTOR"):
@@ -1040,14 +1162,19 @@ def _run(args: argparse.Namespace) -> int:
         selector_name = resolve_selector_name(args.selector, preference=preference)
         active_selector = selector_for(selector_name)
         conversational_selector = None
-        bootstrap_task = args.task if args.command == "bootstrap" else None
+        selection_task = task_argument
         if (
-            args.command == "bootstrap"
+            (distribution_command == "bootstrap" or args.command == "prepare")
             and not args.yes
-            and args.task is None
+            and not offline
+            and selection_task is None
             and sys.stdin.isatty()
         ):
-            intent = _choose_bootstrap_intent()
+            intent = (
+                _choose_bootstrap_intent()
+                if distribution_command == "bootstrap"
+                else _choose_refresh_intent()
+            )
             if intent is None:
                 print("No committed or materialized team knowledge changes were applied.")
                 return 0
@@ -1064,7 +1191,7 @@ def _run(args: argparse.Namespace) -> int:
                     selector_name,
                 )
                 active_selector = conversational_selector
-                bootstrap_task = initial_message
+                selection_task = initial_message
         service = TeamKnowledgeDistributionService(active_selector)
 
         def progress(message: str) -> None:
@@ -1077,23 +1204,23 @@ def _run(args: argparse.Namespace) -> int:
                 args.repo,
                 source=(
                     external_consumer_source(
-                        args.source,
-                        args.ref,
-                        args.catalog_path or ".",
+                        source_argument,
+                        ref_argument,
+                        catalog_argument or ".",
                     )
-                    if args.source is not None
-                    else default_consumer_source(args.ref)
+                    if source_argument is not None
+                    else default_consumer_source(ref_argument)
                 ),
-                task=bootstrap_task,
+                task=selection_task,
                 progress=progress,
             )
-            if args.command == "bootstrap"
-            else service.sync_plan(args.repo, offline=args.offline)
+            if distribution_command == "bootstrap"
+            else service.sync_plan(args.repo, offline=offline, task=selection_task)
         )
         if conversational_selector is not None and conversational_selector.cancelled:
             print("No committed or materialized team knowledge changes were applied.")
             return 0
-        if args.command == "bootstrap" and not args.yes:
+        if distribution_command == "bootstrap" and not args.yes:
             selected = _choose_bootstrap_skills(plan)
             if selected is None:
                 print("No committed or materialized team knowledge changes were applied.")

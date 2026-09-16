@@ -548,7 +548,15 @@ class TeamKnowledgeDistributionService:
         _preflight(limited)
         return limited
 
-    def sync_plan(self, repository: str | Path, *, offline: bool = False) -> DistributionPlan:
+    def sync_plan(
+        self,
+        repository: str | Path,
+        *,
+        offline: bool = False,
+        task: str | None = None,
+    ) -> DistributionPlan:
+        if offline and task is not None:
+            raise SharedKnowledgeError("offline sync cannot perform task-based semantic selection")
         root = find_repository(repository)
         config = load_consumer_config(root)
         previous = load_consumer_lock(root)
@@ -658,6 +666,7 @@ class TeamKnowledgeDistributionService:
             or routing_changed
             or evidence.sha256 != previous.evaluated_evidence_sha256
             or previous.evaluated_source_commit != previous.resolved_commit
+            or task is not None
         )
         receipt = snapshot.record_exposure(snapshot.exposable_resources)
         semantic_pending = False
@@ -668,7 +677,10 @@ class TeamKnowledgeDistributionService:
                 for resource in snapshot.exposable_resources
             )
             try:
-                selection = self.selector.select(evidence, routing)
+                selection_arguments: dict[str, object] = {}
+                if task is not None:
+                    selection_arguments["task"] = task
+                selection = self.selector.select(evidence, routing, **selection_arguments)
             except SelectorUnavailable:
                 semantic_pending = True
         selected_ids = tuple(item.id for item in selection.selected) if selection else ()

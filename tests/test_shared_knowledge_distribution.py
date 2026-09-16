@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -824,6 +825,7 @@ def test_interactive_bootstrap_conversation_reuses_one_repository_snapshot(
             return True
 
     monkeypatch.setattr(shared_cli.sys, "stdin", InteractiveInput())
+    monkeypatch.setattr(shared_cli, "_ensure_first_run_setup", lambda _selector: True)
     answers = iter([
         "2",
         "Help with DNS.",
@@ -954,6 +956,42 @@ def test_onboarding_skill_installs_all_supported_user_locations(tmp_path: Path):
     assert all(not created for _consumer, _path, created in repeated)
 
 
+def test_onboarding_updates_only_a_copy_with_matching_managed_digest(tmp_path: Path):
+    home = tmp_path / "home"
+    environment = {"CODEX_HOME": str(home / "codex")}
+    destination = onboarding_destinations(home=home, environ=environment)["codex"]
+    install_onboarding_skills(("codex",), home=home, environ=environment)
+    old_text = destination.read_text(encoding="utf-8") + "\nManaged older copy.\n"
+    destination.write_text(old_text, encoding="utf-8")
+    marker = destination.parent / ".team-knowledge-managed.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "digest_sha256": hashlib.sha256(old_text.encode("utf-8")).hexdigest(),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    updated = install_onboarding_skills(("codex",), home=home, environ=environment)
+
+    assert updated[0][2]
+    assert destination.read_text(encoding="utf-8") == onboarding_skill_text()
+
+
+def test_onboarding_refuses_an_unmanaged_distinct_skill(tmp_path: Path):
+    home = tmp_path / "home"
+    environment = {"CODEX_HOME": str(home / "codex")}
+    destination = onboarding_destinations(home=home, environ=environment)["codex"]
+    destination.parent.mkdir(parents=True)
+    destination.write_text("A user-owned Skill.\n", encoding="utf-8")
+
+    with pytest.raises(SharedKnowledgeError, match="refusing to overwrite"):
+        install_onboarding_skills(("codex",), home=home, environ=environment)
+
+
 def test_onboarding_readiness_reports_each_requested_agent(monkeypatch):
     commands = {"codex": "/bin/codex", "copilot": "/bin/copilot"}
     monkeypatch.setattr(
@@ -1008,6 +1046,139 @@ def test_setup_only_requires_and_limits_to_its_selector(monkeypatch, tmp_path: P
     assert destinations["claude"].exists()
     assert not destinations["codex"].exists()
     assert not destinations["copilot"].exists()
+
+
+def test_interactive_setup_asks_for_and_saves_the_default_selector(monkeypatch, tmp_path: Path, capsys):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(home / "codex"))
+    monkeypatch.setattr(
+        "repo_adaptive_agents.shared_knowledge.onboarding.shutil.which",
+        lambda command, path=None: "/bin/claude" if command == "claude" else None,
+    )
+
+    class InteractiveInput:
+        @staticmethod
+        def isatty():
+            return True
+
+    monkeypatch.setattr(shared_cli.sys, "stdin", InteractiveInput())
+    monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+
+    assert shared_cli.main(["setup"]) == 0
+    assert load_selector_preference(home=home) == "claude"
+    output = capsys.readouterr().out
+    assert "Welcome to Team Knowledge" in output
+    assert "claude — available (default)" in output
+
+
+def test_validate_performs_first_run_setup_before_using_a_selector(monkeypatch, tmp_path: Path, capsys):
+    repository = _bundled_source(tmp_path)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(home / "codex"))
+    monkeypatch.setattr(
+        "repo_adaptive_agents.shared_knowledge.onboarding.shutil.which",
+        lambda command, path=None: "/bin/claude" if command == "claude" else None,
+    )
+
+    class InteractiveInput:
+        @staticmethod
+        def isatty():
+            return True
+
+    monkeypatch.setattr(shared_cli.sys, "stdin", InteractiveInput())
+    answers = iter(("2", "1"))
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    assessed = []
+    monkeypatch.setattr(
+        shared_cli,
+        "assess_candidate",
+        lambda selector, _candidate: assessed.append(selector)
+        or SkillAssessment("ready", "Ready.", (), (), "Use it.", "Do not use it."),
+    )
+
+    assert shared_cli.main(["validate", "--repo", str(repository)]) == 0
+    assert assessed == ["claude"]
+    assert load_selector_preference(home=home) == "claude"
+    assert "Welcome to Team Knowledge" in capsys.readouterr().out
+
+
+def test_prepare_runs_first_use_setup_then_bootstraps_and_later_syncs(monkeypatch, tmp_path: Path, capsys):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(home / "codex"))
+    monkeypatch.setattr(
+        "repo_adaptive_agents.shared_knowledge.onboarding.shutil.which",
+        lambda command, path=None: f"/bin/{command}" if command in {"codex", "claude"} else None,
+    )
+
+    class InteractiveInput:
+        @staticmethod
+        def isatty():
+            return True
+
+    monkeypatch.setattr(shared_cli.sys, "stdin", InteractiveInput())
+    monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+    monkeypatch.setattr(shared_cli, "_choose_bootstrap_intent", lambda: "repository")
+    monkeypatch.setattr(
+        shared_cli,
+        "_choose_bootstrap_skills",
+        lambda plan: tuple(skill.id for skill in plan.desired_skills),
+    )
+    monkeypatch.setattr(shared_cli, "_confirm", lambda _yes, _plan: True)
+    first_selector = TaskRoutingStub()
+    monkeypatch.setattr(shared_cli, "selector_for", lambda name: first_selector if name == "claude" else None)
+
+    assert shared_cli.main(["prepare", "--repo", str(repository), "--source", "../canonical"]) == 0
+
+    assert load_selector_preference(home=home) == "claude"
+    assert (repository / ".team-knowledge/config.json").is_file()
+    destinations = onboarding_destinations(home=home, environ={"CODEX_HOME": str(home / "codex")})
+    assert all(path.is_file() for path in destinations.values())
+    output = capsys.readouterr().out
+    assert "Welcome to Team Knowledge" in output
+    assert "Continuing with repository preparation" in output
+
+    sync_selector = TaskRoutingStub()
+    monkeypatch.setattr(shared_cli, "selector_for", lambda name: sync_selector if name == "claude" else None)
+    assert shared_cli.main(
+        ["prepare", "--repo", str(repository), "--task", "Review the DNS deployment.", "--yes"]
+    ) == 0
+    assert sync_selector.received_task == "Review the DNS deployment."
+
+
+def test_prepare_rejects_source_override_after_repository_bootstrap(tmp_path: Path, capsys):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    _bootstrap(TeamKnowledgeDistributionService(EvidenceRoutingStub()), repository)
+
+    assert shared_cli.main(
+        ["prepare", "--repo", str(repository), "--source", "https://example.invalid/catalog.git"]
+    ) == 2
+    assert "keeps its locked canonical source" in capsys.readouterr().err
+
+
+def test_prepare_uses_sync_for_an_existing_repository_without_forcing_selection(monkeypatch, tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    _bootstrap(TeamKnowledgeDistributionService(EvidenceRoutingStub()), repository)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    save_selector_preference("codex", home=home)
+    monkeypatch.setattr(
+        shared_cli,
+        "selector_for",
+        lambda _name: type(
+            "NoSelectionExpected",
+            (),
+            {"select": lambda *_args, **_kwargs: pytest.fail("unchanged sync must not call the selector")},
+        )(),
+    )
+
+    assert shared_cli.main(["prepare", "--repo", str(repository), "--yes"]) == 0
 
 
 def test_validate_skill_uses_only_the_installed_copy_and_its_locked_predecessor(monkeypatch, tmp_path: Path, capsys):
