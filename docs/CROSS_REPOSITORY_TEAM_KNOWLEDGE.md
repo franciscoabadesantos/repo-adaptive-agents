@@ -4,21 +4,69 @@ This vertical proves one property: a team can author a portable Agent Skill once
 for multiple relevant repositories with Codex, Claude, or Copilot, and keep every managed
 copy current from one Git source.
 
+## Reader's map
+
+The everyday consumer lifecycle is:
+
+```text
+install CLI once
+      ↓
+team-knowledge prepare in a Git repository
+      ↓
+choose or use the saved AI selector
+      ↓
+review recommendations and local write boundary
+      ↓
+confirm local materialization
+      ↓
+commit only .team-knowledge config, lock, and local-ignore state
+      ↓
+run team-knowledge prepare again when repository work or canonical Skills change
+```
+
+The contribution lifecycle is separate:
+
+```text
+edit an installed Skill or create a local Skill package
+      ↓
+team-knowledge validate
+      ↓
+team-knowledge propose
+      ↓
+review the isolated assessment and diff
+      ↓
+optionally commit, push, and open a draft pull request
+      ↓
+merge through the canonical repository's normal Git review
+      ↓
+consumer repositories receive it on their next prepare/sync
+```
+
+`prepare` is the normal user command. `setup` changes machine-level onboarding and the default
+selector. `list`, `show`, `validate`, and `propose` inspect or contribute Skills. `bootstrap` and
+`sync` expose the lower-level repository lifecycle for automation and diagnostics.
+
+Application upgrades and catalog refreshes are deliberately different. Use
+`pipx upgrade repo-adaptive-agents` to update the CLI application. Use
+`team-knowledge prepare` to fetch canonical knowledge and update the current consumer repository.
+
 ## Default source and source contract
 
 The normal team-trial command is:
 
 ```sh
-team-knowledge bootstrap
+team-knowledge prepare
 ```
 
-It uses the `repo-adaptive-agents` Git repository at ref `main`, with catalog path
-`team-knowledge`. Product code and team knowledge share a repository for the trial but remain
-separate logical assets: the effective knowledge revision is the latest commit that changed
-the catalog subtree, not necessarily the product repository's HEAD.
+For an unprepared repository, it uses the `repo-adaptive-agents` Git repository at ref `main`,
+with catalog path `team-knowledge`. Product code and team knowledge share a repository for the
+trial but remain separate logical assets: the effective knowledge revision is the latest commit
+that changed the catalog subtree, not necessarily the product repository's HEAD.
 
-`team-knowledge bootstrap --source <git-repository>` remains the override for a dedicated
-canonical Git source and reads its catalog from `.` by default. Use
+`team-knowledge prepare --source <git-repository>` is the normal override for a dedicated
+source before repository preparation. The advanced
+`team-knowledge bootstrap --source <git-repository>` form exposes the same initialization step.
+They read the dedicated canonical Git source and its catalog from `.` by default. Use
 `--catalog-path <relative-path>` when the catalog is below the source root. Config and lock
 provenance persist the chosen URL, ref, and catalog path; sync always uses those recorded
 coordinates.
@@ -54,7 +102,13 @@ default selector. A transient `--task` also forces semantic assessment during th
 prepared repository can select knowledge for intended work that is not yet visible in its files.
 Source overrides are accepted only before the repository is bootstrapped.
 
-`team-knowledge bootstrap [--source <git-repository>] [--catalog-path <relative-path>] [--ref <ref>] [--selector <name>] [--task <text>]`:
+The advanced bootstrap form accepts source, catalog path, ref, selector, and transient task
+overrides:
+
+```sh
+team-knowledge bootstrap [--source <git-repository>] [--catalog-path <relative-path>] \
+  [--ref <ref>] [--selector <name>] [--task <text>]
+```
 
 1. creates or refreshes the persistent local canonical replica and pins a commit;
 2. reads and validates an immutable Git archive;
@@ -164,9 +218,9 @@ symlink to the single physical package; no copied fallback is created.
 
 ## Sync rules
 
-`team-knowledge sync` first fetches into the local replica and validates a complete new plan, then applies it as one
-filesystem transaction. Central content/reference changes to a selected Skill update its
-managed copy and lock. Explicit revocation removes it. Missing locked content without a
+`team-knowledge sync` first fetches into the local replica and validates a complete new plan,
+then applies it as one filesystem transaction. Central content/reference changes to a selected
+Skill update its managed copy and lock. Explicit revocation removes it. Missing locked content without a
 revocation is a source-integrity error. New Skills, routing metadata changes, pending model
 work, or factual repository evidence changes rerun the explicitly chosen selector. Generated
 physical packages and Claude bridges are excluded from factual evidence so their creation or
@@ -174,7 +228,9 @@ recovery cannot itself trigger semantic reassessment. Changing only the selector
 does not trigger reassessment.
 
 Model nonselection never silently removes an installed Skill; it is reported as possibly no
-longer relevant. A locally modified managed copy is never overwritten or removed. Network
+longer relevant. A locally modified managed copy is never overwritten or removed. If that copy
+already matches a newly merged canonical package byte-for-byte, sync records a reconciliation
+and updates only its locked provenance instead of rewriting the package. Network
 failure falls back to the last local canonical ref and never claims that the remote source is current.
 Offline mode can apply already-published updates and revocations present in that replica, restore
 managed copies, and prepare local proposal commits without contacting the remote.

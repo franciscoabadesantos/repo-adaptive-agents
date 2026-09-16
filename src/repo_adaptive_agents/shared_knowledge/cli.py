@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from textwrap import wrap
 
+from repo_adaptive_agents import __version__
+
 from .repository import SharedKnowledgeError, find_repository
 from .canonical import CanonicalSkill
 from .onboarding import install_onboarding_skills, onboarding_readiness
@@ -47,13 +49,92 @@ def _repo_argument(parser: argparse.ArgumentParser) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="team-knowledge",
-        description="Share repository knowledge with your team's coding agents.",
+        description=(
+            "Install, select, validate, and maintain shared team Skills for coding agents.\n"
+            "Run 'team-knowledge prepare' inside a Git repository to get started."
+        ),
+        epilog=(
+            "Quick start:\n"
+            "  cd <your-git-repository>\n"
+            "  team-knowledge prepare\n\n"
+            "Common commands:\n"
+            "  prepare   First use and normal refresh\n"
+            "  setup     Inspect or change the default AI selector\n"
+            "  list      See Skills available in this repository\n"
+            "  validate  Review a local Skill without publishing it\n"
+            "  propose   Prepare an improvement or new Skill for review\n\n"
+            "Safety: plans are shown before local writes. Nothing is committed, pushed,\n"
+            "merged, deployed, or published without an explicit action.\n\n"
+            "Run 'team-knowledge <command> --help' for command-specific guidance."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, title="commands")
+
+    prepare = commands.add_parser(
+        "prepare",
+        help="Start here: set up this machine, then prepare or refresh a repository",
+        description=(
+            "The normal entry point for Team Knowledge. On first use it asks which AI\n"
+            "selector to use and installs agent onboarding. In a new repository it\n"
+            "selects relevant Skills; in a prepared repository it safely refreshes them."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  team-knowledge prepare\n"
+            "  team-knowledge prepare --task \"Implement Jira issue automation\"\n"
+            "  team-knowledge prepare --selector copilot\n"
+            "  team-knowledge prepare --offline\n\n"
+            "Interactive use shows recommendations and asks before writing local state.\n"
+            "--yes is intended for automation and never authorizes commit or push."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _repo_argument(prepare)
+    prepare.add_argument(
+        "--source",
+        help="Canonical Git source override for a repository that is not prepared yet",
+    )
+    prepare.add_argument(
+        "--catalog-path",
+        help="Catalog path inside --source for a repository that is not prepared yet",
+    )
+    prepare.add_argument(
+        "--ref",
+        help="Canonical Git ref for a repository that is not prepared yet (default: main)",
+    )
+    prepare.add_argument(
+        "--selector",
+        choices=("codex", "claude", "copilot"),
+        help="AI selector for this run (overrides environment and saved preference)",
+    )
+    prepare.add_argument(
+        "--task",
+        metavar="TEXT",
+        help="Describe intended work as transient selection context; it is not stored",
+    )
+    prepare.add_argument(
+        "--offline",
+        action="store_true",
+        help="Use the latest local canonical replica without fetching",
+    )
+    prepare.add_argument(
+        "--yes",
+        action="store_true",
+        help="Apply the complete validated local plan without prompting",
+    )
 
     bootstrap = commands.add_parser(
         "bootstrap",
-        help="Select and install canonical team Skills from a Git repository",
+        help="Advanced: initialize an unprepared repository from a canonical source",
+        description=(
+            "Advanced initialization command. It collects factual repository evidence, asks\n"
+            "the selected AI which admitted canonical Skills are relevant, validates the\n"
+            "selection, and presents a local materialization plan. Most users should run\n"
+            "'team-knowledge prepare' instead."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _repo_argument(bootstrap)
     bootstrap.add_argument(
@@ -68,7 +149,7 @@ def _parser() -> argparse.ArgumentParser:
     bootstrap.add_argument(
         "--selector",
         metavar="NAME",
-        help="Semantic selector: codex, claude, or copilot (default: TEAM_KNOWLEDGE_SELECTOR or codex)",
+        help="AI selector for this run (default: environment, saved preference, then codex)",
     )
     bootstrap.add_argument(
         "--task",
@@ -82,24 +163,17 @@ def _parser() -> argparse.ArgumentParser:
     )
     bootstrap.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
 
-    prepare = commands.add_parser(
-        "prepare",
-        help="Set up first use and prepare or refresh the current repository",
+    sync = commands.add_parser(
+        "sync",
+        help="Advanced: refresh a prepared repository (prepare selects this automatically)",
+        description=(
+            "Advanced refresh command for a repository that already has committed Team\n"
+            "Knowledge config and lock state. It fetches the locked canonical source,\n"
+            "protects local edits, and previews updates, revocations, restorations, or\n"
+            "provenance reconciliation. Most users should run 'team-knowledge prepare'."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    _repo_argument(prepare)
-    prepare.add_argument("--source", help="Override the default canonical Git source for a new repository")
-    prepare.add_argument("--catalog-path", help="Relative catalog path inside --source (default: .)")
-    prepare.add_argument("--ref", help="Canonical Git ref for a new repository (default: main)")
-    prepare.add_argument("--selector", choices=("codex", "claude", "copilot"))
-    prepare.add_argument("--task", metavar="TEXT", help="Select Skills for this transient work description")
-    prepare.add_argument(
-        "--offline",
-        action="store_true",
-        help="Use the latest local canonical replica without fetching",
-    )
-    prepare.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
-
-    sync = commands.add_parser("sync", help="Safely synchronize bootstrapped canonical team Skills")
     _repo_argument(sync)
     sync.add_argument(
         "--offline",
@@ -109,13 +183,13 @@ def _parser() -> argparse.ArgumentParser:
     sync.add_argument(
         "--selector",
         metavar="NAME",
-        help="Semantic selector: codex, claude, or copilot (default: TEAM_KNOWLEDGE_SELECTOR or codex)",
+        help="AI selector for this run (default: environment, saved preference, then codex)",
     )
     sync.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
 
     onboarding = commands.add_parser(
         "install-onboarding",
-        help="Install the portable team-knowledge preparation Skill for coding agents",
+        help="Advanced: install only the agent onboarding Skill",
     )
     onboarding.add_argument(
         "--consumer",
@@ -126,13 +200,45 @@ def _parser() -> argparse.ArgumentParser:
     onboarding.add_argument("--dry-run", action="store_true", help="Show destinations without writing files")
 
     validate_skill_command = commands.add_parser(
-        "validate", help="Validate local canonical Skills, installed copies, or private proposals"
+        "validate",
+        help="Read-only quality review of local, installed, or proposed Skills",
+        description=(
+            "Validate one or more Skills independently. Deterministic package checks run\n"
+            "first, followed by an isolated assessment from the chosen AI. This command\n"
+            "does not edit, publish, combine, commit, or push Skills. Without IDs, an\n"
+            "interactive terminal shows a selection menu."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  team-knowledge validate\n"
+            "  team-knowledge validate dify-workflow-operations\n"
+            "  team-knowledge validate --selector claude"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _repo_argument(validate_skill_command)
     validate_skill_command.add_argument("skill_ids", nargs="*", metavar="SKILL_ID")
     validate_skill_command.add_argument("--selector", choices=("codex", "claude", "copilot"))
 
-    propose = commands.add_parser("propose", help="Add, create, or improve a canonical Skill proposal")
+    propose = commands.add_parser(
+        "propose",
+        help="Validate and prepare an improved or new Skill for optional Git review",
+        description=(
+            "Prepare a contribution to the canonical Skill catalog. Choose an installed\n"
+            "Skill to improve, select an existing local Skill package, or start a draft.\n"
+            "A candidate must pass independent validation before an isolated source\n"
+            "checkout is prepared. Commit, push, and draft-PR actions remain explicit."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  team-knowledge propose\n"
+            "  team-knowledge propose --new --name cloud-run-deployment-safety \\\n"
+            "    --description \"Use when reviewing a Google Cloud Run deployment.\"\n\n"
+            "The safe default keeps the prepared checkout local. Nothing is published\n"
+            "unless a later action explicitly requests push or draft-PR creation."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     _repo_argument(propose)
     propose.add_argument("--new", action="store_true", help="Create a new portable Skill proposal")
     propose.add_argument("--name", help="New Skill name (with --new)")
@@ -142,7 +248,21 @@ def _parser() -> argparse.ArgumentParser:
 
     setup = commands.add_parser(
         "setup",
-        help="Prepare and diagnose user-level onboarding for Codex, Claude, and Copilot",
+        help="Inspect onboarding or choose the default Codex, Claude, or Copilot selector",
+        description=(
+            "Configure this user account, not the current repository. Setup detects agent\n"
+            "CLIs, installs or refreshes the portable onboarding Skill, shows application\n"
+            "storage locations, and can save the default AI selector. It does not install\n"
+            "or authenticate Codex, Claude, or Copilot."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  team-knowledge setup\n"
+            "  team-knowledge setup --dry-run\n"
+            "  team-knowledge setup --selector copilot\n"
+            "  team-knowledge setup --selector claude --only"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     setup.add_argument(
         "--only",
@@ -153,12 +273,12 @@ def _parser() -> argparse.ArgumentParser:
     setup.add_argument(
         "--selector",
         choices=("codex", "claude", "copilot"),
-        help="Save this user-level default selector for future bootstrap and sync commands",
+        help="Save this user-level default selector for future AI-using commands",
     )
 
-    listing = commands.add_parser("list", help="List local canonical or installed team Skills")
+    listing = commands.add_parser("list", help="List Skills available in this repository")
     _repo_argument(listing)
-    show = commands.add_parser("show", help="Show one local canonical or installed Skill")
+    show = commands.add_parser("show", help="Print one available Skill as Markdown")
     _repo_argument(show)
     show.add_argument("skill_id", metavar="ID")
     return parser
@@ -209,6 +329,11 @@ def _approval_recommendation(plan: DistributionPlan) -> tuple[str, str]:
         return "CANCEL", "native validation rejected one or more proposed Skills"
     if not planned:
         return "CANCEL", "the reviewed plan does not materialize any Skill changes"
+    if all(
+        action.action == "reconcile" and action.bridge_action == "keep"
+        for action in planned
+    ):
+        return "APPLY", "local Skills already match; only provenance will be updated"
     if plan.semantic_pending:
         return "APPLY", "only already-locked Skill updates were planned; new selection is deferred"
     return "APPLY", "the proposed local changes passed native validation"
@@ -1293,7 +1418,13 @@ def _run(args: argparse.Namespace) -> int:
             print("No committed or materialized team knowledge changes were applied.")
             return 0
         service.apply(plan)
-        past = {"add": "Added", "update": "Updated", "restore": "Restored", "remove": "Removed"}
+        past = {
+            "add": "Added",
+            "update": "Updated",
+            "restore": "Restored",
+            "remove": "Removed",
+            "reconcile": "Reconciled",
+        }
         for action in plan.actions:
             if action.action != "keep":
                 print(f"{past[action.action]} {action.id}: {action.materialized_path}")

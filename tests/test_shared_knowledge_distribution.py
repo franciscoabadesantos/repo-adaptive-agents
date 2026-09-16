@@ -67,6 +67,7 @@ from repo_adaptive_agents.shared_knowledge.source import GitKnowledgeSource, Sou
 def _isolated_machine_storage(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("TEAM_KNOWLEDGE_HOME", raising=False)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "machine-cache"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "machine-config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "machine-data"))
 
 
@@ -1293,6 +1294,33 @@ def test_ctrl_c_exits_cleanly_without_a_traceback(monkeypatch, capsys):
     assert "Traceback" not in output.err
 
 
+def test_cli_help_leads_a_new_user_to_prepare(capsys):
+    with pytest.raises(SystemExit) as root_exit:
+        shared_cli.main(["--help"])
+    assert root_exit.value.code == 0
+    root_help = capsys.readouterr().out
+    assert "Run 'team-knowledge prepare' inside a Git repository to get started." in root_help
+    assert "Quick start:" in root_help
+    assert "Nothing is committed, pushed" in root_help
+    assert root_help.index("prepare") < root_help.index("bootstrap")
+
+    with pytest.raises(SystemExit) as prepare_exit:
+        shared_cli.main(["prepare", "--help"])
+    assert prepare_exit.value.code == 0
+    prepare_help = capsys.readouterr().out
+    assert "The normal entry point for Team Knowledge" in prepare_help
+    assert "--task \"Implement Jira issue automation\"" in prepare_help
+    assert "--yes is intended for automation and never authorizes commit or push" in prepare_help
+
+
+def test_cli_reports_the_distribution_version(capsys):
+    with pytest.raises(SystemExit) as version_exit:
+        shared_cli.main(["--version"])
+
+    assert version_exit.value.code == 0
+    assert capsys.readouterr().out.strip() == "team-knowledge 0.20.3"
+
+
 def test_validate_skill_uses_only_the_installed_copy_and_its_locked_predecessor(monkeypatch, tmp_path: Path, capsys):
     repository = _repo(tmp_path / "consumer")
     candidate = repository / ".agents" / "skills" / "jira-data-center-operations"
@@ -2032,6 +2060,77 @@ def test_unmanaged_collision_and_modified_managed_copy_are_never_overwritten(tmp
     with pytest.raises(SharedKnowledgeError, match="locally modified"):
         service.sync_plan(managed)
     assert "local edit" in local.read_text(encoding="utf-8")
+
+
+def test_sync_reconciles_a_local_candidate_after_the_same_change_is_merged(tmp_path: Path):
+    source = _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+    _bootstrap(service, repository)
+    local = repository / ".agents/skills/dns/SKILL.md"
+    local.write_text(
+        local.read_text(encoding="utf-8") + "\nShared reviewed improvement.\n",
+        encoding="utf-8",
+    )
+    candidate = local.read_bytes()
+    (source / "skills/dns/SKILL.md").write_bytes(candidate)
+    _git(source, "add", "skills/dns/SKILL.md")
+    _git(
+        source,
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "Merge reviewed improvement",
+    )
+    local_inode = local.stat().st_ino
+
+    plan = service.sync_plan(repository)
+
+    action = next(item for item in plan.actions if item.id == "dns")
+    assert action.action == "reconcile"
+    assert shared_cli._approval_recommendation(plan) == (
+        "APPLY",
+        "local Skills already match; only provenance will be updated",
+    )
+    assert plan.lock.resources[0].digest_sha256 == distribution.directory_digest(
+        repository / ".agents/skills/dns"
+    )
+    assert plan.lock.resources[0].revision != plan.previous_lock.resources[0].revision
+    service.apply(plan)
+    assert local.read_bytes() == candidate
+    assert local.stat().st_ino == local_inode
+    assert load_consumer_lock(repository) == plan.lock
+
+
+def test_reconcile_stops_if_the_local_candidate_changes_after_planning(tmp_path: Path):
+    source = _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+    _bootstrap(service, repository)
+    local = repository / ".agents/skills/dns/SKILL.md"
+    locked_content = local.read_bytes()
+    local.write_bytes(locked_content + b"\nShared reviewed improvement.\n")
+    (source / "skills/dns/SKILL.md").write_bytes(local.read_bytes())
+    _git(source, "add", "skills/dns/SKILL.md")
+    _git(
+        source,
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "Merge reviewed improvement",
+    )
+    plan = service.sync_plan(repository)
+    assert next(item for item in plan.actions if item.id == "dns").action == "reconcile"
+
+    local.write_bytes(locked_content)
+
+    with pytest.raises(SharedKnowledgeError, match="changed after planning"):
+        service.apply(plan)
+    assert load_consumer_lock(repository) == plan.previous_lock
 
 
 def test_missing_skill_without_revocation_is_source_integrity_error(tmp_path: Path):

@@ -281,16 +281,34 @@ def _preflight(plan: DistributionPlan, *, require_present: bool = False) -> None
         resource.materialized_path: resource
         for resource in (() if plan.previous_lock is None else plan.previous_lock.resources)
     }
+    desired_by_id = {skill.id: skill for skill in plan.desired_skills}
+    action_by_id = {action.id: action.action for action in plan.actions}
     desired_paths = {skill.materialized_path for skill in plan.desired_skills}
     for path, previous in old_by_path.items():
         target = _assert_safe_destination(plan.root, path)
         if not target.exists():
+            if action_by_id.get(previous.id) == "reconcile":
+                raise SharedKnowledgeError(
+                    f"managed Agent Skill changed after planning; rerun team-knowledge sync: {path}"
+                )
             if require_present:
                 raise SharedKnowledgeError(f"locked managed Agent Skill is missing: {path}")
-        elif directory_digest(target) != previous.digest_sha256:
-            raise SharedKnowledgeError(
-                f"locally modified managed Agent Skill will not be overwritten or removed: {path}"
+        else:
+            local_digest = directory_digest(target)
+            desired = desired_by_id.get(previous.id)
+            already_matches_desired = (
+                desired is not None
+                and desired.materialized_path == path
+                and local_digest == desired.digest_sha256
             )
+            if action_by_id.get(previous.id) == "reconcile" and not already_matches_desired:
+                raise SharedKnowledgeError(
+                    f"managed Agent Skill changed after planning; rerun team-knowledge sync: {path}"
+                )
+            if local_digest != previous.digest_sha256 and not already_matches_desired:
+                raise SharedKnowledgeError(
+                    f"locally modified managed Agent Skill will not be overwritten or removed: {path}"
+                )
         bridge = _assert_safe_bridge_destination(plan.root, previous.name)
         if not (bridge.exists() or bridge.is_symlink()):
             if require_present:
@@ -346,10 +364,23 @@ def _actions(
         )
     for skill in desired:
         previous = old_by_id.get(skill.id)
+        target = _assert_safe_destination(root, skill.materialized_path)
         if previous is None:
             action = "add"
-        elif not (root / skill.materialized_path).is_dir():
+        elif not target.is_dir():
             action = "restore"
+        elif (
+            previous.materialized_path == skill.materialized_path
+            and directory_digest(target) == skill.digest_sha256
+        ):
+            # A locally edited candidate may already be byte-for-byte identical to a
+            # newly merged canonical package. Reconcile provenance without rewriting it.
+            action = (
+                "keep"
+                if previous.revision == skill.revision
+                and previous.digest_sha256 == skill.digest_sha256
+                else "reconcile"
+            )
         elif (
             previous.revision != skill.revision
             or previous.digest_sha256 != skill.digest_sha256
@@ -821,7 +852,9 @@ class TeamKnowledgeDistributionService:
         desired_by_id = {item.id: item for item in plan.desired_skills}
         actions = {item.id: item.action for item in plan.actions}
         for skill in plan.desired_skills:
-            if actions[skill.id] == "keep" and (root / skill.materialized_path).is_dir():
+            if actions[skill.id] in {"keep", "reconcile"} and (
+                root / skill.materialized_path
+            ).is_dir():
                 continue
             destination = staged / skill.name
             destination.mkdir(parents=True)
@@ -866,7 +899,7 @@ class TeamKnowledgeDistributionService:
                     moved[previous.materialized_path] = backup
             for skill in plan.desired_skills:
                 destination = root / skill.materialized_path
-                if actions[skill.id] == "keep" and destination.is_dir():
+                if actions[skill.id] in {"keep", "reconcile"} and destination.is_dir():
                     continue
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(staged / skill.name, destination)

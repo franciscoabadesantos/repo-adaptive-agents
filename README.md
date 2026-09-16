@@ -3,22 +3,75 @@
 Write a reusable Agent Skill once in a team-owned Git catalog, then let each engineering
 repository install only the Skills a model judges likely to be relevant. Choose Codex,
 Claude, or Copilot for that semantic selection step. The source stays
-canonical: `team-knowledge sync` distributes central improvements and revocations without
-manual copying.
+canonical: `team-knowledge prepare` distributes central improvements and revocations without
+manual copying, choosing the lower-level bootstrap or sync path automatically.
 
 This first vertical is deliberately narrow: one team, native Agent Skills, one explicitly
 selected model CLI, Git-backed review, and local generated copies. It has no hosted service, semantic ranking
 engine, capability ontology, or management dashboard.
 
-## Install
+## Start here
 
-Python 3.11+, Git, and one installed and authenticated selector CLI (`codex`, `claude`, or
-`copilot`) are required. Codex is the default. From a clone of this project:
+You do not need to clone this repository to consume team knowledge. A new user needs:
+
+- Python 3.11 or later, Git, and `pipx`;
+- access to the canonical Git repository; and
+- at least one installed and authenticated selector CLI: Codex, Claude, or Copilot.
+
+Install the CLI once:
+
+```sh
+pipx install "git+https://github.com/franciscoabadesantos/repo-adaptive-agents.git@main"
+```
+
+Then enter any Git repository where you want to work and use the normal entry point:
+
+```sh
+cd <your-git-repository>
+team-knowledge prepare
+```
+
+On first use, `prepare` shows the available AI CLIs, asks which one should be the default,
+installs the onboarding Skill for supported agents, and then continues with the repository.
+It presents recommendations and a complete write boundary before changing local state.
+
+The tool never commits, pushes, merges, deploys, or publishes as part of `prepare`. When a plan
+is accepted, the repository receives durable config, lock, and local-ignore files under
+`.team-knowledge/`.
+Generated Skills under `.agents/skills/`, Claude discovery bridges, runtime data, and source
+replicas remain local and reconstructible.
+
+### Which command should I use?
+
+| Goal | Command |
+| --- | --- |
+| First use or normal repository refresh | `team-knowledge prepare` |
+| Prepare for work not yet visible in the repository | `team-knowledge prepare --task "<work>"` |
+| Change or diagnose the default AI selector | `team-knowledge setup` |
+| See or read available Skills | `team-knowledge list` / `team-knowledge show <id>` |
+| Review a local Skill without publishing | `team-knowledge validate [<id>]` |
+| Contribute a new or improved Skill | `team-knowledge propose` |
+| Work directly with lifecycle internals | `team-knowledge bootstrap` / `team-knowledge sync` |
+
+`prepare` chooses bootstrap for a new repository and sync for an existing one. Most users do
+not need to call those advanced commands directly.
+
+There are two independent update paths:
+
+```sh
+# Update this CLI application and its behavior.
+pipx upgrade repo-adaptive-agents
+
+# Fetch canonical Skill changes and refresh the current repository.
+team-knowledge prepare
+```
+
+To develop the application itself from a clone:
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install .
+python -m pip install -e ".[dev]"
 team-knowledge --help
 ```
 
@@ -59,9 +112,9 @@ Review changes to this repository through normal Git pull requests. Skills must 
 UTF-8 text packages: `SKILL.md` plus optional text references. Symlinks, executable files,
 `scripts/`, and binary bundles are rejected.
 
-## Five-minute consumer workflow
+## How repository preparation works
 
-In an existing engineering repository, run:
+The normal command in an engineering repository is always:
 
 ```sh
 team-knowledge prepare
@@ -186,8 +239,9 @@ the same portable onboarding Skill for all three agents and reports whether thei
 CLIs are currently available on `PATH`; it does not install, authenticate, configure, or silently
 substitute any coding agent. A person needs Git access to the private source and must sign in to the
 agent they choose. By default it prepares all three agents, including ones installed later. Use
-`team-knowledge setup --selector claude --only` to limit onboarding to one agent. A Codex plugin can later package the same conversational onboarding, but it is optional:
-the CLI remains the cross-agent installation path.
+`team-knowledge setup --selector claude --only` to limit onboarding to one agent. A Codex
+plugin can later package the same conversational onboarding, but it is optional: the CLI
+remains the cross-agent installation path.
 
 Set the user-level default semantic selector during setup; it is stored in the person's local
 configuration, never in a repository or lock:
@@ -220,13 +274,16 @@ git commit -m "Sync shared team knowledge"
 The plan automatically updates already-selected Skills and removes explicitly revoked ones.
 New Skills or changed repository evidence trigger a fresh selection using the selector chosen
 for that invocation. A previously selected Skill the model no longer selects is reported but
-retained for human review. Changing only `--selector` does not itself trigger reassessment.
+retained for human review. If a locally edited candidate already matches its newly merged
+canonical package, sync reconciles the lock without rewriting the local package. Changing only
+`--selector` does not itself trigger reassessment.
 
 If the configured selector is unavailable during sync, safe deterministic updates and revocations can still be
 applied while semantic additions are deferred. If the Git remote is unavailable, the command automatically
 uses the most recently fetched local canonical ref and says that remote freshness was not checked.
 `team-knowledge sync --offline` selects that behavior explicitly. Offline proposal preparation and local
-commits are supported; push, pull-request creation, and cloud-dependent model selection still require connectivity.
+commits are supported; push, pull-request creation, and cloud-dependent model selection still
+require connectivity.
 
 `bootstrap` and `sync` remain explicit advanced commands for scripts and diagnostics. `prepare`
 selects between them from the presence of the complete committed consumer config and lock.
@@ -238,7 +295,8 @@ formats, safety rules, and sync behavior.
 
 ## Architecture boundary
 
-The explicitly chosen model owns semantic relevance. The product supplies bounded factual repository evidence and
-Skill routing metadata; it contains no keyword fallback or deterministic semantic selector.
+The explicitly chosen model owns semantic relevance. The product supplies bounded factual
+repository evidence and Skill routing metadata; it contains no keyword fallback or deterministic
+semantic selector.
 The existing native admission layer independently enforces exposure and final exact-resource
 validation before any canonical Skill is materialized.
