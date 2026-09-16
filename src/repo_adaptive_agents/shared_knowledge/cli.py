@@ -49,28 +49,16 @@ def _repo_argument(parser: argparse.ArgumentParser) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="team-knowledge",
-        description=(
-            "Install, select, validate, and maintain shared team Skills for coding agents.\n"
-            "Run 'team-knowledge prepare' inside a Git repository to get started."
-        ),
-        epilog=(
-            "Quick start:\n"
-            "  cd <your-git-repository>\n"
-            "  team-knowledge prepare\n\n"
-            "Common commands:\n"
-            "  prepare   First use and normal refresh\n"
-            "  setup     Inspect or change the default AI selector\n"
-            "  list      See Skills available in this repository\n"
-            "  validate  Review a local Skill without publishing it\n"
-            "  propose   Prepare an improvement or new Skill for review\n\n"
-            "Safety: plans are shown before local writes. Nothing is committed, pushed,\n"
-            "merged, deployed, or published without an explicit action.\n\n"
-            "Run 'team-knowledge <command> --help' for command-specific guidance."
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        usage="team-knowledge <command> [options]",
+        description="Shared team Skills for coding agents.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    commands = parser.add_subparsers(dest="command", required=True, title="commands")
+    commands = parser.add_subparsers(
+        dest="command",
+        required=True,
+        title="commands",
+        metavar="COMMAND",
+    )
 
     prepare = commands.add_parser(
         "prepare",
@@ -757,6 +745,44 @@ def _print_card(title: str, lines: tuple[str, ...]) -> None:
         for line in wrapped:
             print(f"│ {line:<{width}} │")
     print("╰" + "─" * (width + 2) + "╯")
+
+
+def _print_root_help(*, detailed: bool) -> None:
+    _print_card(
+        "Team Knowledge",
+        ("Prepare a Git repository with shared Skills for coding agents.",),
+    )
+    print()
+    print("Start here:")
+    print("  team-knowledge prepare")
+    print()
+    print("Use installed Skills:")
+    print("  team-knowledge list             List available Skills")
+    print("  team-knowledge show <id>        Read one Skill")
+    print()
+    print("Create or improve Skills:")
+    print("  team-knowledge validate [<id>]  Review without publishing")
+    print("  team-knowledge propose          Prepare an optional draft PR")
+    print()
+    print("Machine settings:")
+    print("  team-knowledge setup            Choose Codex, Claude, or Copilot")
+    print()
+    print("Advanced: team-knowledge bootstrap, sync, install-onboarding")
+    if detailed:
+        print()
+        print("Common prepare options:")
+        print('  --task "<work>"                  Select Skills for intended work')
+        print("  --selector codex|claude|copilot  Override the saved AI for this run")
+        print("  --offline                        Use the latest local source replica")
+        print("  --yes                            Apply without asking (automation only)")
+        print()
+        print("Help and version:")
+        print("  team-knowledge <command> --help  Show every option for a command")
+        print("  team-knowledge --version         Show the installed version")
+    print()
+    print("Nothing is committed, pushed, or deployed without an explicit action.")
+    if not detailed:
+        print("More detail: team-knowledge --help")
 
 
 def _choose_default_selector(
@@ -1454,7 +1480,14 @@ def _run(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     try:
-        args = _parser().parse_args(argv)
+        arguments = list(sys.argv[1:] if argv is None else argv)
+        if not arguments:
+            _print_root_help(detailed=False)
+            return 0
+        if arguments in (["-h"], ["--help"], ["help"]):
+            _print_root_help(detailed=True)
+            return 0
+        args = _parser().parse_args(arguments)
         return _run(args)
     except KeyboardInterrupt:
         print("\nCancelled.", file=sys.stderr)

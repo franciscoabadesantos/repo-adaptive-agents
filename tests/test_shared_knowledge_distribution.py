@@ -1295,14 +1295,29 @@ def test_ctrl_c_exits_cleanly_without_a_traceback(monkeypatch, capsys):
 
 
 def test_cli_help_leads_a_new_user_to_prepare(capsys):
-    with pytest.raises(SystemExit) as root_exit:
-        shared_cli.main(["--help"])
-    assert root_exit.value.code == 0
+    assert shared_cli.main(["--help"]) == 0
     root_help = capsys.readouterr().out
-    assert "Run 'team-knowledge prepare' inside a Git repository to get started." in root_help
-    assert "Quick start:" in root_help
-    assert "Nothing is committed, pushed" in root_help
-    assert root_help.index("prepare") < root_help.index("bootstrap")
+    assert "Team Knowledge" in root_help
+    assert "Start here:\n  team-knowledge prepare" in root_help
+    assert "Use installed Skills:" in root_help
+    assert "Create or improve Skills:" in root_help
+    assert "Advanced: team-knowledge bootstrap, sync, install-onboarding" in root_help
+    assert "Common prepare options:" in root_help
+    assert '--task "<work>"' in root_help
+    assert "--selector codex|claude|copilot" in root_help
+    assert "--offline" in root_help
+    assert "--yes" in root_help
+    assert "team-knowledge <command> --help" in root_help
+    assert "team-knowledge --version" in root_help
+    assert "Nothing is committed, pushed, or deployed" in root_help
+    assert "usage:" not in root_help
+    assert "{prepare,bootstrap" not in root_help
+
+    assert shared_cli.main([]) == 0
+    quick_help = capsys.readouterr().out
+    assert "Start here:\n  team-knowledge prepare" in quick_help
+    assert "Common prepare options:" not in quick_help
+    assert "More detail: team-knowledge --help" in quick_help
 
     with pytest.raises(SystemExit) as prepare_exit:
         shared_cli.main(["prepare", "--help"])
