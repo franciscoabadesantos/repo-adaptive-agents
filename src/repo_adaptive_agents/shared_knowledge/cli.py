@@ -1271,7 +1271,12 @@ def _run(args: argparse.Namespace) -> int:
                 progress=progress,
             )
             if distribution_command == "bootstrap"
-            else service.sync_plan(args.repo, offline=offline, task=selection_task)
+            else service.sync_plan(
+                args.repo,
+                offline=offline,
+                task=selection_task,
+                progress=progress,
+            )
         )
         if conversational_selector is not None and conversational_selector.cancelled:
             print("No committed or materialized team knowledge changes were applied.")

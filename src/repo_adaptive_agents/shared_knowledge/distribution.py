@@ -565,6 +565,7 @@ class TeamKnowledgeDistributionService:
         *,
         offline: bool = False,
         task: str | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> DistributionPlan:
         if offline and task is not None:
             raise SharedKnowledgeError("offline sync cannot perform task-based semantic selection")
@@ -714,7 +715,11 @@ class TeamKnowledgeDistributionService:
                 selection_arguments: dict[str, object] = {}
                 if task is not None:
                     selection_arguments["task"] = task
+                if progress is not None:
+                    progress("Calling the configured AI selector with read-only factual evidence")
                 selection = self.selector.select(evidence, routing, **selection_arguments)
+                if progress is not None:
+                    progress("AI selector completed; validating its proposed Skill IDs")
             except SelectorUnavailable:
                 semantic_pending = True
         selected_ids = tuple(item.id for item in selection.selected) if selection else ()

@@ -1244,6 +1244,9 @@ def test_prepare_runs_first_use_setup_then_bootstraps_and_later_syncs(monkeypatc
         ["prepare", "--repo", str(repository), "--task", "Review the DNS deployment.", "--yes"]
     ) == 0
     assert sync_selector.received_task == "Review the DNS deployment."
+    output = capsys.readouterr().out
+    assert "Starting claude AI selection with read-only factual evidence" in output
+    assert "AI selector completed; validating its proposed Skill IDs" in output
 
 
 def test_prepare_rejects_source_override_after_repository_bootstrap(tmp_path: Path, capsys):
