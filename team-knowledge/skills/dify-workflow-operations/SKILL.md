@@ -55,3 +55,5 @@ When behavior differs, capture sanitized evidence: Dify edition/version when obs
 and node type, relevant export fragment, fixture input, first divergent input/output, exact
 error, expected result, and smallest correction. A single workspace workaround is not a
 canonical rule until reviewed.
+
+When sharing a reproduction, replace tenant names, credential references, private URLs, and corpus excerpts with explicit placeholders while preserving node types and control flow.
