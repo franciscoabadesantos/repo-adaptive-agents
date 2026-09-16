@@ -56,7 +56,7 @@ Source overrides are accepted only before the repository is bootstrapped.
 
 `team-knowledge bootstrap [--source <git-repository>] [--catalog-path <relative-path>] [--ref <ref>] [--selector <name>] [--task <text>]`:
 
-1. clones/fetches the source into the shared user cache and pins a commit;
+1. creates or refreshes the persistent local canonical replica and pins a commit;
 2. reads and validates an immutable Git archive;
 3. projects only factual evidence from the existing repository profiler;
 4. maps canonical packages to native `AGENT_SKILL` resources with organization/team scope;
@@ -73,7 +73,7 @@ or a conversational task description. The conversational path builds the catalog
 snapshot, and factual repository evidence once. Each continuation uses that same evidence and
 includes the earlier user messages and complete earlier model selections, allowing the latest
 message to add, correct, or replace intent. Conversation state is process memory only and is
-discarded before exit; it is never written to consumer state, the shared cache, or the canonical
+discarded before exit; it is never written to consumer state, the local replica, or the canonical
 source. Non-interactive invocations retain repository-only behavior unless `--task` is supplied.
 
 The selector is resolved in this order: explicit `--selector`,
@@ -138,21 +138,22 @@ Keep local:
 - generated `.agents/skills/<managed-name>/` packages and
   `.claude/skills/<managed-name>` bridges.
 
-The disposable bare Git source clone is shared by every consumer of the same canonical source
-under the operating system's user cache directory. On Linux and WSL this is normally
-`$XDG_CACHE_HOME/team-knowledge/sources/` or `~/.cache/team-knowledge/sources/`. Native Windows
-uses `%LOCALAPPDATA%/team-knowledge/cache/sources/`. `TEAM_KNOWLEDGE_HOME` may define one explicit
-application root, with caches below its `cache/` directory. The hashed source directory does not
-expose its URL, and its metadata stores only the identity digest; source URLs containing embedded
-HTTP credentials are rejected.
+The normal Git replica is shared by every consumer of the same canonical source under persistent
+user data. On Linux and WSL this is normally
+`$XDG_DATA_HOME/team-knowledge/sources/` or `~/.local/share/team-knowledge/sources/`. Native Windows
+uses `%LOCALAPPDATA%/team-knowledge/data/sources/`. `TEAM_KNOWLEDGE_HOME` may define one explicit
+application root, with replicas below its `data/` directory. If setup runs inside the default
+canonical clone, that checkout is registered instead of creating a duplicate. The hashed source
+directory does not expose its URL, and source URLs containing embedded HTTP credentials are rejected.
 
-The cache is an optimization, never authority: `lock.json` still pins the exact source commit and
-package digests. If the persistent cache is not writable during an online operation, the command
-uses an operation-scoped temporary cache. Offline verification requires the locked commit in the
-persistent shared cache. Concurrent processes serialize clone and fetch operations per source.
+The local replica is the durable offline source while `lock.json` continues to pin consumer state
+and package digests. Online operations fetch into it first; snapshots and materialization are then
+read locally. Offline operations resolve the last successfully fetched ref. Concurrent processes
+serialize clone and fetch operations per source. The previous shared bare cache is migrated into
+the persistent replica when its provenance is valid.
 
 Version 0.16 and later no longer create `.team-knowledge/cache/`. When an exact cache created by an
-older version is found after the shared cache is ready, an interactive command offers to remove it
+older version is found after the persistent replica is ready, an interactive command offers to remove it
 and its obsolete exact `/cache/` ignore rule. Unknown content is never offered for deletion, and
 `--yes` deliberately does not authorize legacy cache cleanup.
 
@@ -163,7 +164,7 @@ symlink to the single physical package; no copied fallback is created.
 
 ## Sync rules
 
-`team-knowledge sync` first fetches and validates a complete new plan, then applies it as one
+`team-knowledge sync` first fetches into the local replica and validates a complete new plan, then applies it as one
 filesystem transaction. Central content/reference changes to a selected Skill update its
 managed copy and lock. Explicit revocation removes it. Missing locked content without a
 revocation is a source-integrity error. New Skills, routing metadata changes, pending model
@@ -174,8 +175,9 @@ does not trigger reassessment.
 
 Model nonselection never silently removes an installed Skill; it is reported as possibly no
 longer relevant. A locally modified managed copy is never overwritten or removed. Network
-failure leaves all current state untouched. Offline mode verifies locked copies against the
-shared cached pinned commit and never claims the source is current.
+failure falls back to the last local canonical ref and never claims that the remote source is current.
+Offline mode can apply already-published updates and revocations present in that replica, restore
+managed copies, and prepare local proposal commits without contacting the remote.
 
 ## Current limits
 

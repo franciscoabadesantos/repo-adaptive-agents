@@ -70,13 +70,14 @@ These paths are local, generated state:
 .team-knowledge/runtime/
 ```
 
-The canonical Git clone is not stored in the repository. It is shared between consumers in the
-user cache (normally `~/.cache/team-knowledge/sources/` on Linux/WSL). `team-knowledge setup`
-prints the effective machine cache path.
+The canonical Git clone is not stored in the consumer repository. It is a persistent replica shared
+between consumers (normally `~/.local/share/team-knowledge/sources/` on Linux/WSL). If setup runs
+inside the default canonical clone, that checkout is registered and reused. `team-knowledge setup`
+prints the effective replica location.
 
 Each selected standard Skill exists physically once under `.agents/skills/`. The Claude path
 is a generated discovery bridge to that same package. Do not commit generated Skill packages,
-Claude bridges, caches, or runtime state.
+Claude bridges, canonical replicas, or runtime state.
 
 ## Commit repository knowledge state
 

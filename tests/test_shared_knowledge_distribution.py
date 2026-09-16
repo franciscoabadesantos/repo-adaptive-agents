@@ -53,7 +53,13 @@ from repo_adaptive_agents.shared_knowledge.selector import (
     parse_selection,
     resolve_selector_name,
 )
-from repo_adaptive_agents.shared_knowledge.storage import source_cache_directory, user_cache_root
+from repo_adaptive_agents.shared_knowledge.storage import (
+    register_source_checkout,
+    source_cache_directory,
+    source_replica_directory,
+    user_cache_root,
+    user_data_root,
+)
 from repo_adaptive_agents.shared_knowledge.source import GitKnowledgeSource, SourceUnavailable
 
 
@@ -61,6 +67,7 @@ from repo_adaptive_agents.shared_knowledge.source import GitKnowledgeSource, Sou
 def _isolated_machine_storage(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("TEAM_KNOWLEDGE_HOME", raising=False)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "machine-cache"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "machine-data"))
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -248,6 +255,9 @@ def test_machine_cache_path_honors_explicit_home(tmp_path: Path):
     assert preferences_path(environ={"TEAM_KNOWLEDGE_HOME": str(tmp_path / "shared")}) == (
         tmp_path / "shared/config/config.json"
     )
+    assert user_data_root(environ={"TEAM_KNOWLEDGE_HOME": str(tmp_path / "shared")}) == (
+        tmp_path / "shared/data"
+    )
 
 
 def test_machine_cache_path_uses_native_windows_application_data(tmp_path: Path):
@@ -257,9 +267,14 @@ def test_machine_cache_path_uses_native_windows_application_data(tmp_path: Path)
         environ={"LOCALAPPDATA": str(local_data)},
         platform_name="nt",
     ) == local_data / "team-knowledge/cache"
+    assert user_data_root(
+        home=tmp_path,
+        environ={"LOCALAPPDATA": str(local_data)},
+        platform_name="nt",
+    ) == local_data / "team-knowledge/data"
 
 
-def test_two_consumers_share_one_source_cache(tmp_path: Path):
+def test_two_consumers_share_one_persistent_source_replica(tmp_path: Path):
     _canonical(tmp_path)
     first = _dns_repo(tmp_path, "consumer-a", 1)
     second = _dns_repo(tmp_path, "consumer-b", 2)
@@ -268,14 +283,14 @@ def test_two_consumers_share_one_source_cache(tmp_path: Path):
     _bootstrap(service, first)
     _bootstrap(service, second)
 
-    first_cache = source_cache_directory("../canonical", first)
-    second_cache = source_cache_directory("../canonical", second)
-    assert first_cache == second_cache
-    assert (first_cache / "repository.git").is_dir()
-    assert json.loads((first_cache / "metadata.json").read_text(encoding="utf-8")) == {
-        "schema_version": 2,
-        "source_identity_sha256": first_cache.name,
-    }
+    first_replica = source_replica_directory("../canonical", first)
+    second_replica = source_replica_directory("../canonical", second)
+    assert first_replica == second_replica
+    assert (first_replica / "repository/.git").is_dir()
+    metadata = json.loads((first_replica / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["schema_version"] == 3
+    assert metadata["source_identity_sha256"] == first_replica.name
+    assert len(metadata["refs"]["main"]) == 40
     assert not (first / ".team-knowledge/cache").exists()
     assert not (second / ".team-knowledge/cache").exists()
     assert "/cache/" not in (first / ".team-knowledge/.gitignore").read_text(encoding="utf-8")
@@ -298,15 +313,49 @@ def test_shared_cache_supports_locked_offline_access(tmp_path: Path):
     ) == locked.resolved_commit
 
 
-def test_offline_access_does_not_create_an_empty_shared_cache(tmp_path: Path):
+def test_offline_bootstrap_uses_the_latest_local_canonical_ref(tmp_path: Path):
+    source_repo = _canonical(tmp_path)
+    first = _dns_repo(tmp_path, "first-consumer", 1)
+    second = _dns_repo(tmp_path, "second-consumer", 2)
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+    _bootstrap(service, first)
+    source_repo.rename(tmp_path / "canonical-unavailable")
+
+    plan = service.bootstrap_plan(second, source_url="../canonical", offline=True)
+
+    assert plan.offline
+    assert [skill.id for skill in plan.desired_skills] == ["dns"]
+
+
+def test_offline_sync_applies_updates_already_present_in_the_local_replica(tmp_path: Path):
+    source_repo = _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    service = TeamKnowledgeDistributionService(EvidenceRoutingStub())
+    _bootstrap(service, repository)
+    _write_skill(source_repo, body="Use the improved offline-capable DNS workflow.")
+    _git(source_repo, "add", ".")
+    _git(source_repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Improve DNS")
+    GitKnowledgeSource(repository).acquire("../canonical", "main")
+    source_repo.rename(tmp_path / "canonical-unavailable")
+
+    plan = service.sync_plan(repository, offline=True)
+    assert [(action.action, action.id) for action in plan.actions] == [("update", "dns")]
+    service.apply(plan)
+
+    assert "improved offline-capable" in (
+        repository / ".agents/skills/dns/SKILL.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_offline_access_does_not_create_an_empty_source_replica(tmp_path: Path):
     _canonical(tmp_path)
     repository = _dns_repo(tmp_path, "consumer", 1)
     source = GitKnowledgeSource(repository)
 
-    with pytest.raises(SourceUnavailable, match="not cached"):
+    with pytest.raises(SourceUnavailable, match="no local replica"):
         source.acquire("../canonical", "main", offline=True, commit="0" * 40)
 
-    assert not source_cache_directory("../canonical", repository).exists()
+    assert not source_replica_directory("../canonical", repository).exists()
 
 
 def test_source_url_rejects_embedded_https_credentials(tmp_path: Path):
@@ -318,15 +367,15 @@ def test_source_url_rejects_embedded_https_credentials(tmp_path: Path):
         )
 
 
-def test_unwritable_machine_cache_falls_back_to_temporary_storage(monkeypatch, tmp_path: Path):
+def test_unwritable_machine_data_falls_back_to_temporary_storage(monkeypatch, tmp_path: Path):
     _canonical(tmp_path)
     repository = _dns_repo(tmp_path, "consumer", 1)
-    machine_cache = user_cache_root()
+    machine_data = user_data_root()
     original_mkstemp = tempfile.mkstemp
 
     def controlled_mkstemp(*args, **kwargs):
         directory = kwargs.get("dir")
-        if directory is not None and Path(directory) == machine_cache / "sources":
+        if directory is not None and Path(directory) == machine_data / "sources":
             raise PermissionError("read-only test cache")
         return original_mkstemp(*args, **kwargs)
 
@@ -335,12 +384,12 @@ def test_unwritable_machine_cache_falls_back_to_temporary_storage(monkeypatch, t
     commit = source.acquire("../canonical", "main")
 
     assert len(commit) == 40
-    assert source.cache_mode == "temporary"
-    assert source.cache is not None and source.cache.is_dir()
-    assert not source_cache_directory("../canonical", repository).exists()
+    assert source.replica_mode == "temporary"
+    assert source.repository is not None and source.repository.is_dir()
+    assert not source_replica_directory("../canonical", repository).exists()
 
 
-def test_concurrent_consumers_do_not_duplicate_or_corrupt_shared_cache(tmp_path: Path):
+def test_concurrent_consumers_do_not_duplicate_or_corrupt_shared_replica(tmp_path: Path):
     _canonical(tmp_path)
     first = _dns_repo(tmp_path, "consumer-a", 1)
     second = _dns_repo(tmp_path, "consumer-b", 2)
@@ -352,30 +401,77 @@ def test_concurrent_consumers_do_not_duplicate_or_corrupt_shared_cache(tmp_path:
         commits = tuple(executor.map(acquire, (first, second)))
 
     assert commits[0] == commits[1]
-    cache = source_cache_directory("../canonical", first)
-    assert (cache / "repository.git").is_dir()
-    assert json.loads((cache / "metadata.json").read_text(encoding="utf-8"))[
+    replica = source_replica_directory("../canonical", first)
+    assert (replica / "repository/.git").is_dir()
+    assert json.loads((replica / "metadata.json").read_text(encoding="utf-8"))[
         "source_identity_sha256"
-    ] == cache.name
+    ] == replica.name
 
 
-def test_shared_cache_rejects_tampered_metadata_and_origin(tmp_path: Path):
+def test_shared_replica_rejects_tampered_metadata_and_origin(tmp_path: Path):
     _canonical(tmp_path)
     repository = _dns_repo(tmp_path, "consumer", 1)
     source = GitKnowledgeSource(repository)
     source.acquire("../canonical", "main")
-    cache = source_cache_directory("../canonical", repository)
-    metadata = cache / "metadata.json"
+    replica = source_replica_directory("../canonical", repository)
+    metadata = replica / "metadata.json"
     original_metadata = metadata.read_text(encoding="utf-8")
     metadata.write_text('{"schema_version": 2, "source_identity_sha256": "wrong"}\n', encoding="utf-8")
 
-    with pytest.raises(SharedKnowledgeError, match="different canonical source"):
+    with pytest.raises(SharedKnowledgeError, match="different source"):
         GitKnowledgeSource(repository).acquire("../canonical", "main")
 
     metadata.write_text(original_metadata, encoding="utf-8")
-    _git(cache / "repository.git", "config", "remote.origin.url", "../other-source")
+    _git(replica / "repository", "config", "remote.origin.url", "../other-source")
     with pytest.raises(SharedKnowledgeError, match="origin does not match"):
         GitKnowledgeSource(repository).acquire("../canonical", "main")
+
+
+def test_previous_shared_bare_cache_seeds_persistent_replica_offline(tmp_path: Path):
+    canonical = _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    legacy = source_cache_directory("../canonical", repository)
+    legacy.mkdir(parents=True)
+    _git(repository, "clone", "--bare", "--", "../canonical", str(legacy / "repository.git"))
+    (legacy / "metadata.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "source_identity_sha256": legacy.name,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    commit = _git(canonical, "rev-parse", "HEAD")
+
+    acquired = GitKnowledgeSource(repository)
+    assert acquired.acquire("../canonical", "main", offline=True, commit=commit) == commit
+    replica = source_replica_directory("../canonical", repository)
+    assert (replica / "repository/.git").is_dir()
+
+
+def test_registered_canonical_clone_is_reused_and_fast_forwarded(tmp_path: Path):
+    source = _canonical(tmp_path)
+    remote = tmp_path / "canonical.git"
+    _git(tmp_path, "clone", "--bare", "--", str(source), str(remote))
+    checkout = tmp_path / "canonical-checkout"
+    _git(tmp_path, "clone", "--", str(remote), str(checkout))
+    consumer = _dns_repo(tmp_path, "consumer", 1)
+    register_source_checkout("../canonical.git", consumer, checkout)
+
+    acquired = GitKnowledgeSource(consumer)
+    first = acquired.acquire("../canonical.git", "main")
+    assert acquired.repository == checkout
+
+    _write_skill(source, body="Use the newly published DNS workflow.")
+    _git(source, "add", ".")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Publish update")
+    _git(source, "push", str(remote), "main")
+    second = acquired.acquire("../canonical.git", "main")
+
+    assert second != first
+    assert _git(checkout, "rev-parse", "HEAD") == _git(remote, "rev-parse", "refs/heads/main")
 
 
 def test_legacy_repository_cache_is_removed_only_after_explicit_choice(monkeypatch, tmp_path: Path):
@@ -866,7 +962,7 @@ def test_bootstrap_progress_reports_ai_selection_before_any_apply(tmp_path: Path
 
     assert progress == [
         "Checking local bootstrap safety",
-        "Fetching and validating the canonical team knowledge catalog",
+        "Refreshing and validating the local canonical replica",
         "Collecting factual repository evidence",
         "Checking which canonical Skills are natively admissible",
         "Calling the configured AI selector with read-only factual evidence",
@@ -1312,6 +1408,31 @@ def test_prepare_addition_rejects_existing_canonical_name_or_id(tmp_path: Path):
         prepare_addition(repository, load_candidate(candidate_path))
 
 
+def test_prepare_addition_checks_name_against_latest_remote_catalog(tmp_path: Path):
+    source = _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    _bootstrap(TeamKnowledgeDistributionService(EvidenceRoutingStub()), repository)
+    candidate_path = repository / "cloud-run-deployment-safety"
+    candidate_path.mkdir()
+    (candidate_path / "SKILL.md").write_text(
+        "---\nname: cloud-run-deployment-safety\n"
+        "description: Use when reviewing a concrete Cloud Run deployment.\n"
+        "---\n\n# Cloud Run safety\n\nVerify the intended target.\n",
+        encoding="utf-8",
+    )
+    _write_skill(
+        source,
+        name="cloud-run-deployment-safety",
+        resource_id="cloud-run-deployment-safety",
+        description="Use when reviewing a concrete Cloud Run deployment.",
+    )
+    _git(source, "add", ".")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Add Cloud Run Skill")
+
+    with pytest.raises(SharedKnowledgeError, match="already contains Skill name or ID"):
+        prepare_addition(repository, load_candidate(candidate_path))
+
+
 def test_propose_adds_an_existing_new_skill_instead_of_recreating_it(monkeypatch, tmp_path: Path, capsys):
     source = _bundled_source(tmp_path)
     repository = _dns_repo(tmp_path, "consumer", 1)
@@ -1384,6 +1505,48 @@ def test_prepare_update_uses_locked_source_commit_and_never_changes_remote_sourc
     assert reused.checkout == prepared.checkout
     assert reused.diff == prepared.diff
     assert reused.reused
+
+
+def test_prepare_update_stops_when_the_same_canonical_skill_changed_upstream(tmp_path: Path):
+    source = _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    _bootstrap(TeamKnowledgeDistributionService(EvidenceRoutingStub()), repository)
+    candidate_path = repository / ".agents/skills/dns"
+    skill_path = candidate_path / "SKILL.md"
+    skill_path.write_text(
+        skill_path.read_text(encoding="utf-8") + "\nConfirm the intended zone.\n",
+        encoding="utf-8",
+    )
+    canonical_skill = source / "skills/dns/SKILL.md"
+    canonical_skill.write_text(
+        canonical_skill.read_text(encoding="utf-8") + "\nNew central safety rule.\n",
+        encoding="utf-8",
+    )
+    _git(source, "add", ".")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Improve centrally")
+
+    with pytest.raises(SharedKnowledgeError, match="changed after it was installed"):
+        prepare_update(repository, "dns", load_candidate(candidate_path))
+
+
+def test_prepared_proposal_is_a_worktree_of_the_persistent_replica(tmp_path: Path):
+    _canonical(tmp_path)
+    repository = _dns_repo(tmp_path, "consumer", 1)
+    _bootstrap(TeamKnowledgeDistributionService(EvidenceRoutingStub()), repository)
+    candidate_path = repository / ".agents/skills/dns"
+    skill_path = candidate_path / "SKILL.md"
+    skill_path.write_text(
+        skill_path.read_text(encoding="utf-8") + "\nConfirm the intended zone.\n",
+        encoding="utf-8",
+    )
+
+    prepared = prepare_update(repository, "dns", load_candidate(candidate_path))
+    replica = source_replica_directory("../canonical", repository) / "repository"
+
+    assert prepared.checkout.parent == replica.parent / "worktrees"
+    worktrees = _git(replica, "worktree", "list", "--porcelain")
+    assert str(prepared.checkout) in worktrees
+    assert not (repository / ".team-knowledge/runtime/proposals").exists()
 
 
 def test_prepare_update_rejects_an_existing_checkout_with_unrelated_changes(tmp_path: Path):
@@ -1879,8 +2042,9 @@ def test_network_failure_and_offline_verification_leave_locked_skill_usable(tmp_
     lock = (repository / ".team-knowledge/lock.json").read_bytes()
     source.rename(tmp_path / "canonical-unavailable")
 
-    with pytest.raises(SharedKnowledgeError, match="no local state was changed"):
-        service.sync_plan(repository)
+    fallback = service.sync_plan(repository)
+    assert fallback.offline
+    service.apply(fallback)
     assert skill.is_file()
     assert (repository / ".team-knowledge/lock.json").read_bytes() == lock
     offline = service.sync_plan(repository, offline=True)
@@ -1901,9 +2065,9 @@ def test_offline_pending_message_does_not_claim_selector_failure(tmp_path: Path,
 
     output = capsys.readouterr().out
     assert plan.semantic_pending
-    assert "intentionally skipped in offline mode" in output
+    assert "skipped while using the local replica" in output
     assert "configured selector was unavailable" not in output
-    assert "canonical source freshness was not checked" in output
+    assert "remote freshness was not checked" in output
 
 
 def test_sync_updates_existing_and_defers_new_skill_when_selector_unavailable(tmp_path: Path):
@@ -2004,8 +2168,8 @@ def test_fresh_checkout_hydrates_generated_skill_from_committed_config_and_lock(
     assert result.returncode == 0, result.stderr
     assert "RESTORE dns -> .agents/skills/dns" in result.stdout
     assert not selector_marker.exists()
-    shared_cache = source_cache_directory("../canonical", fresh)
-    assert (shared_cache / "repository.git").is_dir()
+    shared_replica = source_replica_directory("../canonical", fresh)
+    assert (shared_replica / "repository/.git").is_dir()
     assert not (fresh / ".team-knowledge/cache").exists()
     assert (fresh / ".agents/skills/dns/SKILL.md").is_file()
     assert (fresh / ".claude/skills/dns").is_symlink()

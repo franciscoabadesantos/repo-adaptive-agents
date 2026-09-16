@@ -16,7 +16,7 @@ from .onboarding import install_onboarding_skills, onboarding_readiness
 from .preferences import load_selector_preference, preferences_path, save_selector_preference
 from .proposals import prepare_addition, prepare_new, prepare_update, proposal_root
 from .distribution import DistributionPlan, TeamKnowledgeDistributionService
-from .consumer import default_consumer_source, external_consumer_source
+from .consumer import DEFAULT_SOURCE_URL, default_consumer_source, external_consumer_source
 from .selector import (
     SelectionConversationTurn,
     SkillSelection,
@@ -31,7 +31,7 @@ from .skill_validation import (
     local_canonical_skills,
     validate_skill,
 )
-from .storage import user_cache_root
+from .storage import register_source_checkout, source_identity, user_data_root
 from .source import removable_legacy_cache, remove_legacy_cache
 
 
@@ -75,6 +75,11 @@ def _parser() -> argparse.ArgumentParser:
         metavar="TEXT",
         help="Select Skills for this declared implementation task without recording the task text",
     )
+    bootstrap.add_argument(
+        "--offline",
+        action="store_true",
+        help="Use the latest local canonical replica without fetching",
+    )
     bootstrap.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
 
     prepare = commands.add_parser(
@@ -87,12 +92,20 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--ref", help="Canonical Git ref for a new repository (default: main)")
     prepare.add_argument("--selector", choices=("codex", "claude", "copilot"))
     prepare.add_argument("--task", metavar="TEXT", help="Select Skills for this transient work description")
-    prepare.add_argument("--offline", action="store_true", help="Verify an existing repository without fetching")
+    prepare.add_argument(
+        "--offline",
+        action="store_true",
+        help="Use the latest local canonical replica without fetching",
+    )
     prepare.add_argument("--yes", action="store_true", help="Apply the complete safe plan without prompting")
 
     sync = commands.add_parser("sync", help="Safely synchronize bootstrapped canonical team Skills")
     _repo_argument(sync)
-    sync.add_argument("--offline", action="store_true", help="Verify locked local state without fetching or claiming freshness")
+    sync.add_argument(
+        "--offline",
+        action="store_true",
+        help="Synchronize from the latest local canonical replica without fetching",
+    )
     sync.add_argument(
         "--selector",
         metavar="NAME",
@@ -125,6 +138,7 @@ def _parser() -> argparse.ArgumentParser:
     propose.add_argument("--name", help="New Skill name (with --new)")
     propose.add_argument("--description", help="New Skill discovery description (with --new)")
     propose.add_argument("--selector", choices=("codex", "claude", "copilot"))
+    propose.add_argument("--offline", action="store_true", help="Use the latest local canonical replica")
 
     setup = commands.add_parser(
         "setup",
@@ -181,22 +195,22 @@ def _print_distribution_plan(plan: DistributionPlan) -> None:
             print(f"  {resource_id}: {reason}")
     if plan.semantic_pending:
         print(
-            "Semantic reassessment is pending and was intentionally skipped in offline mode."
+            "Semantic reassessment is pending and was skipped while using the local replica."
             if plan.offline
             else "Semantic reassessment is pending because the configured selector was unavailable."
         )
     if plan.offline:
-        print("Offline verification only; canonical source freshness was not checked.")
+        print("Using the local canonical replica; remote freshness was not checked.")
 
 
 def _approval_recommendation(plan: DistributionPlan) -> tuple[str, str]:
     planned = [action for action in plan.actions if action.action != "keep"]
-    if plan.semantic_pending:
-        return "CANCEL", "the AI selector was unavailable, so no fresh semantic assessment exists"
     if plan.rejected_ids:
         return "CANCEL", "native validation rejected one or more proposed Skills"
     if not planned:
         return "CANCEL", "the reviewed plan does not materialize any Skill changes"
+    if plan.semantic_pending:
+        return "APPLY", "only already-locked Skill updates were planned; new selection is deferred"
     return "APPLY", "the proposed local changes passed native validation"
 
 
@@ -664,6 +678,7 @@ def _perform_machine_setup(
     consumers = (selector,) if only else ("codex", "claude", "copilot")
     readiness = dict(onboarding_readiness(consumers))
     installed = install_onboarding_skills(consumers, dry_run=dry_run)
+    registered_checkout = _discover_default_source_checkout(Path.cwd(), dry_run=dry_run)
     preference_path = None
     if selector is not None:
         if dry_run:
@@ -681,8 +696,11 @@ def _perform_machine_setup(
         print(f"  {action} {consumer}: {path}")
     print("Machine storage:")
     print(f"  user configuration: {preferences_path()}")
-    print(f"  shared source cache: {user_cache_root()}")
-    print("  repository cache: not used")
+    print(f"  canonical source replicas: {user_data_root() / 'sources'}")
+    print("  project-local source clones: not used")
+    if registered_checkout is not None:
+        action = "Would register" if dry_run else "Registered"
+        print(f"  {action} canonical checkout: {registered_checkout}")
     if dry_run:
         print("No files were written.")
         return
@@ -696,6 +714,39 @@ def _perform_machine_setup(
             + ". Install or sign in to them before using them as a selector."
         )
     print("Ready. In any Git repository, run team-knowledge prepare.")
+
+
+def _discover_default_source_checkout(start: Path, *, dry_run: bool) -> Path | None:
+    """Reuse the current clone when setup is run from the default canonical source."""
+    top = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=start,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if top.returncode != 0 or not top.stdout.strip():
+        return None
+    checkout = Path(top.stdout.strip()).resolve()
+    origin = subprocess.run(
+        ["git", "config", "--get", "remote.origin.url"],
+        cwd=checkout,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if origin.returncode != 0 or not origin.stdout.strip():
+        return None
+    if source_identity(origin.stdout.strip(), checkout) != source_identity(
+        DEFAULT_SOURCE_URL,
+        checkout,
+    ):
+        return None
+    if not (checkout / "team-knowledge" / "team-knowledge.json").is_file():
+        return None
+    if not dry_run:
+        register_source_checkout(DEFAULT_SOURCE_URL, checkout, checkout)
+    return checkout
 
 
 def _ensure_first_run_setup(requested_selector: str | None) -> bool:
@@ -910,7 +961,7 @@ def _offer_legacy_cache_cleanup(plan: DistributionPlan, *, noninteractive: bool)
         return
     print()
     print("╭─ Obsolete repository cache ─────────────────────────────────────────╮")
-    print("│ The shared cache is ready; this clone and its ignore rule are old.  │")
+    print("│ The persistent replica is ready; this project-local cache is old.  │")
     print(f"│ Path: {str(legacy)[:62]:<62}│")
     print("╰─────────────────────────────────────────────────────────────────────╯")
     if noninteractive:
@@ -995,9 +1046,10 @@ def _print_skill_assessment(assessment, *, candidate_changed: bool = True, detai
 
 def _run(args: argparse.Namespace) -> int:
     if args.command in {"prepare", "bootstrap", "sync", "validate", "propose"}:
-        find_repository(args.repo)
+        command_root = find_repository(args.repo)
         if not _ensure_first_run_setup(args.selector):
             return 0
+        _discover_default_source_checkout(command_root, dry_run=False)
     if args.command == "validate":
         root = find_repository(args.repo)
         targets = _validation_targets(root)
@@ -1071,7 +1123,7 @@ def _run(args: argparse.Namespace) -> int:
             _print_skill_assessment(assessment, detailed=False)
             if assessment.decision != "ready":
                 raise SharedKnowledgeError("proposal stopped: independent assessment is not READY")
-            prepared = prepare_addition(root, candidate)
+            prepared = prepare_addition(root, candidate, offline=args.offline)
             _apply_prepared_proposal_action(
                 prepared,
                 assessment=assessment,
@@ -1102,7 +1154,12 @@ def _run(args: argparse.Namespace) -> int:
             _print_skill_assessment(assessment, detailed=False)
             if assessment.decision != "ready":
                 raise SharedKnowledgeError("proposal stopped: independent assessment is not READY")
-            prepared = prepare_update(root, selected[0], load_candidate(candidate_path))
+            prepared = prepare_update(
+                root,
+                selected[0],
+                load_candidate(candidate_path),
+                offline=args.offline,
+            )
             _apply_prepared_proposal_action(
                 prepared,
                 assessment=assessment,
@@ -1146,8 +1203,6 @@ def _run(args: argparse.Namespace) -> int:
             raise SharedKnowledgeError(
                 "an existing repository keeps its locked canonical source; source overrides apply only before bootstrap"
             )
-        if distribution_command == "bootstrap" and args.offline:
-            raise SharedKnowledgeError("offline preparation requires an already prepared repository")
     if distribution_command in {"bootstrap", "sync"}:
         source_argument = getattr(args, "source", None)
         catalog_argument = getattr(args, "catalog_path", None)
@@ -1212,6 +1267,7 @@ def _run(args: argparse.Namespace) -> int:
                     else default_consumer_source(ref_argument)
                 ),
                 task=selection_task,
+                offline=offline,
                 progress=progress,
             )
             if distribution_command == "bootstrap"
@@ -1228,10 +1284,6 @@ def _run(args: argparse.Namespace) -> int:
             plan = service.retain_bootstrap_skills(plan, selected)
         _print_distribution_plan(plan)
         _offer_legacy_cache_cleanup(plan, noninteractive=args.yes)
-        if plan.offline:
-            service.apply(plan)
-            print("Locked team Skills are present and match their recorded digests.")
-            return 0
         if not _confirm(args.yes, plan):
             print("No committed or materialized team knowledge changes were applied.")
             return 0

@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +13,7 @@ from .canonical import SKILL_NAME, load_canonical_catalog
 from .repository import SharedKnowledgeError
 from .consumer import load_consumer_lock
 from .skill_validation import SkillCandidate, load_candidate
+from .source import GitKnowledgeSource
 
 
 def proposal_root(repository: Path) -> Path:
@@ -130,18 +130,19 @@ def _reuse_prepared_update(
     resource,
     candidate: SkillCandidate,
     repository_skill_path: str,
+    base_commit: str,
 ) -> PreparedProposal:
     unsafe = "existing prepared proposal is not reusable; keep it for inspection or remove it deliberately"
     catalog, diff = _reusable_checkout_state(
         final,
         branch,
-        resource.resolved_source_commit,
+        base_commit,
         resource.source_catalog_path,
         resource.source_path,
         candidate,
         repository_skill_path,
     )
-    parsed = load_canonical_catalog(catalog, resource.resolved_source_commit, lambda _path: resource.revision)
+    parsed = load_canonical_catalog(catalog, base_commit, lambda _path: base_commit)
     verified = parsed.by_id().get(resource.id)
     if verified is None or verified.digest_sha256 != candidate.digest_sha256:
         raise SharedKnowledgeError(unsafe)
@@ -162,18 +163,19 @@ def _reuse_prepared_addition(
     lock,
     candidate: SkillCandidate,
     repository_skill_path: str,
+    base_commit: str,
 ) -> PreparedProposal:
     unsafe = "existing prepared proposal is not reusable; keep it for inspection or remove it deliberately"
     catalog, diff = _reusable_checkout_state(
         final,
         branch,
-        lock.resolved_commit,
+        base_commit,
         lock.catalog_path,
         f"skills/{candidate.name}",
         candidate,
         repository_skill_path,
     )
-    parsed = load_canonical_catalog(catalog, lock.resolved_commit, lambda _path: lock.resolved_commit)
+    parsed = load_canonical_catalog(catalog, base_commit, lambda _path: base_commit)
     verified = parsed.by_id().get(candidate.name)
     if (
         verified is None
@@ -194,37 +196,89 @@ def _reuse_prepared_addition(
     )
 
 
-def prepare_update(repository: Path, skill_id: str, candidate: SkillCandidate) -> PreparedProposal:
-    """Prepare an uncommitted, pinned source checkout without touching the remote."""
+def _prepare_worktree(source: GitKnowledgeSource, branch: str, base_commit: str) -> Path:
+    replica = source.repository
+    if replica is None:
+        raise SharedKnowledgeError("canonical source must be acquired before preparing a proposal")
+    worktrees = replica.parent / "worktrees"
+    worktrees.mkdir(exist_ok=True)
+    final = worktrees / branch.replace("/", "-")
+    if final.exists():
+        return final
+    _git(replica, "worktree", "prune")
+    existing = _git(replica, "branch", "--list", branch).strip()
+    if existing:
+        raise SharedKnowledgeError(
+            "a local proposal branch already exists without its prepared worktree; "
+            "inspect or remove that branch deliberately"
+        )
+    _git(replica, "worktree", "add", "-b", branch, str(final), base_commit)
+    return final
+
+
+def _latest_catalog(source: GitKnowledgeSource, commit: str, catalog_path: str):
+    with source.snapshot(commit, catalog_path=catalog_path) as snapshot:
+        return load_canonical_catalog(
+            snapshot,
+            commit,
+            lambda path: source.revision_for(commit, path, catalog_path=catalog_path),
+        )
+
+
+def prepare_update(
+    repository: Path,
+    skill_id: str,
+    candidate: SkillCandidate,
+    *,
+    offline: bool = False,
+) -> PreparedProposal:
+    """Prepare an update from the latest local canonical baseline."""
     lock = load_consumer_lock(repository)
     resource = next((item for item in lock.resources if item.id == skill_id), None)
     if resource is None:
         raise SharedKnowledgeError("selected Skill is not installed in this repository")
-    root = repository / ".team-knowledge" / "runtime" / "proposals"
-    root.mkdir(parents=True, exist_ok=True)
-    branch = f"team-knowledge/{resource.name}-{candidate.digest_sha256[:12]}"
-    final = root / f"{resource.name}-{candidate.digest_sha256[:12]}"
+    source = GitKnowledgeSource(repository)
+    catalog_commit = source.acquire(
+        resource.source_url,
+        resource.source_ref,
+        catalog_path=resource.source_catalog_path,
+        offline=offline,
+    )
+    base_commit = source.resolved_ref_commit or catalog_commit
+    replica = source.repository
+    if replica is None:
+        raise SharedKnowledgeError("canonical source must be acquired before preparing a proposal")
+    latest = _latest_catalog(source, base_commit, resource.source_catalog_path)
+    latest_skill = latest.by_id().get(resource.id)
+    if latest_skill is None:
+        raise SharedKnowledgeError("the installed Skill no longer exists in the latest canonical catalog")
+    if latest_skill.digest_sha256 != resource.digest_sha256:
+        raise SharedKnowledgeError(
+            "the canonical Skill changed after it was installed; run team-knowledge sync, "
+            "reapply the intended edit, and validate it again"
+        )
+    branch = (
+        f"team-knowledge/{resource.name}-{candidate.digest_sha256[:12]}-{base_commit[:12]}"
+    )
+    final = replica.parent / "worktrees" / branch.replace("/", "-")
     repository_skill_path = _repository_skill_path(resource.source_catalog_path, resource.source_path)
     if final.exists():
-        return _reuse_prepared_update(final, branch, resource, candidate, repository_skill_path)
-    with tempfile.TemporaryDirectory(prefix="proposal-", dir=root) as temporary:
-        staging = Path(temporary) / "source"
-        _git(repository, "clone", "--no-checkout", resource.source_url, str(staging))
-        _git(staging, "checkout", "--detach", resource.resolved_source_commit)
-        _git(staging, "switch", "-c", branch)
-        catalog = staging if resource.source_catalog_path == "." else staging / resource.source_catalog_path
-        target = catalog / resource.source_path
-        _replace_materialized(target, candidate)
-        parsed = load_canonical_catalog(catalog, resource.resolved_source_commit, lambda _path: resource.revision)
-        verified = parsed.by_id().get(resource.id)
-        if verified is None or verified.digest_sha256 != candidate.digest_sha256:
-            raise SharedKnowledgeError("prepared canonical package does not match the validated candidate")
-        diff = _proposal_diff(staging, repository_skill_path)
-        if not diff:
-            raise SharedKnowledgeError("candidate has no change relative to the locked canonical Skill")
-        os.replace(staging, final)
+        return _reuse_prepared_update(
+            final, branch, resource, candidate, repository_skill_path, base_commit
+        )
+    staging = _prepare_worktree(source, branch, base_commit)
+    catalog = staging if resource.source_catalog_path == "." else staging / resource.source_catalog_path
+    target = catalog / resource.source_path
+    _replace_materialized(target, candidate)
+    parsed = load_canonical_catalog(catalog, base_commit, lambda _path: base_commit)
+    verified = parsed.by_id().get(resource.id)
+    if verified is None or verified.digest_sha256 != candidate.digest_sha256:
+        raise SharedKnowledgeError("prepared canonical package does not match the validated candidate")
+    diff = _proposal_diff(staging, repository_skill_path)
+    if not diff:
+        raise SharedKnowledgeError("candidate has no change relative to the latest canonical Skill")
     return PreparedProposal(
-        checkout=final,
+        checkout=staging,
         branch=branch,
         diff=diff,
         base_ref=resource.source_ref,
@@ -233,67 +287,72 @@ def prepare_update(repository: Path, skill_id: str, candidate: SkillCandidate) -
     )
 
 
-def prepare_addition(repository: Path, candidate: SkillCandidate) -> PreparedProposal:
-    """Prepare a validated new Skill in a pinned canonical source checkout."""
+def prepare_addition(
+    repository: Path,
+    candidate: SkillCandidate,
+    *,
+    offline: bool = False,
+) -> PreparedProposal:
+    """Prepare a validated new Skill from the latest local canonical baseline."""
     lock = load_consumer_lock(repository)
-    root = repository / ".team-knowledge" / "runtime" / "proposals"
-    root.mkdir(parents=True, exist_ok=True)
-    branch = f"team-knowledge/add-{candidate.name}-{candidate.digest_sha256[:12]}"
-    final = root / f"add-{candidate.name}-{candidate.digest_sha256[:12]}"
+    source = GitKnowledgeSource(repository)
+    catalog_commit = source.acquire(
+        lock.source_url,
+        lock.source_ref,
+        catalog_path=lock.catalog_path,
+        offline=offline,
+    )
+    base_commit = source.resolved_ref_commit or catalog_commit
+    replica = source.repository
+    if replica is None:
+        raise SharedKnowledgeError("canonical source must be acquired before preparing a proposal")
+    latest = _latest_catalog(source, base_commit, lock.catalog_path)
+    if any(skill.id == candidate.name or skill.name == candidate.name for skill in latest.skills):
+        raise SharedKnowledgeError(
+            f"canonical catalog already contains Skill name or ID: {candidate.name}"
+        )
+    branch = (
+        f"team-knowledge/add-{candidate.name}-{candidate.digest_sha256[:12]}-{base_commit[:12]}"
+    )
+    final = replica.parent / "worktrees" / branch.replace("/", "-")
     skill_path = f"skills/{candidate.name}"
     repository_skill_path = _repository_skill_path(lock.catalog_path, skill_path)
     if final.exists():
-        return _reuse_prepared_addition(final, branch, lock, candidate, repository_skill_path)
-    with tempfile.TemporaryDirectory(prefix="proposal-", dir=root) as temporary:
-        staging = Path(temporary) / "source"
-        _git(repository, "clone", "--no-checkout", lock.source_url, str(staging))
-        _git(staging, "checkout", "--detach", lock.resolved_commit)
-        _git(staging, "switch", "-c", branch)
-        catalog = staging if lock.catalog_path == "." else staging / lock.catalog_path
-        before = load_canonical_catalog(
-            catalog,
-            lock.resolved_commit,
-            lambda _path: lock.resolved_commit,
+        return _reuse_prepared_addition(
+            final, branch, lock, candidate, repository_skill_path, base_commit
         )
-        if any(skill.id == candidate.name or skill.name == candidate.name for skill in before.skills):
-            raise SharedKnowledgeError(
-                f"canonical catalog already contains Skill name or ID: {candidate.name}"
-            )
-        target = catalog / skill_path
-        if target.exists() or target.is_symlink():
-            raise SharedKnowledgeError(f"canonical Skill destination already exists: {skill_path}")
-        target.mkdir(parents=True)
-        for relative, data in candidate.files:
-            destination = target.joinpath(*relative.split("/"))
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(data)
-        (target / "team-knowledge.json").write_text(
-            json.dumps(
-                {"schema_version": 1, "id": candidate.name, "state": "active"},
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
+    staging = _prepare_worktree(source, branch, base_commit)
+    catalog = staging if lock.catalog_path == "." else staging / lock.catalog_path
+    target = catalog / skill_path
+    if target.exists() or target.is_symlink():
+        raise SharedKnowledgeError(f"canonical Skill destination already exists: {skill_path}")
+    target.mkdir(parents=True)
+    for relative, data in candidate.files:
+        destination = target.joinpath(*relative.split("/"))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+    (target / "team-knowledge.json").write_text(
+        json.dumps(
+            {"schema_version": 1, "id": candidate.name, "state": "active"},
+            indent=2,
         )
-        parsed = load_canonical_catalog(
-            catalog,
-            lock.resolved_commit,
-            lambda _path: lock.resolved_commit,
-        )
-        verified = parsed.by_id().get(candidate.name)
-        if (
-            verified is None
-            or verified.name != candidate.name
-            or verified.state != "active"
-            or verified.digest_sha256 != candidate.digest_sha256
-        ):
-            raise SharedKnowledgeError("prepared canonical addition does not match the validated candidate")
-        diff = _proposal_diff(staging, repository_skill_path)
-        if not diff:
-            raise SharedKnowledgeError("new Skill did not produce a canonical catalog change")
-        os.replace(staging, final)
+        + "\n",
+        encoding="utf-8",
+    )
+    parsed = load_canonical_catalog(catalog, base_commit, lambda _path: base_commit)
+    verified = parsed.by_id().get(candidate.name)
+    if (
+        verified is None
+        or verified.name != candidate.name
+        or verified.state != "active"
+        or verified.digest_sha256 != candidate.digest_sha256
+    ):
+        raise SharedKnowledgeError("prepared canonical addition does not match the validated candidate")
+    diff = _proposal_diff(staging, repository_skill_path)
+    if not diff:
+        raise SharedKnowledgeError("new Skill did not produce a canonical catalog change")
     return PreparedProposal(
-        checkout=final,
+        checkout=staging,
         branch=branch,
         diff=diff,
         base_ref=lock.source_ref,

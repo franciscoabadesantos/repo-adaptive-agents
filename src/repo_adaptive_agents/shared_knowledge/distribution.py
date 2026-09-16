@@ -391,6 +391,7 @@ class TeamKnowledgeDistributionService:
         source_url: str | None = None,
         ref: str = "main",
         task: str | None = None,
+        offline: bool = False,
         progress: Callable[[str], None] | None = None,
     ) -> DistributionPlan:
         root = find_repository(repository)
@@ -419,10 +420,20 @@ class TeamKnowledgeDistributionService:
                 raise SharedKnowledgeError("task must be at most 4,000 characters")
         source_spec = ConsumerSource(source_url, ref, catalog_path)
         if progress is not None:
-            progress("Fetching and validating the canonical team knowledge catalog")
+            progress(
+                "Reading and validating the local canonical replica"
+                if offline
+                else "Refreshing and validating the local canonical replica"
+            )
         with tempfile.TemporaryDirectory(prefix="team-knowledge-bootstrap-") as temporary:
             git_source = GitKnowledgeSource(root, runtime_root=Path(temporary) / "runtime")
-            commit = git_source.acquire(source_url, ref, catalog_path=catalog_path)
+            commit = git_source.acquire(
+                source_url,
+                ref,
+                catalog_path=catalog_path,
+                offline=offline,
+            )
+            effective_offline = offline or git_source.used_offline_fallback
             canonical = _read_catalog(git_source, commit, catalog_path)
         repository_id = repository_identity(root)
         if progress is not None:
@@ -502,7 +513,7 @@ class TeamKnowledgeDistributionService:
             rejected,
             tuple((item.id, item.reason) for item in selection.selected),
             False,
-            False,
+            effective_offline,
             config,
             lock,
             desired,
@@ -576,13 +587,14 @@ class TeamKnowledgeDistributionService:
                 config.source.ref,
                 catalog_path=config.source.catalog_path,
                 offline=offline,
-                commit=previous.resolved_commit,
+                commit=None if offline else previous.resolved_commit,
             )
         except SourceUnavailable as error:
             raise SourceUnavailable(
                 f"{error}. Current locked Skills remain available from {previous.resolved_commit}; no local state was changed"
             ) from error
         canonical = _read_catalog(source, commit, config.source.catalog_path)
+        effective_offline = offline or source.used_offline_fallback
         if canonical.descriptor.source_id != previous.source_id:
             raise SharedKnowledgeError("canonical source_id changed; current local state was left unchanged")
         current_by_id = canonical.by_id()
@@ -617,20 +629,42 @@ class TeamKnowledgeDistributionService:
                 raise SharedKnowledgeError(
                     f"locked Skill {resource.id!r} is no longer admissible without explicit revocation; current local state was left unchanged"
                 )
-        if offline:
+        if effective_offline:
             desired = tuple(current_by_id[item.id] for item in active_previous)
-            lock = previous
+            lock = ConsumerLock(
+                previous.source_id,
+                config.source.url,
+                config.source.ref,
+                commit,
+                repository_id,
+                evidence.sha256,
+                previous.evaluated_source_commit,
+                previous.evaluated_evidence_sha256,
+                tuple(
+                    _locked(
+                        skill,
+                        evidence.sha256,
+                        source_id=previous.source_id,
+                        source_url=config.source.url,
+                        source_ref=config.source.ref,
+                        source_catalog_path=config.source.catalog_path,
+                        source_commit=commit,
+                    )
+                    for skill in desired
+                ),
+                config.source.catalog_path,
+            )
             plan = DistributionPlan(
                 "sync",
                 root,
                 previous.source_id,
-                previous.resolved_commit,
+                commit,
                 repository_id,
                 _actions(root, previous, desired),
                 (),
                 (),
                 (),
-                previous.evaluated_source_commit != previous.resolved_commit
+                previous.evaluated_source_commit != commit
                 or evidence.sha256 != previous.evaluated_evidence_sha256,
                 True,
                 config,
@@ -756,8 +790,6 @@ class TeamKnowledgeDistributionService:
                     "consumer config or lock changed after planning; rerun team-knowledge sync"
                 )
         _preflight(plan, require_present=plan.offline)
-        if plan.offline:
-            return
         root = plan.root
         state = ensure_consumer_layout(root)
         source = GitKnowledgeSource(root)
@@ -765,6 +797,8 @@ class TeamKnowledgeDistributionService:
             plan.config.source.url,
             plan.config.source.ref,
             catalog_path=plan.config.source.catalog_path,
+            offline=plan.offline,
+            commit=plan.source_commit if plan.offline else None,
         )
         if resolved != plan.source_commit:
             raise SharedKnowledgeError(

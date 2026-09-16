@@ -79,7 +79,7 @@ reuse the same catalog and factual repository-evidence snapshot. Earlier request
 selector's earlier recommendations remain in memory for the duration of that command, so a
 clarification can add, correct, or replace intent without rescanning the repository. The
 conversation is discarded on exit and is never written to the repository, lock, configuration,
-or shared cache.
+or the persistent local canonical replica.
 
 By default, the tool fetches the `main` branch of `repo-adaptive-agents` and reads only its
 `team-knowledge/` catalog. Product code and team knowledge share Git hosting for this trial,
@@ -124,7 +124,8 @@ not Jira); only that subset is then written to the lock and shown in the final a
 `team-knowledge propose` provides one contribution flow for improving an installed Skill or
 adding a new one. For a new Skill it detects existing local drafts and unmanaged portable Skill
 packages before offering to create a blank draft. A selected candidate must pass package checks
-and an isolated semantic assessment before the CLI prepares a pinned canonical-catalog checkout
+and an isolated semantic assessment before the CLI prepares a branch and worktree from the latest
+local canonical baseline
 and offers explicit local commit, push, or draft-PR actions.
 
 A canonical source may opt into schema version 2 and declare
@@ -144,12 +145,12 @@ git commit -m "Bootstrap shared team knowledge"
 ```
 
 Declining the bootstrap plan leaves no `.team-knowledge/` state or generated Skill package in
-the consumer repository. Source acquisition may populate the disposable shared user cache.
+the consumer repository. Source acquisition may create or refresh the persistent local canonical replica.
 
 To prepare a repository for work it does not yet contain, choose "Tell me what you want to do"
 in the interactive preparation form. `--task` provides the same direct, non-conversational path for
 scripts and one-line invocations. Task and conversation text are never written to the config,
-lock, generated Skill package, or cache:
+lock, generated Skill package, or local replica:
 
 ```sh
 team-knowledge prepare --task "Implement Jira issue automation for this service"
@@ -202,11 +203,11 @@ Validated Skills are materialized once at `.agents/skills/<name>/`, the vendor-n
 Skills location used directly by Codex and Copilot. Claude receives a relative directory
 symlink at `.claude/skills/<name>` pointing to that same package. Generated packages, Claude
 bridges remain local. Bootstrap adds only the exact managed paths to `.git/info/exclude`; it does
-not hide other Agent Skills. The bare Git source cache is shared across repositories under the
-operating system's user cache directory (normally `~/.cache/team-knowledge/` on Linux/WSL), never
-inside the pipx installation. `TEAM_KNOWLEDGE_HOME` can place the shared cache and user configuration
-under an explicit root, and `team-knowledge setup` prints the effective paths. The committed lock
-remains authoritative; the cache is disposable and may fall back to temporary storage online.
+not hide other Agent Skills. A normal Git clone of each canonical source is shared across repositories
+under persistent user data (normally `~/.local/share/team-knowledge/sources/` on Linux/WSL), never
+inside the pipx installation or a consumer repository. When setup runs inside the default canonical
+clone, that checkout is registered and reused. `TEAM_KNOWLEDGE_HOME` can place replicas and user
+configuration under an explicit root, and `team-knowledge setup` prints the effective paths.
 
 When the canonical team repository changes, the same entry point refreshes the repository:
 
@@ -222,9 +223,10 @@ for that invocation. A previously selected Skill the model no longer selects is 
 retained for human review. Changing only `--selector` does not itself trigger reassessment.
 
 If the configured selector is unavailable during sync, safe deterministic updates and revocations can still be
-applied while semantic additions are deferred. If the Git source is unavailable, existing
-local Skills and the lock remain untouched. `team-knowledge sync --offline` verifies the
-locked local state without claiming freshness.
+applied while semantic additions are deferred. If the Git remote is unavailable, the command automatically
+uses the most recently fetched local canonical ref and says that remote freshness was not checked.
+`team-knowledge sync --offline` selects that behavior explicitly. Offline proposal preparation and local
+commits are supported; push, pull-request creation, and cloud-dependent model selection still require connectivity.
 
 `bootstrap` and `sync` remain explicit advanced commands for scripts and diagnostics. `prepare`
 selects between them from the presence of the complete committed consumer config and lock.
